@@ -256,6 +256,7 @@ mergedsha
 metacharacter
 METACHARS
 misdescribe
+mktemp
 modelcontextprotocol
 monkeyc
 moonrepo
@@ -307,6 +308,7 @@ pids
 Pids
 pidtree
 pierrecomputer
+pipefail
 pkce
 Plandex
 pluginutils

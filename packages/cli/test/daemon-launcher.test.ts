@@ -5,8 +5,10 @@ import { join } from 'node:path';
 
 import {
   bundledExecutableName,
+  resolveDaemonBin,
   resolveDaemonLauncher,
 } from '../src/commands/daemon.js';
+import { CliError } from '../src/context.js';
 
 // The three-tier precedence resolveDaemonLauncher implements — see its doc
 // comment: (a) DISPATCH_DAEMON_BIN override, (b) a compiled `dispatchd` binary
@@ -121,5 +123,26 @@ describe('bundledExecutableName', () => {
     expect(bundledExecutableName('dispatchd', 'win32')).toBe('dispatchd.exe');
     expect(bundledExecutableName('dispatchd', 'linux')).toBe('dispatchd');
     expect(bundledExecutableName('dispatchd', 'darwin')).toBe('dispatchd');
+  });
+});
+
+describe('resolveDaemonBin', () => {
+  it('anchors on @dispatch/server/package.json and points at src/bin.ts', () => {
+    const bin = resolveDaemonBin(
+      (specifier) => `/checkout/node_modules/${specifier}`
+    );
+    expect(bin).toBe('/checkout/node_modules/@dispatch/server/src/bin.ts');
+  });
+
+  it('turns a failed resolve into an actionable CliError, not a module-not-found', () => {
+    // @dispatch/server is a devDependency, so a standalone (npm) install of
+    // the CLI cannot resolve it — the error must say what to do instead.
+    const failingResolve = () => {
+      throw new Error("Cannot find module '@dispatch/server/package.json'");
+    };
+    expect(() => resolveDaemonBin(failingResolve)).toThrow(CliError);
+    expect(() => resolveDaemonBin(failingResolve)).toThrow(
+      /DISPATCH_DAEMON_BIN/
+    );
   });
 });
