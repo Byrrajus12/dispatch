@@ -152,10 +152,36 @@ export class GitRepo {
     private readonly run: CommandRunner = defaultCommandRunner
   ) {}
 
+  /**
+   * A GitRepo for a checkout some OTHER process may be writing to — a run
+   * worktree whose orphaned agent is still committing while the daemon
+   * samples it. Every command runs with `--no-optional-locks`, so `git
+   * status` and `git diff` skip the opportunistic index refresh they would
+   * otherwise do under `index.lock`. Without it the daemon's read can hold
+   * that lock at the instant the agent's own `git add` needs it, and the
+   * agent's commit fails with "index.lock: File exists" — the daemon looking
+   * at a worktree must never be the reason work in it is lost.
+   */
+  static observer(
+    cwd: string,
+    run: CommandRunner = defaultCommandRunner
+  ): GitRepo {
+    const repo = new GitRepo(cwd, run);
+    repo.optionalLocks = false;
+    return repo;
+  }
+
+  private optionalLocks = true;
+
   // `--literal-pathspecs` disables git's pathspec magic, so a caller-supplied
   // path is always a literal file, never a pattern like `*`.
   private async runGit(args: string[]): Promise<CommandResult> {
-    return this.run(this.cwd, ['git', '--literal-pathspecs', ...args]);
+    return this.run(this.cwd, [
+      'git',
+      ...(this.optionalLocks ? [] : ['--no-optional-locks']),
+      '--literal-pathspecs',
+      ...args,
+    ]);
   }
 
   private realRootCache: string | undefined;
