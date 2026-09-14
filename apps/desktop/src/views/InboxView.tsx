@@ -11,6 +11,7 @@ import type { FeedState } from '../lib/feedState';
 import { FEED_STATE_LABEL } from '../lib/feedState';
 import { formatRelativeTimeFromIso } from '../lib/format';
 import type { InboxData } from '../lib/inboxQueue';
+import { latestFailedAttemptByRunId } from '../lib/queueHistory';
 import { cn } from '@/lib/utils';
 import { Button } from '@/ui/button';
 import { SectionLabel } from '@/ui/chrome/SectionLabel';
@@ -88,6 +89,20 @@ export function InboxView({
     );
   }
 
+  // Runs whose latest merge-queue attempt failed. The feed indexes only live
+  // queue entries (controlRoom.ts), so a run the queue bounced comes back here
+  // as an ordinary "Review" row with nothing saying why it is back. Its review
+  // row carries a "failed to land" badge instead, so this list and the Landing
+  // table's failed section tell one story. A run back in the live queue is
+  // exempt — its pending attempt, not the old failure, is its story. Cheap to
+  // derive inline: history is capped at 20 server-side.
+  const failedAttempts = latestFailedAttemptByRunId(
+    project.mergeQueue?.history ?? []
+  );
+  const queuedRunIds = new Set(
+    (project.mergeQueue?.entries ?? []).map((e) => e.runId)
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto">
       {data.sections.map((section) => (
@@ -113,23 +128,42 @@ export function InboxView({
             {FEED_STATE_LABEL[section.state]}
           </SectionLabel>
           <div className="mt-1.5 flex flex-col gap-0.5">
-            {section.rows.map((row) =>
-              section.state === 'answer' ? (
-                <AnswerRow
-                  key={row.taskId}
-                  row={row}
-                  question={firstOpenQuestion(
-                    project.openQuestions?.get(row.runId)
-                  )}
-                  onOpenTask={onOpenTask}
-                  onAnswerQuestion={(questionId, answer) =>
-                    project.handleAnswerQuestion(row.runId, questionId, answer)
-                  }
-                />
-              ) : (
+            {section.rows.map((row) => {
+              if (section.state === 'answer') {
+                return (
+                  <AnswerRow
+                    key={row.taskId}
+                    row={row}
+                    question={firstOpenQuestion(
+                      project.openQuestions?.get(row.runId)
+                    )}
+                    onOpenTask={onOpenTask}
+                    onAnswerQuestion={(questionId, answer) =>
+                      project.handleAnswerQuestion(
+                        row.runId,
+                        questionId,
+                        answer
+                      )
+                    }
+                  />
+                );
+              }
+              // Only a review row can be a bounced run: the queue hands a failed
+              // entry's task back to review, and every other section describes
+              // something more urgent than the old failure.
+              const failedAttempt =
+                section.state === 'review' && !queuedRunIds.has(row.runId)
+                  ? failedAttempts.get(row.runId)
+                  : undefined;
+              return (
                 <Row
                   key={row.taskId}
                   row={row}
+                  badge={
+                    failedAttempt !== undefined ? (
+                      <FailedToLandBadge reason={failedAttempt.reason} />
+                    ) : undefined
+                  }
                   onClick={() =>
                     onOpenTask(row.taskId, tabFor(row.state), row.runId)
                   }
@@ -151,8 +185,8 @@ export function InboxView({
                     ) : undefined
                   }
                 />
-              )
-            )}
+              );
+            })}
           </div>
         </section>
       ))}
@@ -309,16 +343,32 @@ function PrRow({
   );
 }
 
+/** The chip a review row carries when the merge queue bounced its run: the queue's
+ * verdict where the reviewer will actually see it, with the reason on hover. */
+function FailedToLandBadge({ reason }: { reason: string | undefined }) {
+  return (
+    <span
+      title={reason}
+      className="bg-state-failed-surface text-state-failed rounded-chip shrink-0 px-1.5 py-0.5 text-[10px] leading-none"
+    >
+      failed to land
+    </span>
+  );
+}
+
 /**
  * One urgent feed row: the whose-move mark, the task, why it needs you (the feed's own
  * attention/activity line — "Wants to run Bash", "3 turns", the failure error), and when.
  */
 function Row({
   row,
+  badge,
   onClick,
   action,
 }: {
   row: FeedRowModel;
+  /** A small status tag rendered right after the title (e.g. "failed to land"). */
+  badge?: ReactNode;
   onClick: () => void;
   /** A trailing control rendered as the row button's sibling, never nested
    * inside it — nested buttons are invalid markup and swallow clicks. */
@@ -338,6 +388,7 @@ function Row({
     >
       <StateMark state={row.state} />
       <span className="min-w-0 truncate text-[13px]">{row.title}</span>
+      {badge}
       <span className="text-muted-foreground min-w-0 flex-1 truncate text-[12px]">
         {reason}
       </span>

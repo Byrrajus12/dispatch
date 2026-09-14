@@ -1,4 +1,4 @@
-import type { GateStatus } from '@dispatch/client';
+import type { GateStatus, MergeQueueEntry } from '@dispatch/client';
 import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
@@ -15,6 +15,7 @@ import {
   serializeLandingFilters,
   visibleLandingRows,
 } from '../lib/landingView';
+import { groupFailedAttempts } from '../lib/queueHistory';
 import { Badge } from '@/ui/badge';
 import { Button } from '@/ui/button';
 import { EmptyState } from '@/ui/chrome';
@@ -51,7 +52,8 @@ interface LandingTableViewProps {
 }
 
 /** The unified PR table: every run/PR/queue-local entry in flight, grouped by
- * what it needs, plus a collapsible history of what recently landed. */
+ * what it needs, the queue's own verdict on anything it bounced ("Failed to
+ * land", with a retry), plus a collapsible history of what recently landed. */
 export function LandingTableView({
   data,
   onOpenRun,
@@ -66,7 +68,14 @@ export function LandingTableView({
   }, [filters]);
 
   const [landedOpen, setLandedOpen] = useState(false);
+  const [staleOpen, setStaleOpen] = useState(false);
   const [pushRetrying, setPushRetrying] = useState(false);
+  // The run a failed row is re-enqueueing, so its Retry reads busy while the
+  // request is in flight. The outcome itself — the server's 409s (already
+  // reviewed, already queued) and the "Queued to merge" confirmation — is
+  // reported by the action-feedback wrapper around `data` (lib/actionFeedback.ts),
+  // which is also why nothing here catches.
+  const [retryingRunId, setRetryingRunId] = useState<string | null>(null);
 
   // Re-running "merge all ready" with nothing new to enqueue is what makes the
   // server retry a drain-push it failed. The banner clears on the next clean
@@ -77,6 +86,18 @@ export function LandingTableView({
       await data.handleMergeAllReady();
     } finally {
       setPushRetrying(false);
+    }
+  }
+
+  // Re-enqueues one run the queue bounced — the same action as queueing it from
+  // review, aimed at the run that fell out. Once the entry is live again the
+  // failed row demotes to stale on its own (see `groupFailedAttempts`).
+  async function retryFailed(runId: string) {
+    setRetryingRunId(runId);
+    try {
+      await data.handleEnqueueMerge(runId);
+    } finally {
+      setRetryingRunId(null);
     }
   }
 
@@ -135,6 +156,16 @@ export function LandingTableView({
   // Durable across daemon restarts, unlike the queue's in-memory history — see
   // `landedFromTasks`.
   const landedTasks = landedFromTasks(data.tasksIncludingArchived);
+  // The queue's verdicts on runs that fell out of it. Neither the snapshot's
+  // rows (no failed gate) nor its landed list (merged history only) carry
+  // these, so a run the queue bounced would otherwise sit in "Open" looking
+  // untouched, its reason visible nowhere on this page. Same query as the live
+  // entries, so the "back in the queue" rule can never see a stale pair.
+  const { failed: failedAttempts, stale: staleAttempts } = groupFailedAttempts(
+    data.mergeQueue?.history ?? [],
+    data.runs,
+    new Set((data.mergeQueue?.entries ?? []).map((e) => e.runId))
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
@@ -302,6 +333,67 @@ export function LandingTableView({
             </Table>
           )}
 
+          {failedAttempts.length > 0 && (
+            <section className="flex flex-col gap-0.5">
+              <div className="flex items-center gap-2 px-1 py-1">
+                <span className="dense-label">Failed to land</span>
+                <Badge variant="outline">{failedAttempts.length}</Badge>
+              </div>
+              {failedAttempts.map((entry) => (
+                <FailedAttemptRow
+                  key={attemptKey(entry)}
+                  entry={entry}
+                  now={now}
+                  retrying={retryingRunId === entry.runId}
+                  retryDisabled={retryingRunId !== null}
+                  onOpen={() => onOpenRun(entry.taskId, entry.runId)}
+                  onRetry={() => void retryFailed(entry.runId)}
+                />
+              ))}
+            </section>
+          )}
+
+          {/* Failures the run has outgrown — reviewed anyway, superseded by a newer
+              attempt, or re-queued. Kept reachable, never as headline rows. */}
+          {staleAttempts.length > 0 && (
+            <Collapsible open={staleOpen} onOpenChange={setStaleOpen}>
+              <CollapsibleTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="text-muted-foreground hover:text-foreground h-auto w-fit px-1.5 py-1 text-[11.5px] font-normal"
+                >
+                  {staleOpen ? 'Hide' : 'Show'} {staleAttempts.length} stale{' '}
+                  {staleAttempts.length === 1 ? 'attempt' : 'attempts'}
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="mt-1 flex flex-col gap-0.5">
+                {staleAttempts.map((entry) => (
+                  <div
+                    key={attemptKey(entry)}
+                    className="dense-meta flex items-center gap-1.5 truncate px-1 py-0.5"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onOpenRun(entry.taskId, entry.runId)}
+                      className="text-foreground truncate hover:underline"
+                    >
+                      {entry.taskTitle}
+                    </button>
+                    <span>·</span>
+                    <span className="min-w-0 truncate">
+                      {entry.reason ?? 'failed'}
+                    </span>
+                    <span>·</span>
+                    <span className="shrink-0">
+                      {relativeTime(attemptFinishedAt(entry), now)}
+                    </span>
+                  </div>
+                ))}
+              </CollapsibleContent>
+            </Collapsible>
+          )}
+
           <Collapsible open={landedOpen} onOpenChange={setLandedOpen}>
             <CollapsibleTrigger asChild>
               <Button
@@ -359,6 +451,76 @@ export function LandingTableView({
           </Collapsible>
         </div>
       )}
+    </div>
+  );
+}
+
+// A history entry's React key. A run can fail more than once, so the run id alone
+// would collide across its stale attempts; the finish time tells them apart.
+function attemptKey(entry: MergeQueueEntry): string {
+  return `${entry.runId}-${entry.finishedAt ?? entry.enqueuedAt}`;
+}
+
+// When a history entry came to rest. `finishedAt` is set on every entry the
+// server files to history; the fallbacks only cover entries persisted before
+// the field existed.
+function attemptFinishedAt(entry: MergeQueueEntry): string {
+  return entry.finishedAt ?? entry.stateSince ?? entry.enqueuedAt;
+}
+
+/**
+ * One failed queue attempt: the task, when it failed, a Retry that re-enqueues
+ * the run, and the queue's failure reason in full. The reason is the row's whole
+ * point — the phase it died in was never recorded (see `phaseSteps`), so the
+ * message is the only specific thing there is. Tint stays on the reason, not
+ * the row: a wall of red rows reads as alarm wallpaper, not information.
+ */
+function FailedAttemptRow({
+  entry,
+  now,
+  retrying,
+  retryDisabled,
+  onOpen,
+  onRetry,
+}: {
+  entry: MergeQueueEntry;
+  now: number;
+  retrying: boolean;
+  retryDisabled: boolean;
+  onOpen: () => void;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="hover:bg-muted/40 rounded-md px-3 py-2 transition-colors duration-150">
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={onOpen}
+          className="min-w-0 flex-1 truncate text-left text-[13px] hover:underline"
+        >
+          {entry.taskTitle}
+        </button>
+        <span className="dense-meta shrink-0">
+          {relativeTime(attemptFinishedAt(entry), now)}
+        </span>
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          disabled={retryDisabled}
+          onClick={onRetry}
+          aria-label={`Retry: ${entry.taskTitle}`}
+          className="shrink-0"
+        >
+          {retrying ? 'Queuing…' : 'Retry'}
+        </Button>
+      </div>
+      {/* Full text, wrapped — a verify log's useful line is usually its last. Height is
+          capped so a reason at the server's 4 KB limit scrolls in place instead of
+          pushing the rest of the page away. */}
+      <p className="text-state-failed mt-1 max-h-32 overflow-y-auto text-[12px] break-words whitespace-pre-wrap">
+        {entry.reason ?? 'failed'}
+      </p>
     </div>
   );
 }
