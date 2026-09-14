@@ -4193,7 +4193,9 @@ export async function handleApi(
     if (segments[0] === 'runs') {
       if (segments.length === 1 && method === 'GET') {
         return jsonResponse(
-          ctx.orchestrator.decorateRunsWithPushed(ctx.orchestrator.list())
+          ctx.orchestrator.decorateRunsWithPendingApproval(
+            ctx.orchestrator.decorateRunsWithPushed(ctx.orchestrator.list())
+          )
         );
       }
       if (
@@ -4205,9 +4207,15 @@ export async function handleApi(
       }
       if (segments.length === 2 && method === 'GET') {
         const result = ctx.orchestrator.getRun(segments[1]);
-        return result !== null
-          ? jsonResponse(result)
-          : errorResponse(404, `run not found: ${segments[1]}`);
+        if (result === null) {
+          return errorResponse(404, `run not found: ${segments[1]}`);
+        }
+        // Same decoration as the list: a paused run's approval must be
+        // answerable from a fresh read, not only from the live event.
+        const [meta] = ctx.orchestrator.decorateRunsWithPendingApproval([
+          result.meta,
+        ]);
+        return jsonResponse({ ...result, meta });
       }
       if (
         segments.length === 3 &&

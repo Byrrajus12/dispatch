@@ -126,6 +126,12 @@ export interface RunMeta {
   error?: string;
   /** The Claude model this run was dispatched with, if one was chosen. */
   model?: string;
+  // The approval this run is parked on while `state` is 'awaiting-approval',
+  // so a client that connects after the `approval.requested` event fired (a
+  // reload, a relaunched app, the CLI) can still answer it. The daemon
+  // decorates it onto run reads from its in-memory registry; it is never
+  // persisted and is absent in every other state.
+  pendingApproval?: { requestId: string; toolName: string; input?: unknown };
   // Phase 5 P1: set once a run has been reviewed (merge/discard/pr) or its PR
   // has merged — mirrors RunMeta's own one-way markers in
   // packages/server/src/orchestrator/types.ts.

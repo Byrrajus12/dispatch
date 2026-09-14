@@ -58,6 +58,8 @@ import type { InboxEntryDraft, InboxState } from '../lib/inbox';
 import { addEntries, loadInbox, markAllRead, saveInbox } from '../lib/inbox';
 import { resolveExecuteModel } from '../lib/models';
 import { notify, setNotificationKinds } from '../lib/notifications';
+import type { PendingApproval } from '../lib/pendingApprovals';
+import { mergePendingApprovals } from '../lib/pendingApprovals';
 import { isTerminalRunState, runSurveyNotice } from '../lib/runState';
 import type { TaskAttention } from '../lib/taskAttention';
 import { deriveTaskAttentionById } from '../lib/taskAttention';
@@ -75,10 +77,11 @@ import {
 import { useTransitionNotifications } from './useTransitionNotifications';
 import { wardenKey, wardenKeyPrefix } from './useWardenSession';
 
-// One entry per pending approval this window has seen live via the `approval.requested` WS
-// event — the REST API has no way to hand back a paused run's requestId on a plain refetch,
-// only the live event carries it (see the WS effect below).
-type PendingApproval = { requestId: string; toolName: string };
+// The approvals this window has seen live via the `approval.requested` WS
+// event. Not the whole picture on its own: the daemon also attaches a parked
+// run's request to `GET /api/runs`, and `mergePendingApprovals` folds the two
+// together below so a reload or a relaunch can still answer a run that paused
+// before this window connected.
 
 // Same shape/reason as `PendingApproval`, for `scope.requested`. Seeded from
 // the live WS event, and re-read from `GET /api/runs/:id/scope-requests` for
@@ -558,7 +561,7 @@ export function useDispatchProject(
   { selectedRunId, onRunDispatched }: UseDispatchProjectOptions
 ): DispatchProjectData {
   const queryClient = useQueryClient();
-  const [pendingApprovals, setPendingApprovals] = useState<
+  const [livePendingApprovals, setLivePendingApprovals] = useState<
     Map<string, PendingApproval>
   >(new Map());
   const [pendingScopeRequests, setPendingScopeRequests] = useState<
@@ -862,6 +865,12 @@ export function useDispatchProject(
     },
     enabled: client !== null,
   });
+  // What the Approve buttons act on: the daemon's own record of each parked
+  // run's request, with the live events covering the moment before a refetch.
+  const pendingApprovals = useMemo(
+    () => mergePendingApprovals(runs, livePendingApprovals),
+    [runs, livePendingApprovals]
+  );
   // `retry: false` on both the run detail and diff queries below: `selectedRunId` comes from
   // nav state and can — for one render, e.g. mid project-switch — point at an id that belongs
   // to a different project's daemon (a stale `activeRunId` briefly surviving until
@@ -1198,7 +1207,7 @@ export function useDispatchProject(
                   : prev
             );
           } else if (event.type === 'approval.requested') {
-            setPendingApprovals((prev) => {
+            setLivePendingApprovals((prev) => {
               const next = new Map(prev);
               next.set(event.runId, {
                 requestId: event.requestId,
@@ -1499,7 +1508,7 @@ export function useDispatchProject(
 
   useEffect(() => {
     if (runs === undefined) return;
-    setPendingApprovals((prev) => {
+    setLivePendingApprovals((prev) => {
       let changed = false;
       const next = new Map(prev);
       for (const runId of next.keys()) {
@@ -1870,7 +1879,7 @@ export function useDispatchProject(
     ): Promise<void> => {
       if (client === null) return;
       await client.approveRun(runId, requestId, allow, opts);
-      setPendingApprovals((prev) => {
+      setLivePendingApprovals((prev) => {
         const next = new Map(prev);
         next.delete(runId);
         return next;
