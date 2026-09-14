@@ -144,6 +144,44 @@ describe('replayTranscript', () => {
     ]);
   });
 
+  it('rebuilds the sub-agent summary from the agent entries on replay', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dispatch-transcript-'));
+    const path = join(dir, 'r-000007.jsonl');
+    const transcript = new Transcript(path);
+    transcript.writeHeader(makeMeta({ id: 'r-000007', state: 'running' }));
+    transcript.appendEntry({
+      ts: 't1',
+      kind: 'agent',
+      toolUseId: 'tu-1',
+      agent: { id: 'tu-1', phase: 'started', status: 'running', label: 'a' },
+    });
+    transcript.appendEntry({
+      ts: 't2',
+      kind: 'agent',
+      toolUseId: 'tu-2',
+      agent: { id: 'tu-2', phase: 'started', status: 'running', label: 'b' },
+    });
+    transcript.appendEntry({
+      ts: 't3',
+      kind: 'agent',
+      toolUseId: 'tu-1',
+      agent: { id: 'tu-1', phase: 'finished', status: 'failed' },
+    });
+    transcript.appendState('finished', 't4', { costUsd: 0.5, turns: 3 });
+
+    expect(replayTranscript(path)?.meta.subagents).toEqual({
+      total: 2,
+      running: 1,
+      done: 0,
+      failed: 1,
+      stopped: 0,
+    });
+    // A run that never fanned out carries no summary at all.
+    const plain = join(dir, 'r-000008.jsonl');
+    new Transcript(plain).writeHeader(makeMeta({ id: 'r-000008' }));
+    expect(replayTranscript(plain)?.meta.subagents).toBeUndefined();
+  });
+
   it('returns null when the transcript file does not exist', () => {
     expect(replayTranscript('/nonexistent/path/r-000003.jsonl')).toBeNull();
   });

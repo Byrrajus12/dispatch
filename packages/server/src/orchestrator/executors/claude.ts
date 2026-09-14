@@ -25,6 +25,7 @@ import type {
   ExecutorStartOptions,
   NormalizedEntry,
 } from '../types.js';
+import { isSubagentSpawn, SubagentTracker } from './subagentTracker.js';
 
 // Locates the dispatch MCP server's stdio entry point via Node's own module
 // resolution rather than a hardcoded relative path — the exact pattern
@@ -325,10 +326,20 @@ class MessageQueue implements AsyncIterable<SDKUserMessage> {
 // exactly the three kinds we care about (text, thinking, tool_use).
 interface AssistantContentBlock {
   type: string;
+  id?: string;
   text?: string;
   thinking?: string;
   name?: string;
   input?: unknown;
+}
+
+// The one block kind read off a `user`-typed SDK message: a tool's result,
+// keyed back to its tool_use. Only sub-agent spawns are looked up today (see
+// SubagentTracker.onToolResult); every other tool result is still skipped.
+interface UserContentBlock {
+  type: string;
+  tool_use_id?: string;
+  is_error?: boolean;
 }
 
 // Maps one assistant turn's content blocks to the NormalizedEntry lines the
@@ -336,18 +347,40 @@ interface AssistantContentBlock {
 // tool use, citations, etc.) is silently skipped — NormalizedEntry has no
 // slot for them, and the plan only asks for assistant text/tool_use/
 // thinking, matching FakeExecutor's own log shape.
+//
+// `parentToolUseId` is set when the message came from inside a sub-agent (the
+// SDK forwards a sub-agent's tool calls with `parent_tool_use_id` naming the
+// spawn), and every entry made here carries it so the transcript can tell the
+// agent's own work from its sub-agents'. A `Task`/`Agent` tool_use is the
+// agent spawning a sub-agent and is logged through `tracker` as an `agent`
+// entry instead of a plain tool entry.
 function entriesForAssistantContent(
   content: unknown,
-  ts: string
+  ts: string,
+  tracker: SubagentTracker,
+  parentToolUseId: string | undefined
 ): NormalizedEntry[] {
   const blocks = content as AssistantContentBlock[];
   const entries: NormalizedEntry[] = [];
+  const parent =
+    parentToolUseId !== undefined ? { parentToolUseId } : ({} as const);
   for (const block of blocks) {
     if (block.type === 'text' && block.text !== undefined) {
-      entries.push({ ts, kind: 'assistant', text: block.text });
+      entries.push({ ts, kind: 'assistant', text: block.text, ...parent });
     } else if (block.type === 'thinking' && block.thinking !== undefined) {
-      entries.push({ ts, kind: 'thinking', text: block.thinking });
+      entries.push({ ts, kind: 'thinking', text: block.thinking, ...parent });
     } else if (block.type === 'tool_use' && block.name !== undefined) {
+      if (isSubagentSpawn(block.name)) {
+        const spawn = tracker.onSpawn(
+          { id: block.id, name: block.name, input: block.input },
+          ts,
+          parentToolUseId
+        );
+        if (spawn !== null) {
+          entries.push(spawn);
+          continue;
+        }
+      }
       // TODO(M7): every tool entry is logged as `status: 'running'` and
       // never resolved to 'done'/'error'. Doing that cheaply would need (a)
       // a stable id to update — NormalizedEntry/the transcript's append-only
@@ -356,18 +389,39 @@ function entriesForAssistantContent(
       // appending, and every reader (getRun's replay, the web UI's log view)
       // would need to apply that patch when folding entries — and (b)
       // reading the SDK's own tool_result content blocks, which arrive on a
-      // *user*-typed message this loop currently ignores entirely (only
-      // 'assistant'/'system'/'result' are handled above). Neither half is
-      // cheap, so this stays 'running' until that transcript-patching seam
-      // exists.
+      // *user*-typed message this loop only reads for sub-agent results
+      // (entriesForUserContent). Neither half is cheap, so this stays
+      // 'running' until that transcript-patching seam exists.
       entries.push({
         ts,
         kind: 'tool',
         toolName: block.name,
         toolInput: block.input,
         status: 'running',
+        ...(block.id !== undefined ? { toolUseId: block.id } : {}),
+        ...parent,
       });
     }
+  }
+  return entries;
+}
+
+// The `agent` entries a `user`-typed SDK message amounts to: one finished
+// entry per tool_result that answers a sub-agent spawn. Everything else on
+// these messages (ordinary tool results, the prompts this executor sends) is
+// still ignored — see the TODO(M7) above.
+function entriesForUserContent(
+  message: { message: { content: unknown }; tool_use_result?: unknown },
+  ts: string,
+  tracker: SubagentTracker
+): NormalizedEntry[] {
+  const content = message.message.content;
+  if (!Array.isArray(content)) return [];
+  const entries: NormalizedEntry[] = [];
+  for (const block of content as UserContentBlock[]) {
+    if (block.type !== 'tool_result') continue;
+    const finished = tracker.onToolResult(block, message.tool_use_result, ts);
+    if (finished !== null) entries.push(finished);
   }
   return entries;
 }
@@ -755,6 +809,10 @@ export class ClaudeExecutor implements Executor {
       // one input to guardZeroTurnFinish's did-anything-actually-happen
       // check when the terminal result claims success.
       let sawAssistantOutput = false;
+      // Correlates the SDK's sub-agent signals (spawn tool calls, task
+      // lifecycle messages, tool results) into `agent` entries — see the
+      // tracker's own doc comment for why one object has to see all three.
+      const subagents = new SubagentTracker();
       try {
         for await (const message of sdkQuery) {
           if (interrupted) break;
@@ -769,11 +827,23 @@ export class ClaudeExecutor implements Executor {
             const ts = new Date().toISOString();
             for (const entry of entriesForAssistantContent(
               message.message.content,
-              ts
+              ts,
+              subagents,
+              message.parent_tool_use_id ?? undefined
             )) {
               events.onEntry(entry);
             }
+          } else if (message.type === 'user') {
+            const ts = new Date().toISOString();
+            for (const entry of entriesForUserContent(message, ts, subagents)) {
+              events.onEntry(entry);
+            }
           } else if (message.type === 'system') {
+            const lifecycle = subagents.onSystem(
+              message,
+              new Date().toISOString()
+            );
+            if (lifecycle !== null) events.onEntry(lifecycle);
             if (message.session_id !== sessionId) {
               // A resume that did not reattach: the SDK keeps a plain
               // `resume` on the SAME session id (only `forkSession` mints a

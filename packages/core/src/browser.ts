@@ -6,6 +6,7 @@ export * from './types.js';
 export * from './configTypes.js';
 export * from './policy.js';
 export * from './linearMap.js';
+export * from './subagents.js';
 export type {
   Finding,
   FindingRecommendation,

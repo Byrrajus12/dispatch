@@ -1,4 +1,5 @@
 import type { CommandEvidence, MutationEvidence } from '@dispatch/core';
+import { foldSubagents, summarizeSubagents } from '@dispatch/core';
 import {
   appendFileSync,
   existsSync,
@@ -285,6 +286,13 @@ export function replayTranscript(path: string): RunDetail | null {
         stopRequestedAt: line.stopRequestedAt ?? meta.stopRequestedAt,
       };
     }
+  }
+  // Fan-out is never written to a state line: the `agent` entries are the
+  // record, and the summary the live registry kept is rebuilt from them here
+  // so a run replayed after a restart lists the same counts it showed live.
+  const subagents = foldSubagents(entries);
+  if (subagents.length > 0) {
+    meta = { ...meta, subagents: summarizeSubagents(subagents) };
   }
   return { meta, entries, evidence, mutations };
 }
