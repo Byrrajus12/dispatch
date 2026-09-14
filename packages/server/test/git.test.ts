@@ -677,3 +677,43 @@ describe('GitRepo: show', () => {
     expect(result).toEqual({ ok: false, stderr: INVALID_REF_ERROR });
   });
 });
+
+// The daemon samples run worktrees that an orphaned agent may still be
+// committing in (autoResumeAfterBoot's quiet window, surveyRun, claim
+// refresh). `git status` and `git diff` opportunistically rewrite the index
+// under `index.lock`, and CI caught the daemon holding that lock at the
+// instant the orphan's `git add` needed it. An observer must never take it.
+describe('GitRepo.observer', () => {
+  it('runs every command with --no-optional-locks', async () => {
+    const argv: string[][] = [];
+    const fakeRun: CommandRunner = (_cwd, cmd) => {
+      argv.push(cmd);
+      return Promise.resolve({ ok: true, stdout: '', stderr: '' });
+    };
+
+    await GitRepo.observer(root, fakeRun).status();
+    await GitRepo.observer(root, fakeRun).diff();
+    await GitRepo.observer(root, fakeRun).log({ limit: 1 });
+
+    expect(argv).toHaveLength(3);
+    for (const cmd of argv) {
+      expect(cmd.slice(0, 3)).toEqual([
+        'git',
+        '--no-optional-locks',
+        '--literal-pathspecs',
+      ]);
+    }
+  });
+
+  it('is opt-in: a plain GitRepo keeps the default locking behaviour', async () => {
+    const argv: string[][] = [];
+    const fakeRun: CommandRunner = (_cwd, cmd) => {
+      argv.push(cmd);
+      return Promise.resolve({ ok: true, stdout: '', stderr: '' });
+    };
+
+    await new GitRepo(root, fakeRun).status();
+
+    expect(argv[0]?.slice(0, 2)).toEqual(['git', '--literal-pathspecs']);
+  });
+});

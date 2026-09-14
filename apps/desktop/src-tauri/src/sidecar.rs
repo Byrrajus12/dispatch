@@ -348,6 +348,8 @@ pub enum DaemonLaunch {
     BunScript(PathBuf),
     /// Run the compiled dispatchd binary directly, telling it where the
     /// compiled MCP binary lives so its executor spawns that instead of `bun`.
+    // Only the release path in `commands.rs` (`cfg(not(debug_assertions))`) constructs this.
+    #[cfg_attr(debug_assertions, allow(dead_code))]
     Bundled { dispatchd: PathBuf, mcp: PathBuf },
 }
 

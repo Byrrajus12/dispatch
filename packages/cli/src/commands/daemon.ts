@@ -84,10 +84,29 @@ function readDaemonFile(rootDir: string): DaemonFileInfo | null {
 // export exists specifically so this resolve() call has something to anchor
 // on; the bin script sits alongside it at `src/bin.ts`, run directly by Bun
 // (which executes TypeScript natively, no build step required).
-function resolveDaemonBin(): string {
-  const pkgJsonPath = createRequire(import.meta.url).resolve(
-    '@dispatch/server/package.json'
-  );
+//
+// `@dispatch/server` is a devDependency only: the MIT-licensed CLI must not
+// pull the FSL daemon into its published dependency tree, so this resolve
+// succeeds in a monorepo checkout but not in a standalone install. There the
+// daemon ships as a sibling `dispatchd` binary or via `DISPATCH_DAEMON_BIN`
+// (see `resolveDaemonLauncher`), and this last-resort branch turns the raw
+// module-not-found into an actionable error. `resolvePkg` is injectable only
+// so tests can exercise that branch.
+export function resolveDaemonBin(
+  resolvePkg: (specifier: string) => string = (s) =>
+    createRequire(import.meta.url).resolve(s)
+): string {
+  let pkgJsonPath: string;
+  try {
+    pkgJsonPath = resolvePkg('@dispatch/server/package.json');
+  } catch {
+    throw new CliError(
+      'no dispatchd found: this install has no bundled daemon and no ' +
+        '@dispatch/server checkout. Install the Dispatch desktop app (which ' +
+        'ships dispatchd), or set DISPATCH_DAEMON_BIN to a dispatchd binary ' +
+        'or entry script.'
+    );
+  }
   return join(dirname(pkgJsonPath), 'src', 'bin.ts');
 }
 
@@ -103,6 +122,14 @@ export interface DaemonLauncher {
   leadingArgs: string[];
   env?: Record<string, string>;
   usesBun: boolean;
+}
+
+/** The compiled sidecar filename used by a packaged CLI on this platform. */
+export function bundledExecutableName(
+  name: string,
+  platform: NodeJS.Platform = process.platform
+): string {
+  return platform === 'win32' ? `${name}.exe` : name;
 }
 
 // Classifies an explicit `DISPATCH_DAEMON_BIN` override: a `.ts`/`.js` entry
@@ -136,7 +163,8 @@ function launcherForOverride(binPath: string): DaemonLauncher {
 // which point it at a temp-dir layout to exercise the sibling-binary branch
 // without depending on where the test runner itself lives.
 export function resolveDaemonLauncher(
-  execPath: string = process.execPath
+  execPath: string = process.execPath,
+  platform: NodeJS.Platform = process.platform
 ): DaemonLauncher {
   const override = process.env.DISPATCH_DAEMON_BIN;
   if (override !== undefined && override !== '') {
@@ -144,10 +172,16 @@ export function resolveDaemonLauncher(
   }
 
   const execDir = dirname(execPath);
-  const siblingDaemon = join(execDir, 'dispatchd');
+  const siblingDaemon = join(
+    execDir,
+    bundledExecutableName('dispatchd', platform)
+  );
   if (existsSync(siblingDaemon)) {
     const env: Record<string, string> = {};
-    const siblingMcp = join(execDir, 'dispatch-mcp');
+    const siblingMcp = join(
+      execDir,
+      bundledExecutableName('dispatch-mcp', platform)
+    );
     if (existsSync(siblingMcp)) env.DISPATCH_MCP_BIN = siblingMcp;
     return { cmd: siblingDaemon, leadingArgs: [], env, usesBun: false };
   }

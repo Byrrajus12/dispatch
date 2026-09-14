@@ -318,13 +318,45 @@ describe('ReceiptsExporter ownership', () => {
     const s = stores();
     s.tasks.create({ kind: 'task', title: 'First task' });
     const dir = logDir();
-    expect(exporterFor(s).exportOnce(dir).state).toBe('committed');
-    // gpgsign forced off per-command, so a global `commit.gpgsign = true`
-    // cannot make the daemon wait on a GPG agent for a passphrase.
-    expect(run(dir, ['config', '--get', 'commit.gpgsign']).stdout.trim()).toBe(
-      ''
+
+    // Stand in for a machine-global policy rather than assuming the host
+    // running the suite has none: signing required, through a gpg binary that
+    // does not exist. Every git the exporter spawns inherits process.env, so
+    // GIT_CONFIG_GLOBAL is what its `git commit` reads. Should the exporter
+    // ever stop forcing gpgsign off per-command, the commit fails loudly here
+    // ("cannot exec") instead of hanging on a passphrase prompt.
+    const gitconfig = join(home, 'gitconfig');
+    writeFileSync(
+      gitconfig,
+      [
+        '[user]',
+        '\tname = Signing Policy',
+        '\temail = signing@example.com',
+        '[commit]',
+        '\tgpgsign = true',
+        '[gpg]',
+        '\tprogram = /nonexistent/dispatch-test-gpg',
+        '',
+      ].join('\n')
     );
-    expect(run(dir, ['log', '--format=%G?', '-1']).stdout.trim()).toBe('N');
+    const previousGlobal = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = gitconfig;
+    try {
+      expect(exporterFor(s).exportOnce(dir).state).toBe('committed');
+      // The policy really is in effect for the log — and stays in effect,
+      // because the override rides on each command rather than being written
+      // into the log's own config, where it could drift or be lost.
+      expect(
+        run(dir, ['config', '--get', 'commit.gpgsign']).stdout.trim()
+      ).toBe('true');
+      expect(
+        run(dir, ['config', '--local', '--get', 'commit.gpgsign']).stdout.trim()
+      ).toBe('');
+      expect(run(dir, ['log', '--format=%G?', '-1']).stdout.trim()).toBe('N');
+    } finally {
+      if (previousGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = previousGlobal;
+    }
   });
 
   it('attributes commits without writing identity into the repo config', () => {

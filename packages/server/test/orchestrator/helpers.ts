@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
@@ -110,4 +110,37 @@ export function initGitRepoAt(dir: string): string {
  */
 export function worktreeSiblingPath(repo: string, name: string): string {
   return join(repo, '..', `${basename(repo)}-${name}`);
+}
+
+/**
+ * Runs `fn` while `repo` is temporarily not a git repository, so every git
+ * command the code under test runs against it fails outright. This is how a
+ * test injects a "real, unexpected" dispatch failure: WorktreeManager's first
+ * git call (resolving the base branch, before any worktree is added) throws a
+ * plain Error — exactly what fillQueue's narrow OrchestratorConflictError
+ * catch does not tolerate.
+ *
+ * Not `chmod -R 000 .git`: root ignores permission bits, so in a root shell
+ * (containers, some CI runners) that injection is a no-op — git keeps working,
+ * the expected failure never comes, and the test times out. Moving `.git`
+ * aside fails for every user. The empty `.git` FILE left in its place matters
+ * too: with nothing there at all git walks up the parent directories looking
+ * for a repository, and would silently operate on whatever checkout the temp
+ * dir happens to live under; an invalid gitfile stops discovery at the repo
+ * itself ("fatal: invalid gitfile format").
+ */
+export async function withBrokenRepo<T>(
+  repo: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const gitDir = join(repo, '.git');
+  const parked = join(repo, '.git.offline');
+  renameSync(gitDir, parked);
+  writeFileSync(gitDir, '');
+  try {
+    return await fn();
+  } finally {
+    rmSync(gitDir, { force: true });
+    renameSync(parked, gitDir);
+  }
 }

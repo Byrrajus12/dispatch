@@ -1557,7 +1557,7 @@ export class Orchestrator {
   // survey, rather than throwing, when the worktree itself is gone.
   async surveyRun(runId: string): Promise<RunSurvey> {
     const meta = this.requireRun(runId);
-    const repo = new GitRepo(meta.worktreePath);
+    const repo = GitRepo.observer(meta.worktreePath);
     const [statusResult, logResult] = await Promise.all([
       repo.status(),
       repo.log({ limit: 50 }),
@@ -1624,13 +1624,13 @@ export class Orchestrator {
   private async worktreeEvidence(runId: string): Promise<string | null> {
     const meta = this.registry.get(runId);
     if (meta === undefined) return null;
-    const repo = new GitRepo(meta.worktreePath);
-    // Sequential, deliberately, where surveyRun's cheaper pair can be
-    // concurrent: `git status` and `git diff` both opportunistically refresh
-    // the index, and two of them at once in the same worktree lose the race
-    // for `index.lock`. That failure would come back here as null — "cannot
-    // tell" — so running them in parallel would make a run's own evidence
-    // gathering the reason it never looked quiet enough to resume.
+    const repo = GitRepo.observer(meta.worktreePath);
+    // An observer (`--no-optional-locks`): the orphan may be mid-commit, and
+    // a `git status` or `git diff` that refreshed the index under
+    // `index.lock` would make its `git add` fail and lose its work. Still
+    // sequential where surveyRun's cheaper pair is concurrent — a failure
+    // here reads as null, "cannot tell", so nothing about this sampling
+    // should be able to fail for reasons of its own.
     const status = await repo.status();
     if (!status.ok) return null;
     const log = await repo.log({ limit: 1 });
@@ -1665,7 +1665,7 @@ export class Orchestrator {
   async refreshClaims(runId: string): Promise<void> {
     const meta = this.registry.get(runId);
     if (meta === undefined || TERMINAL_RUN_STATES.has(meta.state)) return;
-    const status = await new GitRepo(meta.worktreePath).status();
+    const status = await GitRepo.observer(meta.worktreePath).status();
     if (!status.ok) return;
     const touched = [
       ...status.staged.map((f) => f.path),

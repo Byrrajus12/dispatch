@@ -7,10 +7,11 @@ name: Release
 #   - macos-latest       -> aarch64 .dmg (Apple Silicon)
 #   - macos-15-intel     -> x64 .dmg (Intel Macs)
 #   - ubuntu-latest      -> x64 .deb / .rpm / .AppImage
-# Windows is intentionally absent: the bundled sidecar resources are declared
-# without `.exe` extensions in tauri.conf.json and dispatchd's packaged-app
-# spawn path is not wired for Windows yet (see apps/desktop/src-tauri/src/
-# sidecar.rs "Phase 6 TODO").
+# Windows is intentionally absent. The sidecars themselves now build and
+# resolve as `.exe` there (tauri.windows.conf.json, build-sidecars.ts,
+# commands.rs), but dispatchd's packaged-app spawn path is still untested on
+# Windows — `enrich_path` in apps/desktop/src-tauri/src/sidecar.rs splits
+# PATH on `:`, and no CI job exercises the platform.
 
 on:
   push:
