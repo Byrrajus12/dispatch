@@ -131,7 +131,11 @@ describe('resolveDaemonBin', () => {
     const bin = resolveDaemonBin(
       (specifier) => `/checkout/node_modules/${specifier}`
     );
-    expect(bin).toBe('/checkout/node_modules/@dispatch/server/src/bin.ts');
+    // Built with node:path, so the separators follow the host — compare the
+    // same way rather than hard-coding the POSIX spelling.
+    expect(bin).toBe(
+      join('/checkout/node_modules/@dispatch/server', 'src', 'bin.ts')
+    );
   });
 
   it('turns a failed resolve into an actionable CliError, not a module-not-found', () => {
