@@ -2243,7 +2243,8 @@ export interface ApiClient {
 // dispatchd on some other port.
 //
 // `token` is the daemon token every call presents. Pass the app token to reach
-// `decideScopeRequest`; the agent token reaches everything else. Omitting it
+// the decide-tier calls (`decideScopeRequest`, `approveRun`,
+// `confirmWardenAction`); the agent token reaches everything else. Omitting it
 // falls back to the token the daemon injected into the page it served, which
 // is how the browser UI gets one at all.
 export function createApiClient(baseUrl: string, token?: string): ApiClient {

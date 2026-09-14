@@ -53,3 +53,33 @@ describe('ApprovalCard — composing a deny reason', () => {
     expect(onDecide).toHaveBeenCalledWith(true, { scope: 'once' });
   });
 });
+
+describe('ApprovalCard — an attached window that cannot decide', () => {
+  // Same gate as the scope card: the daemon only takes an approval on the app token, so a
+  // window that attached to a daemon it did not start must say so instead of 403ing.
+  it('disables every option, explains why, and offers the restart when it is safe', () => {
+    const onDecide = mock(() => Promise.resolve());
+    const onRestartDaemon = mock(() => Promise.resolve());
+    render(
+      <ApprovalCard
+        toolName="Bash"
+        toolInput={{ command: 'ls' }}
+        onDecide={onDecide}
+        availability={{
+          enabled: false,
+          notice: 'Restart daemon to enable approvals',
+          explanation: 'This window did not start the daemon.',
+          restart: { safe: true, blockedReason: null },
+        }}
+        onRestartDaemon={onRestartDaemon}
+      />
+    );
+    fireEvent.click(screen.getByText('Approve once'));
+    expect(onDecide).not.toHaveBeenCalled();
+    expect(
+      screen.getByText('Restart daemon to enable approvals')
+    ).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: /restart daemon/i }));
+    expect(onRestartDaemon).toHaveBeenCalledTimes(1);
+  });
+});

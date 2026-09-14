@@ -112,7 +112,9 @@ interface RunLogViewProps {
    * (paths + reason) once its id arrives — `null` when there isn't one. */
   pendingScopeRequest: RunScopeRequest | null;
   onDecideScopeRequest: (granted: boolean) => Promise<void>;
-  /** Whether this window can decide at all — see `decideAvailability`. */
+  /** Whether this window can decide at all — see `decideAvailability`. Gates the approval
+   * card and the scope card alike: both are adjudications the daemon only takes on the app
+   * token. */
   scopeDecide: DecideAvailability;
   onRestartDaemon: () => Promise<void>;
   /** Resumes a terminal run with feedback (the same action the Diff tab's "Request changes"
@@ -339,6 +341,8 @@ export function RunLogView({
                 onDecide={(allow, opts) =>
                   onApprove(pendingApproval.requestId, allow, opts)
                 }
+                availability={scopeDecide}
+                onRestartDaemon={onRestartDaemon}
               />
             ) : (
               <div className="border-border bg-muted/40 text-muted-foreground flex items-start gap-2 rounded-md border px-3 py-2 text-[12px]">

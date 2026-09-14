@@ -1878,6 +1878,10 @@ export function useDispatchProject(
       opts?: { scope?: 'once' | 'session'; reason?: string }
     ): Promise<void> => {
       if (client === null) return;
+      // Approving a tool call is an adjudication like deciding a scope
+      // request: the daemon takes it on the app token only, so an attached
+      // window fails here with the actionable sentence rather than a 403.
+      assertCanDecide(auth);
       await client.approveRun(runId, requestId, allow, opts);
       setLivePendingApprovals((prev) => {
         const next = new Map(prev);
@@ -1887,7 +1891,7 @@ export function useDispatchProject(
       void queryClient.invalidateQueries({ queryKey: runsQueryKey });
       void queryClient.invalidateQueries({ queryKey: ['dispatch-run', port] });
     },
-    [client, queryClient, runsQueryKey, port]
+    [client, queryClient, runsQueryKey, port, auth]
   );
 
   const handleDecideScopeRequest = useCallback(

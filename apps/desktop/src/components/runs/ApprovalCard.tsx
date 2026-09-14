@@ -1,5 +1,7 @@
+import { RotateCw } from 'lucide-react';
 import { useState } from 'react';
 
+import type { DecideAvailability } from '../../lib/daemonAuth';
 import { formatRelativeTimeFromIso } from '@/lib/format';
 import type { ApprovalCardOption } from '@/ui/ai/approval-card';
 import { ApprovalCard as AiApprovalCard } from '@/ui/ai/approval-card';
@@ -21,7 +23,19 @@ interface ApprovalCardProps {
     allow: boolean,
     opts?: { scope?: 'once' | 'session'; reason?: string }
   ) => Promise<void>;
+  /** Whether this window holds the app token approving requires — see
+   *  `decideAvailability`. Every option is inert without it, and the card says why. Optional
+   *  only so a caller that has not wired daemon auth still renders a working card. */
+  availability?: DecideAvailability;
+  onRestartDaemon?: () => Promise<void>;
 }
+
+const ALWAYS_AVAILABLE: DecideAvailability = {
+  enabled: true,
+  notice: null,
+  explanation: null,
+  restart: null,
+};
 
 // Renders `toolInput` the same compact way `toolEntryPreview` does for a
 // collapsed tool-log entry, so the approval card and the log line for the
@@ -54,8 +68,11 @@ export function ApprovalCard({
   toolInput,
   frozenSince,
   onDecide,
+  availability = ALWAYS_AVAILABLE,
+  onRestartDaemon,
 }: ApprovalCardProps) {
   const [deciding, setDeciding] = useState(false);
+  const [restarting, setRestarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | undefined>();
   // Denying opens a reason box rather than firing immediately. The button says "tell it why",
@@ -81,8 +98,21 @@ export function ApprovalCard({
     }
   }
 
+  async function restart() {
+    if (onRestartDaemon === undefined) return;
+    setRestarting(true);
+    setError(null);
+    try {
+      await onRestartDaemon();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRestarting(false);
+    }
+  }
+
   function handleSelect(id: string) {
-    if (deciding) return;
+    if (deciding || !availability.enabled) return;
     setSelectedId(id);
     if (id === DENY_ID) {
       setDenying(true);
@@ -120,13 +150,40 @@ export function ApprovalCard({
         // asks "why not?" before anything fires, so the other two options staying clickable
         // underneath it would let a stray click approve the very thing being denied. The
         // pre-reskin version removed the option row outright for the same reason.
-        disabled={deciding || denying}
+        disabled={deciding || denying || !availability.enabled}
       />
       <ScrollArea className="border-border bg-card max-h-40 rounded-md border">
         <pre className="text-muted-foreground p-2 font-mono text-[11px] break-words whitespace-pre-wrap">
           {formatInput(toolInput)}
         </pre>
       </ScrollArea>
+      {/* Same block the scope card shows: this window attached to a daemon it did not start,
+          so it never saw the app token approving needs. */}
+      {!availability.enabled && (
+        <div className="border-border bg-muted/40 flex flex-col gap-1.5 rounded-md border px-2.5 py-2">
+          <span className="text-[12px] font-medium">{availability.notice}</span>
+          <span className="text-muted-foreground text-[11px]">
+            {availability.explanation}
+          </span>
+          {availability.restart?.safe === true &&
+          onRestartDaemon !== undefined ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="self-start"
+              disabled={restarting}
+              onClick={() => void restart()}
+            >
+              <RotateCw className="size-3" />
+              {restarting ? 'Restarting…' : 'Restart daemon'}
+            </Button>
+          ) : (
+            <span className="text-muted-foreground text-[11px]">
+              {availability.restart?.blockedReason}
+            </span>
+          )}
+        </div>
+      )}
       {error !== null && (
         <div className="text-destructive text-[12px]">{error}</div>
       )}

@@ -402,6 +402,35 @@ describe('token storage', () => {
 // handler, so no live conversation is needed: the agent token must 403
 // before the 404 a missing conversation would produce, and the app token
 // must reach that 404.
+// A run's approval gate is the third adjudication route. Same proof as the
+// warden confirm below: the tier check runs before the handler, so the agent
+// token must 403 before the 404 a run that does not exist would produce, and
+// the app token must reach that 404.
+describe('run approval tier', () => {
+  const approvalPath = '/api/runs/r-000000/approval';
+  const body = JSON.stringify({ requestId: 'req-1', allow: true });
+
+  it('403s an approval made with the agent token', async () => {
+    const res = await rawFetch(`${baseUrl}${approvalPath}`, {
+      method: 'POST',
+      headers: { ...auth(agentToken), 'content-type': 'application/json' },
+      body,
+    });
+    expect(res.status).toBe(403);
+    expect((await json<AuthError>(res)).code).toBe('auth_insufficient_tier');
+  });
+
+  it('lets the app token through to the handler', async () => {
+    const res = await rawFetch(`${baseUrl}${approvalPath}`, {
+      method: 'POST',
+      headers: { ...auth(appToken), 'content-type': 'application/json' },
+      body,
+    });
+    expect(res.status).not.toBe(403);
+    expect(res.status).not.toBe(401);
+  });
+});
+
 describe('warden confirm tier', () => {
   const confirmPath = '/api/warden/wc-000000/actions/wa-000000/confirm';
 
