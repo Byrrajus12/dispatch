@@ -333,6 +333,11 @@ export function registerOrchestrateCommands(
       ctx.log(
         `${meta.id}  task=${meta.taskId}  state=${meta.state}  executor=${meta.executor}  branch=${meta.branch}`
       );
+      if (meta.pendingApproval !== undefined) {
+        ctx.log(
+          `awaiting approval: ${meta.pendingApproval.toolName} (${meta.pendingApproval.requestId}) — answer with: dispatch approve ${meta.id} [--deny]`
+        );
+      }
       const last20 = detail.entries.slice(-20);
       for (const entry of last20) {
         const line = formatEntry(entry);
@@ -379,15 +384,28 @@ export function registerOrchestrateCommands(
     });
 
   program
-    .command('approve <runId> <requestId>')
+    .command('approve <runId> [requestId]')
     .description('Approve or deny a run awaiting an approval decision')
     .option('--deny', 'deny the request instead of approving it')
     .action(
-      async (runId: string, requestId: string, opts: { deny?: boolean }) => {
+      async (
+        runId: string,
+        requestId: string | undefined,
+        opts: { deny?: boolean }
+      ) => {
         const { client } = await daemonFor(ctx);
         const allow = opts.deny !== true;
-        await client.approveRun(runId, requestId, allow);
-        ctx.log(`${runId} ${allow ? 'approved' : 'denied'} (${requestId})`);
+        // `run --watch` prints the id live, but a caller who was not watching
+        // has no way to learn it — the run read carries the request the run
+        // is parked on, so the id is only needed to pin a specific one.
+        const resolvedId =
+          requestId ??
+          (await client.getRun(runId)).meta.pendingApproval?.requestId;
+        if (resolvedId === undefined) {
+          throw new CliError(`${runId} is not awaiting an approval`);
+        }
+        await client.approveRun(runId, resolvedId, allow);
+        ctx.log(`${runId} ${allow ? 'approved' : 'denied'} (${resolvedId})`);
       }
     );
 

@@ -499,6 +499,24 @@ export class Orchestrator {
     return this.registry.getPendingApproval(runId);
   }
 
+  /**
+   * Attaches each awaiting-approval run's pending request to its meta for API
+   * reads. The registry keeps approvals in memory and the `approval.requested`
+   * WS event carries the id live — but a client that connects afterwards (a
+   * reload, a relaunched app, the CLI) had no way to learn which request a
+   * parked run is waiting on, so it could see the run was stuck and still not
+   * answer it. Computed per request and never persisted: the record dies with
+   * the executor, exactly like the pause it describes.
+   */
+  decorateRunsWithPendingApproval<T extends RunMeta>(
+    runs: T[]
+  ): (T & { pendingApproval?: PendingApproval })[] {
+    return runs.map((run) => {
+      const pending = this.pendingApprovalFor(run.id);
+      return pending === undefined ? run : { ...run, pendingApproval: pending };
+    });
+  }
+
   // Adds `pushedToOrigin` to each merged run, computed fresh per request (never
   // persisted). Memoizes by (mergeCommit, baseBranch) so runs sharing a base pay once.
   decorateRunsWithPushed(

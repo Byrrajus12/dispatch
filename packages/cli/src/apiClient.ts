@@ -58,6 +58,10 @@ export interface RunMeta {
   survey?: unknown;
   kind?: 'execute' | 'review' | 'verify';
   claims?: string[];
+  // The approval the run is parked on while `state` is 'awaiting-approval' —
+  // the daemon decorates run reads with it so `dispatch approve` can find the
+  // request id without having watched the run live.
+  pendingApproval?: { requestId: string; toolName: string; input?: unknown };
 }
 
 export interface NormalizedEntry {

@@ -86,12 +86,16 @@ function ChatMessageBubble({ entry }: { entry: NormalizedEntry }) {
 interface RunLogViewProps {
   meta: RunMeta;
   entries: NormalizedEntry[];
-  /** The pending approval this window has seen live via the `approval.requested` WS event, or
-   * `null` when there isn't one (or when `meta.state` is `awaiting-approval` because a run
-   * paused before this window connected — see the banner below for that case; the daemon
-   * doesn't expose a paused run's requestId over `GET /api/runs/:id`, only the live WS event
-   * carries it, so there's nothing to resume approving from here without it). */
-  pendingApproval: { requestId: string; toolName: string } | null;
+  /** The approval this run is parked on — from the live `approval.requested` event or from
+   * the `pendingApproval` the daemon attaches to run reads (see lib/pendingApprovals.ts) — or
+   * `null` when there isn't one. `meta.state` can still read `awaiting-approval` with this
+   * `null` when the daemon that raised the request is gone (a restart mid-pause); the banner
+   * below covers that case. */
+  pendingApproval: {
+    requestId: string;
+    toolName: string;
+    input?: unknown;
+  } | null;
   onApprove: (
     requestId: string,
     allow: boolean,
@@ -166,17 +170,17 @@ export function RunLogView({
   const canContinue = deriveRunDisposition(meta) === 'stopped-short';
   const orphanWork = postFailWorkLabel(meta);
 
-  // Finds the most recent tool-log entry with a matching name to back the
-  // approval card's input preview — see the field doc comment above for why
-  // this is a best-effort lookup rather than something the API hands us
-  // directly.
+  // The approval card's input preview: the request's own input when the
+  // source carried it (the run read does), else a best-effort lookup of the
+  // most recent tool-log entry with a matching name.
   const pendingApprovalInput =
     pendingApproval !== null
-      ? entries
+      ? (pendingApproval.input ??
+        entries
           .filter(
             (e) => e.kind === 'tool' && e.toolName === pendingApproval.toolName
           )
-          .at(-1)?.toolInput
+          .at(-1)?.toolInput)
       : undefined;
 
   async function send(text: string, resume: boolean) {

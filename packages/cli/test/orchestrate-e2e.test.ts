@@ -235,11 +235,14 @@ describe('headless dispatcher loop (real daemon, built CLI subprocess)', () => {
     // watch surfaces them too.
     expect(stdout).toContain('[tool');
 
+    // A caller who was not watching can still find the gate: the run read
+    // names the request, so `approve` needs no id.
+    expect(cli('run', 'show', runId)).toContain(
+      `awaiting approval: run_shell (fake-approval-1) — answer with: dispatch approve ${runId}`
+    );
     // The scripted approval round-trip: a SECOND CLI invocation, entirely
     // separate from the still-running --watch subprocess above.
-    expect(cli('approve', runId, 'fake-approval-1')).toBe(
-      `${runId} approved (fake-approval-1)`
-    );
+    expect(cli('approve', runId)).toBe(`${runId} approved (fake-approval-1)`);
 
     const exitCode = await new Promise<number>((resolveExit) => {
       watch.on('exit', (code) => resolveExit(code ?? -1));
