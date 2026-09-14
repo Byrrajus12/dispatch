@@ -1137,3 +1137,41 @@ describe('arm a line, then chat about it', () => {
     });
   });
 });
+
+// On a whole-patch review page the viewed tick sits in each file's header — the one place a
+// reviewer is when they finish a file — and a ticked file collapses under it.
+describe('PierreReviewDiff — the viewed tick in each file header', () => {
+  it('renders a checkbox per file, checked for viewed files, and reports the click', async () => {
+    const toggled: string[] = [];
+    render(
+      <PierreReviewDiff
+        patch={TWO_FILE_PATCH}
+        comments={[]}
+        viewed={new Set(['a.ts'])}
+        onToggleViewed={(file) => toggled.push(file)}
+        onResolve={() => Promise.resolve()}
+        onReply={() => Promise.resolve()}
+      />
+    );
+
+    const a = await screen.findByRole('checkbox', { name: 'Mark a.ts viewed' });
+    const b = await screen.findByRole('checkbox', { name: 'Mark b.ts viewed' });
+    expect(a.getAttribute('aria-checked')).toBe('true');
+    expect(b.getAttribute('aria-checked')).toBe('false');
+
+    fireEvent.click(b);
+    expect(toggled).toEqual(['b.ts']);
+  });
+
+  it('shows no tick on a surface without viewed state', () => {
+    render(
+      <PierreReviewDiff
+        patch={TWO_FILE_PATCH}
+        comments={[]}
+        onResolve={() => Promise.resolve()}
+        onReply={() => Promise.resolve()}
+      />
+    );
+    expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+});

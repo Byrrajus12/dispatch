@@ -23,8 +23,9 @@ interface ReviewFileTreeProps {
 /**
  * The review's changed-files tree — @pierre/trees' `FileTree`. Viewed ticks and comment counts
  * ride on the rows themselves via `renderRowDecoration`, which takes one text-or-icon value per
- * row. The viewed *toggle* stays in the review page's diff pane header, since a decoration cannot
- * take a click.
+ * row. The viewed *toggle* lives in each file's diff header (see `PierreReviewDiff`'s
+ * `onToggleViewed`), since a decoration cannot take a click; picking a row here scrolls the
+ * whole-patch diff to that file.
  */
 export function ReviewFileTree({
   files,

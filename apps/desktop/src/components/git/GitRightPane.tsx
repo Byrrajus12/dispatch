@@ -162,7 +162,7 @@ export function GitRightPane(props: GitRightPaneProps) {
             <GitDiffPane
               patch={props.workingDiff}
               loading={props.workingDiffLoading}
-              only={row.path}
+              focus={row.path}
             />
           )}
         </div>
