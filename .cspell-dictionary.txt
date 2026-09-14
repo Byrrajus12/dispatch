@@ -173,6 +173,7 @@ GHSA
 Ghsas
 gifsicle
 gitdir
+gitfile
 gitignoring
 gitrepo
 glanceable

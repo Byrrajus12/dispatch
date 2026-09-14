@@ -14,7 +14,7 @@ import {
   OrchestratorConflictError,
   OrchestratorNotFoundError,
 } from '../../src/orchestrator/types.js';
-import { initGitRepo } from './helpers.js';
+import { initGitRepo, withBrokenRepo } from './helpers.js';
 
 let fakeHome: string;
 let repo: string;
@@ -188,19 +188,15 @@ describe('EpicEngine.start', () => {
   // error — not the OrchestratorConflictError race fillQueue already
   // tolerates), the just-created session must be rolled back so a retry
   // isn't blocked by "already has an active session". Forces a real
-  // dispatch()-path failure (git worktree creation) by stripping all
-  // permissions off `.git` — a plain Error `WorktreeManager.add()` throws,
-  // uncaught by fillQueue's own (narrower) OrchestratorConflictError catch.
+  // dispatch()-path failure by taking `.git` away (withBrokenRepo) — a plain
+  // Error out of WorktreeManager, uncaught by fillQueue's own (narrower)
+  // OrchestratorConflictError catch.
   it('rolls back the session when the initial fillQueue throws, so a retry can succeed', async () => {
     const { epics, store } = makeHarness();
     const { epicId } = createEpicWithChildren(store, 1);
-    const gitDir = join(repo, '.git');
-    Bun.spawnSync(['chmod', '-R', '000', gitDir]);
-    try {
+    await withBrokenRepo(repo, async () => {
       await expect(epics.start(epicId, { executor: 'fake' })).rejects.toThrow();
-    } finally {
-      Bun.spawnSync(['chmod', '-R', '755', gitDir]);
-    }
+    });
 
     const session = await epics.start(epicId, { executor: 'fake' });
     expect(session.active).toBe(true);
@@ -916,19 +912,15 @@ describe('EpicEngine fill serialization', () => {
     await waitFor(() => harness.orchestrator.list().length === 1);
 
     // Break the next fill: dispatching the second child now fails inside
-    // WorktreeManager.add with a plain Error, which fillQueue does not catch.
-    const gitDir = join(repo, '.git');
+    // WorktreeManager with a plain Error, which fillQueue does not catch.
     const runId = harness.orchestrator.list()[0].id;
-    Bun.spawnSync(['chmod', '-R', '000', gitDir]);
-    try {
+    await withBrokenRepo(repo, async () => {
       harness.orchestrator.approve(runId, 'go', true);
       await waitFor(() => {
         const body = harness.store.get(epicId)?.body ?? '';
         return body.includes('[hook error] auto-dispatch failed');
       });
-    } finally {
-      Bun.spawnSync(['chmod', '-R', '755', gitDir]);
-    }
+    });
 
     expect(harness.store.get(epicId)?.body).toContain(
       '[hook error] auto-dispatch failed'

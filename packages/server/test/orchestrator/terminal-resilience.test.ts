@@ -17,7 +17,7 @@ import { FakeExecutor } from '../../src/orchestrator/executors/fake.js';
 import { Orchestrator } from '../../src/orchestrator/orchestrator.js';
 import { runsDir, transcriptPath } from '../../src/orchestrator/paths.js';
 import type { RunMeta } from '../../src/orchestrator/types.js';
-import { initGitRepo } from './helpers.js';
+import { initGitRepo, withBrokenRepo } from './helpers.js';
 
 let fakeHome: string;
 let repo: string;
@@ -159,20 +159,16 @@ describe('terminal bookkeeping never swallows the terminal hooks', () => {
     const first = orchestrator.list()[0];
     const secondId = first.taskId === a.meta.id ? b.meta.id : a.meta.id;
 
-    // The next fill's `git worktree add` fails outright — a transient repo
-    // failure, not a conflict — so that fill dispatches nothing at all.
-    const gitDir = join(repo, '.git');
-    Bun.spawnSync(['chmod', '-R', '000', gitDir]);
-    try {
+    // The next fill's git calls fail outright — a transient repo failure, not
+    // a conflict — so that fill dispatches nothing at all.
+    await withBrokenRepo(repo, async () => {
       orchestrator.approve(first.id, 'go', { allow: true });
       await waitFor(() =>
         (store.get(epic.meta.id)?.body ?? '').includes(
           '[hook error] auto-dispatch failed'
         )
       );
-    } finally {
-      Bun.spawnSync(['chmod', '-R', '755', gitDir]);
-    }
+    });
 
     await waitFor(() => orchestrator.list().some((r) => r.taskId === secondId));
     epics.stop(epic.meta.id);
