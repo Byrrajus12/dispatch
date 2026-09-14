@@ -243,6 +243,25 @@ export function LinearPanel({ data }: { data: DispatchProjectData }) {
     <Panel>
       <PanelHeader>Linear</PanelHeader>
 
+      {/* What connecting buys, before the key field asks for anything: the panel used to open
+          on an input and a button, so the first question — what does this do to my board — went
+          unanswered. Every claim below is one the panel's own controls back: direction, the
+          status map, the interval, and Import. */}
+      <PanelRow className="flex-col items-stretch gap-1">
+        <span className="text-[13px]">
+          Keeps this project&rsquo;s tasks and one Linear team in step.
+        </span>
+        <HintText>
+          Issues in the team become tasks here and tasks created here become
+          issues there; a task&rsquo;s status change moves the issue to the
+          matching workflow state, and the reverse, using the status map below.
+          Sync runs on the interval you pick and only carries what changed since
+          the last one — Import brings the team&rsquo;s existing backlog across
+          once. The API key stays in ~/.dispatch/credentials.json, never in the
+          repo.
+        </HintText>
+      </PanelRow>
+
       {linearStatus.keySource !== 'project' && (
         <PanelRow className="flex-col items-stretch gap-2">
           <HintText>{keyNote}</HintText>

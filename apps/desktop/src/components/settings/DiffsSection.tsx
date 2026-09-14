@@ -4,6 +4,7 @@ import type {
   DiffInlineHighlight,
   DiffLayout,
 } from '../../lib/diffDisplay';
+import { DiffSurface } from '../code/DiffSurface';
 import { Checkbox } from '@/ui/checkbox';
 import { HintText, Panel, PanelHeader, PanelRow } from '@/ui/chrome';
 import { Label } from '@/ui/label';
@@ -39,6 +40,38 @@ const DIFF_INLINE_HIGHLIGHT_OPTIONS: {
   { value: 'none', label: 'None' },
 ];
 
+// What the preview renders: one small file with a changed line, an added block and a
+// removed one, so every setting above has something visible to act on — the inline
+// highlight needs a line that changed in place, the indicators need an add and a delete.
+const PREVIEW_PATCH = `diff --git a/src/cart.ts b/src/cart.ts
+index 3f1a2b4..9c8d7e6 100644
+--- a/src/cart.ts
++++ b/src/cart.ts
+@@ -1,12 +1,16 @@
+ import { price } from './price';
+ 
+ export interface CartItem {
+   sku: string;
+   cents: number;
++  quantity: number;
+ }
+ 
+-export function total(items: CartItem[]): number {
+-  return items.reduce((sum, item) => sum + item.cents, 0);
++export function total(items: CartItem[], coupon?: number): number {
++  const subtotal = items.reduce(
++    (sum, item) => sum + item.cents * item.quantity,
++    0
++  );
++  return coupon === undefined ? subtotal : subtotal - coupon;
+ }
+ 
+ export function label(items: CartItem[]): string {
+-  return price(total(items));
++  return \`\${items.length} items · \${price(total(items))}\`;
+ }
+`;
+
 /** How diffs render across Runs, Pull Requests, and the Git page. Backed by
  *  `useDiffDisplaySettings` (localStorage, per-browser) rather than
  *  `.dispatch/config.yml` — a viewing preference, not project configuration, so
@@ -47,141 +80,165 @@ export function DiffsSection() {
   const [settings, updateSettings] = useDiffDisplaySettings();
 
   return (
-    <Panel>
-      <PanelHeader>Diffs</PanelHeader>
+    <>
+      <Panel>
+        <PanelHeader>Diffs</PanelHeader>
 
-      <PanelRow>
-        <HintText>
-          Stored in this browser, not .dispatch/config.yml — a display
-          preference rather than project configuration.
-        </HintText>
-      </PanelRow>
+        <PanelRow>
+          <HintText>
+            Stored in this browser, not .dispatch/config.yml — a display
+            preference rather than project configuration.
+          </HintText>
+        </PanelRow>
 
-      <PanelRow>
-        <label className="flex items-center gap-3">
-          <span className="w-40 flex-shrink-0 text-[13px]">Layout</span>
-          <Tabs
-            value={settings.layout}
-            onValueChange={(layout) =>
-              updateSettings({ layout: layout as DiffLayout })
-            }
-          >
-            <TabsList
-              aria-label="Diff layout"
-              className="border-border h-7 gap-0.5 rounded-md border bg-transparent p-0.5"
+        <PanelRow>
+          <label className="flex items-center gap-3">
+            <span className="w-40 flex-shrink-0 text-[13px]">Layout</span>
+            <Tabs
+              value={settings.layout}
+              onValueChange={(layout) =>
+                updateSettings({ layout: layout as DiffLayout })
+              }
             >
-              {DIFF_LAYOUT_OPTIONS.map((option) => (
-                <TabsTrigger
-                  key={option.value}
-                  value={option.value}
-                  className="px-2 text-[13px] font-normal"
-                >
-                  {option.label}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-        </label>
-      </PanelRow>
+              <TabsList
+                aria-label="Diff layout"
+                className="border-border h-7 gap-0.5 rounded-md border bg-transparent p-0.5"
+              >
+                {DIFF_LAYOUT_OPTIONS.map((option) => (
+                  <TabsTrigger
+                    key={option.value}
+                    value={option.value}
+                    className="px-2 text-[13px] font-normal"
+                  >
+                    {option.label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+          </label>
+        </PanelRow>
 
-      <PanelRow>
-        <label className="flex items-center gap-3">
-          <span className="w-40 flex-shrink-0 text-[13px]">
-            Change indicators
-          </span>
-          <Tabs
-            value={settings.indicators}
-            onValueChange={(indicators) =>
-              updateSettings({ indicators: indicators as DiffIndicatorStyle })
-            }
-          >
-            <TabsList
-              aria-label="Diff change indicators"
-              className="border-border h-7 gap-0.5 rounded-md border bg-transparent p-0.5"
+        <PanelRow>
+          <label className="flex items-center gap-3">
+            <span className="w-40 flex-shrink-0 text-[13px]">
+              Change indicators
+            </span>
+            <Tabs
+              value={settings.indicators}
+              onValueChange={(indicators) =>
+                updateSettings({ indicators: indicators as DiffIndicatorStyle })
+              }
             >
-              {DIFF_INDICATOR_OPTIONS.map((option) => (
-                <TabsTrigger
-                  key={option.value}
-                  value={option.value}
-                  className="px-2 text-[13px] font-normal"
-                >
-                  {option.label}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-        </label>
-      </PanelRow>
+              <TabsList
+                aria-label="Diff change indicators"
+                className="border-border h-7 gap-0.5 rounded-md border bg-transparent p-0.5"
+              >
+                {DIFF_INDICATOR_OPTIONS.map((option) => (
+                  <TabsTrigger
+                    key={option.value}
+                    value={option.value}
+                    className="px-2 text-[13px] font-normal"
+                  >
+                    {option.label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+          </label>
+        </PanelRow>
 
-      <PanelRow>
-        <label className="flex items-center gap-3">
-          <span className="w-40 flex-shrink-0 text-[13px]">
-            Inline highlighting
-          </span>
-          <Select
-            value={settings.inlineHighlight}
-            onValueChange={(value) =>
-              updateSettings({
-                inlineHighlight: value as DiffInlineHighlight,
-              })
-            }
-          >
-            <SelectTrigger
-              size="sm"
-              aria-label="Inline highlighting"
-              className="w-[160px] text-[12px]"
+        <PanelRow>
+          <label className="flex items-center gap-3">
+            <span className="w-40 flex-shrink-0 text-[13px]">
+              Inline highlighting
+            </span>
+            <Select
+              value={settings.inlineHighlight}
+              onValueChange={(value) =>
+                updateSettings({
+                  inlineHighlight: value as DiffInlineHighlight,
+                })
+              }
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {DIFF_INLINE_HIGHLIGHT_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </label>
-      </PanelRow>
+              <SelectTrigger
+                size="sm"
+                aria-label="Inline highlighting"
+                className="w-[160px] text-[12px]"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DIFF_INLINE_HIGHLIGHT_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+        </PanelRow>
 
-      <PanelRow>
-        <Label className="flex items-center gap-2 font-normal">
-          <Checkbox
-            className="size-3.5"
-            checked={settings.showBackgrounds}
-            onCheckedChange={(checked) =>
-              updateSettings({ showBackgrounds: checked === true })
-            }
-          />
-          <span className="text-[13px]">Show backgrounds on changed lines</span>
-        </Label>
-      </PanelRow>
+        <PanelRow>
+          <Label className="flex items-center gap-2 font-normal">
+            <Checkbox
+              className="size-3.5"
+              checked={settings.showBackgrounds}
+              onCheckedChange={(checked) =>
+                updateSettings({ showBackgrounds: checked === true })
+              }
+            />
+            <span className="text-[13px]">
+              Show backgrounds on changed lines
+            </span>
+          </Label>
+        </PanelRow>
 
-      <PanelRow>
-        <Label className="flex items-center gap-2 font-normal">
-          <Checkbox
-            className="size-3.5"
-            checked={settings.showLineNumbers}
-            onCheckedChange={(checked) =>
-              updateSettings({ showLineNumbers: checked === true })
-            }
-          />
-          <span className="text-[13px]">Show line numbers</span>
-        </Label>
-      </PanelRow>
+        <PanelRow>
+          <Label className="flex items-center gap-2 font-normal">
+            <Checkbox
+              className="size-3.5"
+              checked={settings.showLineNumbers}
+              onCheckedChange={(checked) =>
+                updateSettings({ showLineNumbers: checked === true })
+              }
+            />
+            <span className="text-[13px]">Show line numbers</span>
+          </Label>
+        </PanelRow>
 
-      <PanelRow>
-        <Label className="flex items-center gap-2 font-normal">
-          <Checkbox
-            className="size-3.5"
-            checked={settings.wrapLines}
-            onCheckedChange={(checked) =>
-              updateSettings({ wrapLines: checked === true })
-            }
-          />
-          <span className="text-[13px]">Wrap long lines</span>
-        </Label>
-      </PanelRow>
-    </Panel>
+        <PanelRow>
+          <Label className="flex items-center gap-2 font-normal">
+            <Checkbox
+              className="size-3.5"
+              checked={settings.wrapLines}
+              onCheckedChange={(checked) =>
+                updateSettings({ wrapLines: checked === true })
+              }
+            />
+            <span className="text-[13px]">Wrap long lines</span>
+          </Label>
+        </PanelRow>
+      </Panel>
+
+      <Panel>
+        <PanelHeader>Preview</PanelHeader>
+        <PanelRow className="flex-col items-stretch gap-2">
+          <HintText>
+            Every diff in the app renders like this — a run&rsquo;s changes, a
+            pull request, the Git page. A change above applies here as you make
+            it.
+          </HintText>
+          {/* A fixed height with the surface as its own scroller: `CodeView` must be the
+            element that scrolls (see `DiffSurface`'s `className` note), and the settings page
+            should not grow by the length of the sample. */}
+          <div className="border-border flex h-72 min-h-0 flex-col overflow-hidden rounded-md border">
+            <DiffSurface
+              patch={PREVIEW_PATCH}
+              cacheKeyPrefix="settings-preview"
+            />
+          </div>
+        </PanelRow>
+      </Panel>
+    </>
   );
 }

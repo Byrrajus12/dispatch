@@ -20,7 +20,13 @@ import { useEffect, useState } from 'react';
 import { relativeTime } from '../../lib/landingView';
 import { policyReceipts } from '../../lib/policyReceipts';
 import { HintText, Panel, PanelHeader, PanelRow } from '@/ui/chrome';
-import { NativeSelect, NativeSelectOption } from '@/ui/native-select';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/ui/select';
 
 /** The patch shape the section saves — the `policy` slice of the config
  *  PATCH, where a `null` gate pin clears the override. */
@@ -115,22 +121,33 @@ function AutonomySlider({ rung, onRungChange }: AutonomySliderProps) {
         }}
         className="[&::-moz-range-thumb]:bg-card [&::-moz-range-thumb]:shadow-btn [&::-webkit-slider-thumb]:bg-card [&::-webkit-slider-thumb]:shadow-btn h-1.5 w-full cursor-pointer appearance-none rounded-full outline-none [&::-moz-range-thumb]:size-3.5 [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full"
       />
-      <div className="grid grid-cols-4 gap-1">
-        {POLICY_RUNGS.map((stop) => (
-          <button
-            key={stop.rung}
-            type="button"
-            aria-pressed={stop.rung === draft}
-            onClick={() => commit(stop.rung)}
-            className={`rounded-chip px-1 py-0.5 text-left text-[11px] leading-tight transition-colors ${
-              stop.rung === draft
-                ? 'text-foreground font-medium'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            {stop.label}
-          </button>
-        ))}
+      {/* One label per stop, sitting under the stop it names: the first hugs the track's
+          left end, the last its right end, the middle ones centre on theirs — a plain
+          four-column grid left every label drifting right of its stop. */}
+      <div className="flex">
+        {POLICY_RUNGS.map((stop, index) => {
+          const edge =
+            index === 0
+              ? 'text-left'
+              : index === POLICY_RUNGS.length - 1
+                ? 'text-right'
+                : 'text-center';
+          return (
+            <button
+              key={stop.rung}
+              type="button"
+              aria-pressed={stop.rung === draft}
+              onClick={() => commit(stop.rung)}
+              className={`rounded-chip min-w-0 flex-1 px-1 py-0.5 text-[11px] leading-tight transition-colors ${edge} ${
+                stop.rung === draft
+                  ? 'text-foreground font-medium'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {stop.label}
+            </button>
+          );
+        })}
       </div>
       <p className="text-muted-foreground text-[12px]">
         {RUNG_DESCRIPTIONS[draft] ?? active?.label}
@@ -182,25 +199,28 @@ function GateTable({ policy, onPinGate }: GateTableProps) {
                   ? 'Blocks (pinned)'
                   : 'Blocks'}
             </span>
-            <NativeSelect
-              size="sm"
-              aria-label={`${GATE_COPY[gate].label} override`}
+            <Select
               value={pin ?? 'rung'}
-              onChange={(e) => {
-                const next = e.target.value;
+              onValueChange={(next) =>
                 onPinGate(
                   gate,
                   next === 'rung' ? null : (next as PolicyGateMode)
-                );
-              }}
-              className="w-32 shrink-0 text-[12px]"
+                )
+              }
             >
-              <NativeSelectOption value="rung">Rung decides</NativeSelectOption>
-              <NativeSelectOption value="block">
-                Always block
-              </NativeSelectOption>
-              <NativeSelectOption value="auto">Always auto</NativeSelectOption>
-            </NativeSelect>
+              <SelectTrigger
+                size="sm"
+                aria-label={`${GATE_COPY[gate].label} override`}
+                className="w-36 shrink-0 text-[12px]"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="rung">Rung decides</SelectItem>
+                <SelectItem value="block">Always block</SelectItem>
+                <SelectItem value="auto">Always auto</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         );
       })}

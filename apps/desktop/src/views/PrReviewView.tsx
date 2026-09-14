@@ -1,6 +1,6 @@
 import type { Finding } from '@dispatch/client';
 import { useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Check } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
 import { PierreReviewDiff } from '../components/runs/PierreReviewDiff';
@@ -12,13 +12,10 @@ import type { DispatchProjectData } from '../hooks/useDispatchProject';
 import { repoPrsKey } from '../hooks/useDispatchProject';
 import { usePrFindings } from '../hooks/useOrchestration';
 import { repoPrDetailKey, useRepoPrDetail } from '../hooks/useRepoPrDetail';
-import { normalizeDiffFilePath } from '../lib/pierreTree';
 import { readPanelOpen, writePanelOpen } from '../lib/reviewPanels';
 import { reviewTargetKey } from '../lib/reviewTarget';
 import { readViewed, toggleViewed, writeViewed } from '../lib/reviewViewed';
-import { cn } from '@/lib/utils';
 import { Button } from '@/ui/button';
-import { MetaText } from '@/ui/chrome';
 import { IconToggle } from '@/ui/chrome/IconToggle';
 import { StateDot } from '@/ui/chrome/StateDot';
 
@@ -36,11 +33,12 @@ const REPO_PRS_POLL_MS = 60_000;
  * Reviewing one repo pull request, full-page.
  *
  * The same frame a run's diff gets in the task view — a file list with viewed
- * ticks on the left, one file's diff at a time in the middle, threads on the
- * right — with the diff fetched from GitHub rather than read out of a
- * worktree. Showing one file at a time is the point of the file list: a
- * forty-file diff rendered as one scroll is unreviewable, and "which have I
- * actually read" is the question a reviewer is really tracking.
+ * ticks on the left, the whole diff in one scroller in the middle, threads on
+ * the right — with the diff fetched from GitHub rather than read out of a
+ * worktree. Every file is on the page, so a review is a scroll, not a click
+ * per file; the file list is how you jump, and "which have I actually read"
+ * is answered by the viewed tick in each file's header, which collapses the
+ * file once it is ticked.
  *
  * A note written here is staged locally and published to GitHub as part of one
  * review when the rail's panel submits a verdict. That panel is default-open
@@ -85,16 +83,10 @@ export function PrReviewView({ data, prNumber, onBack }: PrReviewViewProps) {
   const diff = repoPr.prDiff;
   const reviewComments = repoPr.reviewComments;
 
-  const paths = useMemo(
-    () => (diff?.files ?? []).map((f) => normalizeDiffFilePath(f.path)),
-    [diff]
-  );
-
   // Viewed ticks are stored per target, so a PR's ticks never collide with a
   // run's.
   const viewedKey = reviewTargetKey({ kind: 'pr', number: prNumber });
 
-  const [selected, setSelected] = useState<string | null>(null);
   const [viewed, setViewed] = useState<ReadonlySet<string>>(() =>
     readViewed(viewedKey)
   );
@@ -106,11 +98,12 @@ export function PrReviewView({ data, prNumber, onBack }: PrReviewViewProps) {
   // review's `threads: false` default would otherwise leave a PR with no
   // Approve, no Request changes and no Comment anywhere on screen.
   const [railOpen, setRailOpen] = useState(() => readPanelOpen('review'));
-  // Which thread the diff should scroll to. Carries a nonce so clicking the same
-  // thread twice still jumps — a value-equal object would not re-fire the effect.
+  // Where the diff should scroll: a thread's line, or the top of a file picked
+  // in the tree. Carries a nonce so clicking the same thread or file twice
+  // still jumps — a value-equal object would not re-fire the effect.
   const [jumpTo, setJumpTo] = useState<{
     file: string;
-    line: number;
+    line?: number;
     nonce: number;
   } | null>(null);
 
@@ -120,11 +113,6 @@ export function PrReviewView({ data, prNumber, onBack }: PrReviewViewProps) {
   useEffect(() => writeViewed(viewedKey, viewed), [viewedKey, viewed]);
   useEffect(() => writePanelOpen('files', filesOpen), [filesOpen]);
   useEffect(() => writePanelOpen('review', railOpen), [railOpen]);
-
-  // Only correct the selection when its file has left the diff underneath.
-  useEffect(() => {
-    if (selected !== null && !paths.includes(selected)) setSelected(null);
-  }, [paths, selected]);
 
   // Notes written here but not yet on GitHub. Every verdict button publishes
   // them, Comment included — so the panel needs the count to know whether
@@ -192,7 +180,9 @@ export function PrReviewView({ data, prNumber, onBack }: PrReviewViewProps) {
             <div className="min-h-0 flex-1 overflow-hidden">
               <ReviewFileTree
                 files={diff?.files ?? []}
-                onSelect={setSelected}
+                onSelect={(path) =>
+                  setJumpTo({ file: path, nonce: Date.now() })
+                }
                 viewed={viewed}
                 commentsByFile={commentsByFile}
                 findingsByFile={NO_FINDINGS_BY_FILE}
@@ -209,48 +199,38 @@ export function PrReviewView({ data, prNumber, onBack }: PrReviewViewProps) {
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {/* A failed fetch must not read as "this PR changes nothing" — an
               empty file tree beside cheerful copy is the worse failure. */}
-          {selected === null && repoPr.prDiffError !== null && (
+          {diff === undefined && repoPr.prDiffError !== null && (
             <p className="text-destructive p-4 text-[12.5px]">
               Couldn&rsquo;t load this pull request&rsquo;s diff from GitHub:{' '}
               {repoPr.prDiffError}
             </p>
           )}
-          {selected === null && repoPr.prDiffError === null && (
+          {diff === undefined && repoPr.prDiffError === null && (
             <p className="text-muted-foreground p-4 text-[12.5px]">
               {repoPr.prDiffLoading
                 ? 'Fetching the diff from GitHub…'
-                : 'Pick a file to start reviewing.'}
+                : 'No diff to show.'}
             </p>
           )}
-          {diff !== undefined && selected !== null && (
-            <>
-              <DiffPaneHeader
-                path={selected}
-                isViewed={viewed.has(selected)}
-                onToggleViewed={() =>
-                  setViewed((v) => toggleViewed(v, selected))
-                }
-                commentCount={commentsByFile.get(selected) ?? 0}
-              />
-              <PierreReviewDiff
-                client={data.client}
-                // No `runId`/`meta`: there is no run worktree to load a PR's
-                // file contents from, so the diff renders without hunk
-                // expansion and without edit mode.
-                patch={diff.patch}
-                only={selected}
-                comments={reviewComments}
-                viewed={viewed}
-                scrollTo={jumpTo}
-                onAdd={repoPr.handleAddReviewComment}
-                onResolve={repoPr.handleResolveReviewComment}
-                onReply={repoPr.handleReplyReviewComment}
-                // Suggestions are committed onto a run's own branch, so a PR
-                // has no worktree to apply into — the Apply affordance is
-                // withheld rather than shown dead.
-                destination="github"
-              />
-            </>
+          {diff !== undefined && (
+            <PierreReviewDiff
+              client={data.client}
+              // No `runId`/`meta`: there is no run worktree to load a PR's
+              // file contents from, so the diff renders without hunk
+              // expansion and without edit mode.
+              patch={diff.patch}
+              comments={reviewComments}
+              viewed={viewed}
+              onToggleViewed={(file) => setViewed((v) => toggleViewed(v, file))}
+              scrollTo={jumpTo}
+              onAdd={repoPr.handleAddReviewComment}
+              onResolve={repoPr.handleResolveReviewComment}
+              onReply={repoPr.handleReplyReviewComment}
+              // Suggestions are committed onto a run's own branch, so a PR
+              // has no worktree to apply into — the Apply affordance is
+              // withheld rather than shown dead.
+              destination="github"
+            />
           )}
         </div>
 
@@ -310,59 +290,6 @@ export function PrReviewView({ data, prNumber, onBack }: PrReviewViewProps) {
 // A PR's findings live in the rail's panel, not on its file tree — one shared
 // empty map so the tree keeps a stable prop identity across renders.
 const NO_FINDINGS_BY_FILE: ReadonlyMap<string, Finding[]> = new Map();
-
-/**
- * Sits above the open file's diff: its path, unresolved-comment count, and
- * viewed toggle.
- */
-function DiffPaneHeader({
-  path,
-  isViewed,
-  onToggleViewed,
-  commentCount,
-}: {
-  path: string;
-  isViewed: boolean;
-  onToggleViewed: () => void;
-  commentCount: number;
-}) {
-  return (
-    <div className="border-border flex shrink-0 items-center gap-2 border-b px-1 pb-2">
-      <span
-        dir="rtl"
-        title={path}
-        className={cn(
-          'dense-meta min-w-0 flex-1 truncate text-left',
-          isViewed && 'opacity-50'
-        )}
-      >
-        {path}
-      </span>
-      {commentCount > 0 && (
-        <MetaText className="text-accent-foreground shrink-0">
-          {commentCount}
-        </MetaText>
-      )}
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-xs"
-        role="checkbox"
-        aria-checked={isViewed}
-        aria-label={`Mark ${path} viewed`}
-        onClick={onToggleViewed}
-        className={cn(
-          'size-3.5 shrink-0 rounded-sm p-0 hover:bg-transparent',
-          isViewed
-            ? 'bg-state-review text-background hover:bg-state-review'
-            : 'shadow-hairline'
-        )}
-      >
-        {isViewed && <Check className="size-2.5" />}
-      </Button>
-    </div>
-  );
-}
 
 /**
  * Two rows, not three, and the title at a size that does not wrap: this sits

@@ -12,6 +12,7 @@ import type {
 } from '@pierre/diffs';
 import type { CodeViewHandle } from '@pierre/diffs/react';
 import {
+  Check,
   Copy,
   MessageSquarePlus,
   MessagesSquare,
@@ -19,6 +20,7 @@ import {
   Pencil,
   TriangleAlert,
 } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { DiffSurface, useParsedPatchFiles } from '../code/DiffSurface';
@@ -44,6 +46,7 @@ import {
 } from '@/lib/reviewDiffItems';
 import { isTerminalRunState } from '@/lib/runState';
 import type { ApplySuggestionOutcome } from '@/lib/suggestionRange';
+import { cn } from '@/lib/utils';
 import { Button } from '@/ui/button';
 
 interface PierreReviewDiffProps {
@@ -89,15 +92,24 @@ interface PierreReviewDiffProps {
   destination?: ReviewDestination;
   /** Files the reviewer has ticked off — rendered collapsed, the way GitHub does. */
   viewed?: ReadonlySet<string>;
+  /**
+   * Flips a file's viewed tick. Supplying it puts the tick in every file's header, which is
+   * where it belongs on a page that renders the whole patch in one scroller: the reviewer
+   * finishes a file and ticks it right there, and it collapses under them. Omit on a surface
+   * with no viewed state (a run's diff).
+   */
+  onToggleViewed?: (file: string) => void;
   /** Restricts rendering to one file. Omit for the whole patch in one scroller. */
   only?: string;
   /** Open agent-review findings, rendered on their own lines beside the reviewer's threads. */
   findings?: Finding[];
   /**
-   * A comment to scroll to. Changing this scrolls the diff; the caller bumps it (rather than
-   * calling a method) so the jump is declarative and survives the view remounting.
+   * Where to scroll: a comment's line, or — with no `line` — the top of a file, which is how a
+   * file list jumps around a whole-patch scroller. Changing this scrolls the diff; the caller
+   * bumps `nonce` (rather than calling a method) so the jump is declarative and survives the
+   * view remounting.
    */
-  scrollTo?: { file: string; line: number; nonce: number } | null;
+  scrollTo?: { file: string; line?: number; nonce: number } | null;
   /**
    * Where a selected range goes when the reviewer attaches it to a chat. Omitted where there is
    * no chat on screen (a GitHub PR), which withholds that action rather than leaving it dead —
@@ -152,6 +164,7 @@ export function PierreReviewDiff({
   onApply,
   destination = 'agent',
   viewed,
+  onToggleViewed,
   only,
   findings,
   scrollTo,
@@ -610,27 +623,29 @@ export function PierreReviewDiff({
     setEditError(null);
   }, [files, editing]);
 
-  const renderHeaderMetadata = useCallback(
-    (item: { id: string }) => {
+  // The per-file edit controls — the pencil, or Save/Cancel once a file is open — or null
+  // wherever edit mode is withheld.
+  const editControls = useCallback(
+    (file: string): ReactNode => {
       if (!canEdit) return null;
       // Withheld entirely on a file Pierre cannot attach an editor to, the same way the whole
       // pencil is withheld on a non-terminal run — a control that silently does nothing is
       // worse than no control.
-      const fileType = files.find((f) => f.name === item.id)?.type;
+      const fileType = files.find((f) => f.name === file)?.type;
       if (fileType !== undefined && !isEditableDiffType(fileType)) return null;
-      const isEditing = editing === item.id;
+      const isEditing = editing === file;
       // Disabled for every file while any one file's load is in flight, not just the file it's
       // for — `beginEdit` itself refuses to start a second load until this one settles, so a
       // click on a different file's pencil during that window would otherwise look live but do
       // nothing.
       const isPending = pendingEdit !== null;
-      const error = editError?.file === item.id ? editError.message : null;
+      const error = editError?.file === file ? editError.message : null;
       // While another file is being edited, its own controls are the only ones that should be
       // live — showing the rest as clickable would suggest a second file could be opened for
       // edit at the same time, which `editing` can never represent.
       if (editing !== null && !isEditing) return null;
       return (
-        <span className="flex items-center gap-1.5">
+        <>
           {error !== null && (
             <span className="text-destructive text-[11px]">{error}</span>
           )}
@@ -640,7 +655,7 @@ export function PierreReviewDiff({
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={() => saveEdit(item.id)}
+                onClick={() => saveEdit(file)}
                 className="text-accent-foreground hover:text-accent-foreground h-auto p-0 text-[11px] font-normal hover:bg-transparent"
               >
                 Save
@@ -651,7 +666,7 @@ export function PierreReviewDiff({
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={() => cancelEdit(item.id)}
+                onClick={() => cancelEdit(file)}
                 className="text-muted-foreground hover:text-foreground h-auto p-0 text-[11px] font-normal hover:bg-transparent"
               >
                 Cancel
@@ -664,13 +679,13 @@ export function PierreReviewDiff({
               size="icon-xs"
               aria-label="Edit this file"
               disabled={isPending}
-              onClick={() => beginEdit(item.id)}
+              onClick={() => beginEdit(file)}
               className="text-muted-foreground hover:text-accent-foreground size-4 hover:bg-transparent"
             >
               <Pencil className="size-3" />
             </Button>
           )}
-        </span>
+        </>
       );
     },
     [
@@ -683,6 +698,50 @@ export function PierreReviewDiff({
       saveEdit,
       cancelEdit,
     ]
+  );
+
+  // What sits at the right of each file's header: the edit controls, then the viewed tick.
+  // The tick lives here rather than on the file tree because a tree row's decoration can show
+  // a tick but cannot take a click, and because on a whole-patch scroller the header is where
+  // the reviewer is when they finish the file — ticking it collapses it right under them.
+  const renderHeaderMetadata = useCallback(
+    (item: { id: string }) => {
+      const edit = editControls(item.id);
+      const isViewed = viewed?.has(item.id) ?? false;
+      const tick =
+        onToggleViewed === undefined ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            role="checkbox"
+            aria-checked={isViewed}
+            aria-label={`Mark ${item.id} viewed`}
+            onClick={(event) => {
+              // The header itself toggles the file's collapse on click; the tick must not
+              // also do that, or ticking a file would collapse it and immediately re-open it.
+              event.stopPropagation();
+              onToggleViewed(item.id);
+            }}
+            className={cn(
+              'size-3.5 shrink-0 rounded-sm p-0 hover:bg-transparent',
+              isViewed
+                ? 'bg-state-review text-background hover:bg-state-review'
+                : 'shadow-hairline'
+            )}
+          >
+            {isViewed && <Check className="size-2.5" />}
+          </Button>
+        );
+      if (edit === null && tick === null) return null;
+      return (
+        <span className="flex items-center gap-1.5">
+          {edit}
+          {tick}
+        </span>
+      );
+    },
+    [editControls, onToggleViewed, viewed]
   );
 
   // Escape is the keyboard way out of an armed bar. Deliberately the only dismissal besides
@@ -759,9 +818,18 @@ export function PierreReviewDiff({
   );
 
   // Declarative jump: the effect fires when `scrollTo` changes identity, so clicking the same
-  // thread twice still scrolls (the caller bumps `nonce`).
+  // thread or file twice still scrolls (the caller bumps `nonce`). A file jump lands the
+  // file's header at the top of the scroller; a line jump centres the line.
   useEffect(() => {
     if (scrollTo == null) return;
+    if (scrollTo.line === undefined) {
+      viewRef.current?.scrollTo({
+        type: 'item',
+        id: scrollTo.file,
+        align: 'start',
+      });
+      return;
+    }
     viewRef.current?.scrollTo({
       type: 'line',
       id: scrollTo.file,

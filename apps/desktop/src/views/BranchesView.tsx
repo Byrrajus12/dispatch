@@ -987,12 +987,13 @@ function useGitPage({
   const selectedBranchRow = branchRowsFiltered[panelState.index.branches];
 
   const logRef = selectedBranchRow?.name ?? null;
+  // The whole staged (or unstaged) patch, not the selected file's slice of it: the right
+  // pane renders every file and scrolls to the selected one (`GitDiffPane`'s `focus`), so
+  // reading the working tree is a scroll rather than a click per row. Which side — staged
+  // or unstaged — still follows the row, since those are two different patches.
   const workingDiffTarget =
     selectedFileRow !== undefined && selectedFileRow.section !== 'untracked'
-      ? {
-          staged: selectedFileRow.section === 'staged',
-          path: selectedFileRow.path,
-        }
+      ? { staged: selectedFileRow.section === 'staged' }
       : null;
 
   // A second `useGit` call scoped to what's selected — its `log` is the one and only list
