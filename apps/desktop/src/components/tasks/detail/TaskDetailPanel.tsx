@@ -47,6 +47,7 @@ import {
 import { mergeLadderLabel, mergeLadderState } from '../../../lib/mergeLadder';
 import { modelLabel, MODELS, readDefaultModel } from '../../../lib/models';
 import { isTerminalRunState } from '../../../lib/runState';
+import { subagentSummaryLabel } from '../../../lib/subagentSummary';
 import { parseTaskSections } from '../../../lib/taskDisplay';
 import {
   enrichDraftFromPlan,
@@ -788,6 +789,8 @@ export function TaskDetailPanel({
                         {r.id}
                       </span>
                       <span className="text-muted-foreground/70 ml-auto text-[11px] whitespace-nowrap">
+                        {subagentSummaryLabel(r.subagents) !== null &&
+                          `${subagentSummaryLabel(r.subagents)} · `}
                         {r.costUsd !== undefined &&
                           `$${r.costUsd.toFixed(2)} · `}
                         {formatRelativeTimeFromIso(r.updatedAt)}

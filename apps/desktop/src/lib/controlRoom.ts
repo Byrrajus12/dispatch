@@ -9,6 +9,7 @@ import type { TaskDoc } from '@dispatch/core/browser';
 import type { FeedState } from './feedState';
 import { deriveFeedState, FEED_STATE_ORDER } from './feedState';
 import { deriveRunDisposition } from './runState';
+import { subagentActivity } from './subagentSummary';
 
 /**
  * The Control room's read model, derived here rather than in JSX so the grouping, capping and
@@ -304,7 +305,11 @@ export function buildFeed(input: BuildFeedInput): FeedModel {
           ? reviewActivity(run)
           : state === 'landing' || state === 'unblock'
             ? (queuePhaseByRunId.get(run.id) ?? null)
-            : null;
+            : state === 'working'
+              ? // A working row had nothing to say; a run that fanned out
+                // now says how much of its fleet is still going.
+                subagentActivity(run.subagents)
+              : null;
 
     entries.push({
       createdAt: run.createdAt,

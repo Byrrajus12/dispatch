@@ -255,3 +255,25 @@ test('the show-archived toggle appears once something is archived, and flips the
   mount({ archivedRunCount: 0, showArchived: true });
   expect(screen.getByRole('button', { name: 'Hide archived' })).toBeDefined();
 });
+
+// A fleet shares the progress slot with turns and cost, and gets its own chip so the runs
+// that fanned out can be found among everything else.
+test('a run row shows its fan-out, and the Fan-out chip keeps only runs with sub-agents', () => {
+  mount({
+    runs: [
+      run({
+        id: 'r-1',
+        taskTitle: 'Fleet',
+        turns: 4,
+        subagents: { total: 8, running: 3, done: 5, failed: 0, stopped: 0 },
+      }),
+      run({ id: 'r-2', taskTitle: 'Solo', turns: 2 }),
+    ],
+    sessions: [session()],
+  });
+  expect(screen.getByText('4t · 3/8 agents live')).toBeDefined();
+  fireEvent.click(screen.getByRole('button', { name: 'Fan-out' }));
+  expect(screen.getByText('Fleet')).toBeDefined();
+  expect(screen.queryByText('Solo')).toBeNull();
+  expect(screen.queryByText('plan the widget')).toBeNull();
+});

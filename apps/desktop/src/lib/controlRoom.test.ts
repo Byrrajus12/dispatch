@@ -695,3 +695,26 @@ test("a live run suppresses the task's older review and failed rows", () => {
   expect(model.groups.map((g) => g.state)).toEqual(['working']);
   expect(model.counts.review).toBe(0);
 });
+
+describe('fan-out on working rows', () => {
+  test('a working run that fanned out says how much of its fleet is still going', () => {
+    const model = buildFeed(
+      input({
+        runs: [
+          run({
+            state: 'running',
+            subagents: { total: 8, running: 3, done: 4, failed: 1, stopped: 0 },
+          }),
+        ],
+      })
+    );
+    expect(model.groups[0]?.rows[0]?.activity).toBe(
+      '3 of 8 sub-agents running, 1 failed'
+    );
+  });
+
+  test('a working run with no sub-agents keeps an empty activity column', () => {
+    const model = buildFeed(input({ runs: [run({ state: 'running' })] }));
+    expect(model.groups[0]?.rows[0]?.activity).toBeNull();
+  });
+});

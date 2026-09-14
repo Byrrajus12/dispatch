@@ -138,3 +138,75 @@ test('Continue sends the draft instead when the human typed one', () => {
   });
   expect(sent).toEqual(['finish the failing test']);
 });
+
+// The fan-out reaches the transcript twice: the tree above the log, folded from the same
+// entries, and one row per spawn and finish inside it (never the progress ticks).
+test('renders the sub-agent tree and the spawn/finish rows from agent entries', () => {
+  render(
+    <RunLogView
+      meta={meta({ state: 'running' })}
+      entries={[
+        {
+          ts: '2026-08-04T00:00:00.000Z',
+          kind: 'agent',
+          toolUseId: 'tu-1',
+          toolName: 'Agent',
+          toolInput: {
+            description: 'Map the server',
+            prompt: 'Find every route.',
+          },
+          agent: {
+            id: 'tu-1',
+            phase: 'started',
+            status: 'running',
+            label: 'Map the server',
+            type: 'Explore',
+          },
+        },
+        {
+          ts: '2026-08-04T00:00:01.000Z',
+          kind: 'agent',
+          toolUseId: 'tu-1',
+          agent: {
+            id: 'tu-1',
+            phase: 'progress',
+            status: 'running',
+            toolUses: 2,
+          },
+        },
+        {
+          ts: '2026-08-04T00:00:02.000Z',
+          kind: 'agent',
+          toolUseId: 'tu-1',
+          agent: {
+            id: 'tu-1',
+            phase: 'finished',
+            status: 'done',
+            summary: 'Twelve routes.',
+          },
+        },
+      ]}
+      pendingApproval={null}
+      onApprove={noop}
+      onSendMessage={noop}
+      openQuestions={[]}
+      onAnswerQuestion={noop}
+      pendingScopeRequest={null}
+      onDecideScopeRequest={noop}
+      scopeDecide={{
+        enabled: true,
+        notice: null,
+        explanation: null,
+        restart: null,
+      }}
+      onRestartDaemon={noop}
+      onRequestChanges={noop}
+    />
+  );
+  expect(
+    screen.getByRole('treeitem', { name: 'Map the server, done' })
+  ).toBeDefined();
+  expect(screen.getByText('Spawned')).toBeDefined();
+  expect(screen.getByText('Agent finished')).toBeDefined();
+  expect(screen.getAllByText('agent')).toHaveLength(2);
+});

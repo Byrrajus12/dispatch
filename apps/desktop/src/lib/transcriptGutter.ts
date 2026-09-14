@@ -15,7 +15,8 @@ export type GutterTag =
   | 'think'
   | 'says'
   | 'you'
-  | 'sys';
+  | 'sys'
+  | 'agent';
 
 /** Tools that only look at things. Grouped because "it read four files" is one fact. */
 const READ_TOOLS = new Set([
@@ -47,6 +48,10 @@ export function gutterTag(entry: NormalizedEntry): GutterTag {
     case 'system':
     case 'usage':
       return 'sys';
+    case 'agent':
+      // A sub-agent spawning or reporting back: its own tag, because "it fanned out into six
+      // agents" is a different shape of session from "it read six files".
+      return 'agent';
     case 'message':
       // An inbound message is either the human steering, or another run talking to this one.
       // Both are "not the agent's own train of thought", which is what the accent marks.
@@ -76,5 +81,11 @@ export function gutterTone(entry: NormalizedEntry): GutterTone {
   if (tag === 'you') return 'accent';
   if (tag === 'sys') return 'muted';
   if (tag === 'run' && entry.status === 'done') return 'good';
+  // A sub-agent that failed or was stopped is as worth finding as a failed command.
+  if (tag === 'agent') {
+    const status = entry.agent?.status;
+    if (status === 'failed' || status === 'stopped') return 'bad';
+    if (status === 'done') return 'good';
+  }
   return 'normal';
 }

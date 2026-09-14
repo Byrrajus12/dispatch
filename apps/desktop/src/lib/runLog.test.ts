@@ -111,3 +111,24 @@ describe('toolEntryPreview', () => {
     expect(preview.length).toBeLessThan(120);
   });
 });
+
+describe('groupLogEntries — sub-agent entries', () => {
+  test('keeps a sub-agent start and finish as rows but drops its progress ticks', () => {
+    const started = entry({
+      kind: 'agent',
+      agent: { id: 'tu-1', phase: 'started', status: 'running', label: 'a' },
+    });
+    const progress = entry({
+      kind: 'agent',
+      agent: { id: 'tu-1', phase: 'progress', status: 'running', toolUses: 3 },
+    });
+    const finished = entry({
+      kind: 'agent',
+      agent: { id: 'tu-1', phase: 'finished', status: 'done' },
+    });
+    expect(groupLogEntries([started, progress, finished])).toEqual([
+      { kind: 'message', entries: [started] },
+      { kind: 'message', entries: [finished] },
+    ]);
+  });
+});

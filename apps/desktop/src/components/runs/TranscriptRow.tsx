@@ -1,4 +1,5 @@
 import type { NormalizedEntry } from '@dispatch/client';
+import { Bot } from 'lucide-react';
 import { useState } from 'react';
 
 import { Markdown } from './Markdown';
@@ -58,6 +59,15 @@ export function TranscriptRow({
       <div className="grid grid-cols-[52px_minmax(0,1fr)] gap-3 py-0.5">
         <GutterCell tag={tag} tone={tone} />
         <ToolRow entry={entry} live={live} />
+      </div>
+    );
+  }
+
+  if (entry.kind === 'agent') {
+    return (
+      <div className="grid grid-cols-[52px_minmax(0,1fr)] gap-3 py-0.5">
+        <GutterCell tag={tag} tone={tone} />
+        <AgentRow entry={entry} />
       </div>
     );
   }
@@ -172,6 +182,93 @@ function ToolRow({ entry, live }: { entry: NormalizedEntry; live: boolean }) {
     >
       <CollapsibleTrigger asChild>{chip}</CollapsibleTrigger>
       <CollapsibleContent className="min-w-0">{view.body}</CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/** What a sub-agent lifecycle entry's chip says, by phase and outcome. */
+function agentVerb(entry: NormalizedEntry): string {
+  const agent = entry.agent;
+  if (agent === undefined || agent.phase === 'started') return 'Spawned';
+  switch (agent.status) {
+    case 'failed':
+      return 'Agent failed';
+    case 'stopped':
+      return 'Agent stopped';
+    default:
+      return 'Agent finished';
+  }
+}
+
+/**
+ * A sub-agent spawning or reporting back. The chip names the sub-agent (its
+ * task description, then its type); opening a spawn shows the prompt it was
+ * given, opening a finish shows its report and totals. Progress ticks never
+ * reach here — `groupLogEntries` drops them — so the transcript keeps two
+ * lines per sub-agent however busy it was; the fan-out tree above the log
+ * carries the live detail.
+ */
+function AgentRow({ entry }: { entry: NormalizedEntry }) {
+  const [open, setOpen] = useState(false);
+  const agent = entry.agent;
+  const label = agent?.label ?? agent?.id ?? 'sub-agent';
+  const prompt =
+    agent?.phase === 'started' &&
+    typeof entry.toolInput === 'object' &&
+    entry.toolInput !== null
+      ? (entry.toolInput as { prompt?: unknown }).prompt
+      : undefined;
+  const state: ToolChipState =
+    agent?.status === 'failed' || agent?.status === 'stopped'
+      ? 'failed'
+      : 'done';
+  const totals = [
+    agent?.toolUses !== undefined
+      ? `${agent.toolUses} ${agent.toolUses === 1 ? 'tool call' : 'tool calls'}`
+      : null,
+    agent?.durationMs !== undefined
+      ? `${Math.max(1, Math.round(agent.durationMs / 1000))}s`
+      : null,
+  ].filter((part): part is string => part !== null);
+  const body =
+    typeof prompt === 'string' && prompt !== '' ? (
+      <Markdown content={prompt} className="max-w-[68ch] text-[12.5px]" />
+    ) : agent?.phase === 'finished' &&
+      (agent.summary !== undefined || totals.length > 0) ? (
+      <div className="flex max-w-[68ch] flex-col gap-1 text-[12.5px]">
+        {agent.summary !== undefined && (
+          <Markdown content={agent.summary} className="text-[12.5px]" />
+        )}
+        {totals.length > 0 && (
+          <span className="text-muted-foreground font-mono text-[11px]">
+            {totals.join(' · ')}
+          </span>
+        )}
+      </div>
+    ) : undefined;
+
+  const chip = (
+    <ToolChip
+      icon={Bot}
+      label={agentVerb(entry)}
+      meta={
+        <span className="max-w-[40ch] truncate font-sans">
+          {label}
+          {agent?.type !== undefined ? ` · ${agent.type}` : ''}
+        </span>
+      }
+      state={state}
+    />
+  );
+  if (body === undefined) return <div className="flex min-w-0">{chip}</div>;
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className="flex min-w-0 flex-col gap-1"
+    >
+      <CollapsibleTrigger asChild>{chip}</CollapsibleTrigger>
+      <CollapsibleContent className="min-w-0">{body}</CollapsibleContent>
     </Collapsible>
   );
 }

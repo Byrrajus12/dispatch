@@ -4,6 +4,7 @@ import type {
   RunQuestion,
   RunScopeRequest,
 } from '@dispatch/client';
+import { foldSubagents } from '@dispatch/core/browser';
 import {
   Info,
   Megaphone,
@@ -11,7 +12,7 @@ import {
   MessageSquarePlus,
   Play,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { useStickToBottom } from '../../hooks/useStickToBottom';
 import type { DecideAvailability } from '../../lib/daemonAuth';
@@ -26,6 +27,7 @@ import { ApprovalCard } from './ApprovalCard';
 import { Markdown } from './Markdown';
 import { QuestionCard } from './QuestionCard';
 import { ScopeRequestCard } from './ScopeRequestCard';
+import { SubagentTree } from './SubagentTree';
 import { TranscriptRow } from './TranscriptRow';
 import { cn } from '@/lib/utils';
 import { LoadingState } from '@/ui/ai/loading-state';
@@ -147,6 +149,9 @@ export function RunLogView({
   const { scrollRef, contentRef, scrollToBottom } = useStickToBottom(meta.id);
 
   const groups = groupLogEntries(entries);
+  // The sub-agents this run fanned out into, folded from the same entries the
+  // transcript renders — so the tree ticks with each `run.log` event.
+  const subagents = useMemo(() => foldSubagents(entries), [entries]);
   const terminal = isTerminalRunState(meta.state);
   const canSend = SENDABLE_STATES.has(meta.state);
   // The transcript's one genuinely live entry — the run's last *rendered* entry while it's
@@ -213,6 +218,13 @@ export function RunLogView({
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
+      {/* The fan-out, above the transcript rather than in it: a run with thirty sub-agents is
+          one event in its own story, but each of the thirty is a thing you want to watch, and
+          a list of them scrolling by inside the log would be unreadable. Outside the scroller
+          so it never covers the log; it caps its own height and scrolls within itself. */}
+      {subagents.length > 0 && (
+        <SubagentTree nodes={subagents} className="mx-1 shrink-0" />
+      )}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-1">
         <div ref={contentRef} className="flex min-h-full flex-col gap-3">
           {meta.resumedFrom !== undefined && (
