@@ -73,9 +73,16 @@ tasks:
     command: 'bun scripts/build-sidecars.ts'
     deps:
       - '^:build'
+    # Cached by everything that changes the compiled binaries: the script,
+    # the four packages it compiles, and the signing identity plus the
+    # entitlements it signs with (a signed run must never hydrate unsigned
+    # outputs). moon's hash carries no host OS or CPU field, so the cache is
+    # valid only for the checkout and host that produced it; do not share
+    # .moon/cache across machines or wire it to a remote cache.
     inputs:
       - 'scripts/build-sidecars.ts'
-      - '$RUNNER_ARCH'
+      - 'src-tauri/entitlements/sidecar.plist'
+      - '$APPLE_SIGNING_IDENTITY'
       - '/packages/cli/src/**/*'
       - '/packages/core/src/**/*'
       - '/packages/mcp/src/**/*'

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { sidecarExecutableName } from './build-sidecars';
+import { sidecarExecutableName } from './build-sidecars.ts';
 
 const desktopDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -48,14 +48,33 @@ test('Tauri keeps Unix resources in the base config and overrides them on Window
 });
 
 test('desktop:tauri-dev depends on the cacheable sidecar build outputs', () => {
-  const moon = readFileSync(resolve(desktopDir, 'moon.yml'), 'utf8');
-  const sidecarTask = moon.match(
-    /  build-sidecars:\n([\s\S]*?)\n  tauri-dev:/
-  )?.[1];
-  const tauriDevTask = moon.match(/  tauri-dev:\n([\s\S]*?)\n  # deps/)?.[1];
+  // Read the task graph structurally rather than by regex over the file, so a
+  // reworded comment or a new task between the two cannot break this test.
+  const { tasks } = Bun.YAML.parse(
+    readFileSync(resolve(desktopDir, 'moon.yml'), 'utf8')
+  ) as {
+    tasks: Record<
+      string,
+      {
+        deps?: string[];
+        inputs?: string[];
+        outputs?: string[];
+        options?: { cache?: boolean };
+      }
+    >;
+  };
+  const sidecars = tasks['build-sidecars'];
+  const tauriDev = tasks['tauri-dev'];
 
-  expect(sidecarTask).toContain("- 'src-tauri/resources/dispatchd*'");
-  expect(sidecarTask).toContain("- '$RUNNER_ARCH'");
-  expect(sidecarTask).not.toContain('cache: false');
-  expect(tauriDevTask).toContain("- 'build-sidecars'");
+  expect(sidecars.outputs).toEqual([
+    'src-tauri/resources/dispatchd*',
+    'src-tauri/resources/dispatch-mcp*',
+    'src-tauri/resources/dispatch-cli*',
+  ]);
+  // The two inputs that change the binaries without touching any source: the
+  // signing identity and the entitlements the sidecars are signed with.
+  expect(sidecars.inputs).toContain('$APPLE_SIGNING_IDENTITY');
+  expect(sidecars.inputs).toContain('src-tauri/entitlements/sidecar.plist');
+  expect(sidecars.options?.cache).not.toBe(false);
+  expect(tauriDev.deps).toContain('build-sidecars');
 });
