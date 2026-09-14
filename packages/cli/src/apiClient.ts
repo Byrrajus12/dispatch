@@ -62,15 +62,43 @@ export interface RunMeta {
   // the daemon decorates run reads with it so `dispatch approve` can find the
   // request id without having watched the run live.
   pendingApproval?: { requestId: string; toolName: string; input?: unknown };
+  // How many sub-agents the run's agent fanned out into and where they
+  // stand — mirrors RunMeta.subagents server-side.
+  subagents?: {
+    total: number;
+    running: number;
+    done: number;
+    failed: number;
+    stopped: number;
+  };
 }
 
 export interface NormalizedEntry {
   ts: string;
-  kind: 'assistant' | 'tool' | 'thinking' | 'system' | 'usage' | 'message';
+  kind:
+    | 'assistant'
+    | 'tool'
+    | 'thinking'
+    | 'system'
+    | 'usage'
+    | 'message'
+    | 'agent';
   text?: string;
   toolName?: string;
   toolInput?: unknown;
   status?: 'running' | 'done' | 'error';
+  // Set on entries a sub-agent made rather than the run's own agent.
+  parentToolUseId?: string;
+  // `kind: 'agent'` only: one lifecycle event of a spawned sub-agent —
+  // mirrors SubagentEvent in @dispatch/core.
+  agent?: {
+    id: string;
+    phase: 'started' | 'progress' | 'finished';
+    status: 'running' | 'done' | 'failed' | 'stopped';
+    label?: string;
+    type?: string;
+    summary?: string;
+  };
   // `kind: 'message'` only: this run's human (`user`), another run's
   // agent_message (`fromLabel`), or this run's own message_user (`toUser`).
   from?: 'user' | 'agent';

@@ -109,6 +109,34 @@ export interface RunSurvey {
 }
 
 // Mirrors RunMeta in packages/server/src/orchestrator/types.ts.
+// Mirrors SubagentStatus / SubagentEvent / SubagentSummary in
+// packages/core/src/subagents.ts, the module that folds a run's `agent`
+// entries into its sub-agent tree. Kept structurally identical so a
+// NormalizedEntry from here satisfies core's SubagentSourceEntry directly.
+export type SubagentStatus = 'running' | 'done' | 'failed' | 'stopped';
+
+export interface SubagentEvent {
+  /** The spawning tool_use id — the one handle every event about the same sub-agent shares. */
+  id: string;
+  phase: 'started' | 'progress' | 'finished';
+  status: SubagentStatus;
+  label?: string;
+  type?: string;
+  toolUses?: number;
+  tokens?: number;
+  durationMs?: number;
+  lastTool?: string;
+  summary?: string;
+}
+
+export interface SubagentSummary {
+  total: number;
+  running: number;
+  done: number;
+  failed: number;
+  stopped: number;
+}
+
 export interface RunMeta {
   id: string;
   taskId: string;
@@ -132,6 +160,11 @@ export interface RunMeta {
   // decorates it onto run reads from its in-memory registry; it is never
   // persisted and is absent in every other state.
   pendingApproval?: { requestId: string; toolName: string; input?: unknown };
+  // How many sub-agents this run's agent has fanned out into and where they
+  // stand, kept live by the daemon from the run's `agent` entries and rebuilt
+  // from them on replay. Absent until the first sub-agent is spawned. Mirrors
+  // RunMeta.subagents / SubagentSummary in @dispatch/core.
+  subagents?: SubagentSummary;
   // Phase 5 P1: set once a run has been reviewed (merge/discard/pr) or its PR
   // has merged — mirrors RunMeta's own one-way markers in
   // packages/server/src/orchestrator/types.ts.
@@ -264,11 +297,27 @@ export interface BranchEntry {
 // `message_user` call raised to the human.
 export interface NormalizedEntry {
   ts: string;
-  kind: 'assistant' | 'tool' | 'thinking' | 'system' | 'usage' | 'message';
+  kind:
+    | 'assistant'
+    | 'tool'
+    | 'thinking'
+    | 'system'
+    | 'usage'
+    | 'message'
+    | 'agent';
   text?: string;
   toolName?: string;
   toolInput?: unknown;
   status?: 'running' | 'done' | 'error';
+  // `tool`/`agent` entries: the SDK's id for the tool_use block recorded.
+  toolUseId?: string;
+  // Set on entries a sub-agent made rather than the run's own agent: the
+  // tool_use id that spawned it. Absent on the run's own top-level activity.
+  parentToolUseId?: string;
+  // `kind: 'agent'` only: one lifecycle event of a sub-agent this run's agent
+  // spawned. The started event also keeps the spawning call's
+  // `toolName`/`toolInput`, so the transcript can show the prompt.
+  agent?: SubagentEvent;
   from?: 'user' | 'agent';
   fromLabel?: string;
   // Set on this run's own `message_user` call — the agent flagging something
