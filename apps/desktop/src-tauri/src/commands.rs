@@ -480,16 +480,17 @@ pub async fn restart_dispatchd(
     .await
 }
 
-/// Picks how to start dispatchd for the running build. A dev build runs the TS
-/// entry through `bun` from this checkout (`CARGO_MANIFEST_DIR`); a packaged
-/// release runs the two standalone binaries bundled under the app's Resource
-/// dir, so the shipped app depends on neither `bun` nor the checkout.
+/// Resource-relative path of a bundled sidecar; Windows executables carry `.exe`.
 #[cfg(any(not(debug_assertions), test))]
 fn bundled_resource_path(name: &str, windows: bool) -> String {
     let suffix = if windows { ".exe" } else { "" };
     format!("resources/{name}{suffix}")
 }
 
+/// Picks how to start dispatchd for the running build. A dev build runs the TS
+/// entry through `bun` from this checkout (`CARGO_MANIFEST_DIR`); a packaged
+/// release runs the two standalone binaries bundled under the app's Resource
+/// dir, so the shipped app depends on neither `bun` nor the checkout.
 fn resolve_daemon_launch(
     app: &tauri::AppHandle,
 ) -> Result<sidecar::DaemonLaunch, String> {
