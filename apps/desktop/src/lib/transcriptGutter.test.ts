@@ -96,3 +96,30 @@ describe('gutterTone', () => {
     ).toBe('normal');
   });
 });
+
+describe('sub-agent entries', () => {
+  test('get their own tag, toned by how the sub-agent ended', () => {
+    const started = entry({
+      kind: 'agent',
+      agent: { id: 'tu-1', phase: 'started', status: 'running' },
+    });
+    expect(gutterTag(started)).toBe('agent');
+    expect(gutterTone(started)).toBe('normal');
+    expect(
+      gutterTone(
+        entry({
+          kind: 'agent',
+          agent: { id: 'tu-1', phase: 'finished', status: 'failed' },
+        })
+      )
+    ).toBe('bad');
+    expect(
+      gutterTone(
+        entry({
+          kind: 'agent',
+          agent: { id: 'tu-1', phase: 'finished', status: 'done' },
+        })
+      )
+    ).toBe('good');
+  });
+});

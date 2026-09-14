@@ -16,6 +16,7 @@ import { runKindLabel } from '../lib/liveRail';
 import { modelDisplayName } from '../lib/models';
 import type { RunStateBucket } from '../lib/runState';
 import { runStateBucket } from '../lib/runState';
+import { subagentSummaryLabel } from '../lib/subagentSummary';
 import { cn } from '@/lib/utils';
 import { type FilterChipOption, FilterChips } from '@/ui/ai/filter-table';
 import { TaskRow, TaskRowList } from '@/ui/ai/task-rows';
@@ -61,7 +62,21 @@ const STATE_FILTERS: FilterChipOption[] = [
   { id: 'live', label: 'Live' },
   { id: 'needs-review', label: 'Needs review' },
   { id: 'closed', label: 'Closed' },
+  // Runs whose agent fanned out into sub-agents — the fleets, whatever state
+  // they are in now. Conversation agents never fan out, so the chip hides them.
+  { id: 'fan-out', label: 'Fan-out' },
 ];
+
+type AgentFilter = RunStateBucket | 'all' | 'fan-out';
+
+/** Whether a run matches the active chip. */
+function runMatchesFilter(run: RunMeta, filter: AgentFilter): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'fan-out') {
+    return run.subagents !== undefined && run.subagents.total > 0;
+  }
+  return runStateBucket(run) === filter;
+}
 
 /** What a review action did, as a past-tense word rather than the raw enum. */
 const REVIEW_ACTION_LABEL: Record<
@@ -89,13 +104,14 @@ function outcomeLabel(run: RunMeta): string {
   return runStateLabel(run.state).toLowerCase();
 }
 
-/** Turns and spend folded into TaskRow's one free-text `progress` slot ("12t · $0.42") —
- * cost had its own column before the reskin, and a spend outlier should still be scannable
- * down this list. */
+/** Turns, spend and fan-out folded into TaskRow's one free-text `progress` slot
+ * ("12t · $0.42 · 3/8 agents live") — cost had its own column before the reskin, and a spend
+ * outlier or a fleet should still be scannable down this list. */
 function runProgress(run: RunMeta): string | undefined {
   const parts = [
     run.turns !== undefined ? `${String(run.turns)}t` : undefined,
     run.costUsd !== undefined ? `$${run.costUsd.toFixed(2)}` : undefined,
+    subagentSummaryLabel(run.subagents) ?? undefined,
   ].filter((part): part is string => part !== undefined);
   return parts.length > 0 ? parts.join(' · ') : undefined;
 }
@@ -136,15 +152,13 @@ export function AllAgentsView({
   onJumpToRun,
 }: AllAgentsViewProps) {
   const [showAll, setShowAll] = useState(false);
-  const [stateFilter, setStateFilter] = useState<RunStateBucket | 'all'>('all');
+  const [stateFilter, setStateFilter] = useState<AgentFilter>('all');
 
   // Newest first, so the agent you just started is the one you are looking at.
   const ordered = useMemo(() => {
     const rows: AgentRow[] = [
       ...runs
-        .filter(
-          (run) => stateFilter === 'all' || runStateBucket(run) === stateFilter
-        )
+        .filter((run) => runMatchesFilter(run, stateFilter))
         .map(
           (run): AgentRow => ({
             key: `run:${run.id}`,
@@ -156,7 +170,9 @@ export function AllAgentsView({
       ...sessions
         .filter(
           (session) =>
-            stateFilter === 'all' || agentSessionBucket(session) === stateFilter
+            stateFilter === 'all' ||
+            (stateFilter !== 'fan-out' &&
+              agentSessionBucket(session) === stateFilter)
         )
         .map(
           (session): AgentRow => ({
@@ -204,7 +220,7 @@ export function AllAgentsView({
         <FilterChips
           options={STATE_FILTERS}
           active={[stateFilter]}
-          onToggle={(id) => setStateFilter(id as RunStateBucket | 'all')}
+          onToggle={(id) => setStateFilter(id as AgentFilter)}
         />
         {/* Stays visible whenever it is on, or turning it on would remove the only control
             that turns it off — and with it the only way back to an archived run. */}

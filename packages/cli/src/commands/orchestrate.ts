@@ -13,6 +13,7 @@ import {
 import { singleFlight } from '../singleFlight.js';
 import type { ConnectEventsOptions } from '../watch.js';
 import { connectEvents } from '../watch.js';
+import { attachToRunningDaemon, resolveAppToken } from './appToken.js';
 import { ensureDaemon } from './daemon.js';
 import { requireInitialized } from './task.js';
 
@@ -335,7 +336,7 @@ export function registerOrchestrateCommands(
       );
       if (meta.pendingApproval !== undefined) {
         ctx.log(
-          `awaiting approval: ${meta.pendingApproval.toolName} (${meta.pendingApproval.requestId}) — answer with: dispatch approve ${meta.id} [--deny]`
+          `awaiting approval: ${meta.pendingApproval.toolName} (${meta.pendingApproval.requestId}) — answer with: dispatch approve ${meta.id} [--deny] (needs the app token: --token or DISPATCH_APP_TOKEN)`
         );
       }
       const last20 = detail.entries.slice(-20);
@@ -385,15 +386,23 @@ export function registerOrchestrateCommands(
 
   program
     .command('approve <runId> [requestId]')
-    .description('Approve or deny a run awaiting an approval decision')
+    .description(
+      'Approve or deny a run awaiting an approval decision (needs the daemon app token)'
+    )
     .option('--deny', 'deny the request instead of approving it')
+    .option('--token <token>', 'the daemon app token (or DISPATCH_APP_TOKEN)')
     .action(
       async (
         runId: string,
         requestId: string | undefined,
-        opts: { deny?: boolean }
+        opts: { deny?: boolean; token?: string }
       ) => {
-        const { client } = await daemonFor(ctx);
+        // Approving is an adjudication, so the daemon only takes it on the
+        // decide tier: a client of its own on the app token, exactly like
+        // `scope decide`, and never a daemon this command started itself.
+        const appToken = resolveAppToken(opts.token, 'dispatch approve');
+        const { baseUrl } = await attachToRunningDaemon(ctx);
+        const client = createApiClient(baseUrl, appToken);
         const allow = opts.deny !== true;
         // `run --watch` prints the id live, but a caller who was not watching
         // has no way to learn it — the run read carries the request the run

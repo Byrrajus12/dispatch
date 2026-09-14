@@ -1,4 +1,5 @@
 import type { RunMeta } from '@dispatch/client';
+import { Bot } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
 import type { WardenSession } from '../../hooks/useWardenSession';
@@ -243,6 +244,24 @@ export function LiveRail({
                     <span className="min-w-0 flex-1 truncate text-[13px]">
                       {run.taskTitle}
                     </span>
+                    {/* The fleet under a run — live/total while any sub-agent is still going,
+                        the total once they have all stopped: a row that says "agent" while
+                        twelve sub-agents work underneath it undersells what is going on. */}
+                    {run.subagents !== undefined && run.subagents.total > 0 && (
+                      <span
+                        className="dense-meta flex shrink-0 items-center gap-0.5 tabular-nums"
+                        aria-label={
+                          run.subagents.running > 0
+                            ? `${run.subagents.running} of ${run.subagents.total} sub-agents running`
+                            : `${run.subagents.total} sub-agents`
+                        }
+                      >
+                        <Bot className="size-3" />
+                        {run.subagents.running > 0
+                          ? `${run.subagents.running}/${run.subagents.total}`
+                          : run.subagents.total}
+                      </span>
+                    )}
                     <span className="dense-meta shrink-0 capitalize">
                       {kindLabel}
                     </span>

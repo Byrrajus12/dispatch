@@ -1,6 +1,7 @@
 export const CORE_VERSION = '0.24.0';
 export * from './status.js';
 export * from './types.js';
+export * from './subagents.js';
 export {
   generateDraftId,
   generateFindingId,

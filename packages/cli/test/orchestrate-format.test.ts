@@ -39,6 +39,41 @@ describe('formatEntry', () => {
     expect(formatEntry(entry)).toBe('[tool …] run_shell');
   });
 
+  it('renders a sub-agent spawn and finish, and skips its progress ticks', () => {
+    const started: NormalizedEntry = {
+      ts: 't',
+      kind: 'agent',
+      agent: {
+        id: 'tu-1',
+        phase: 'started',
+        status: 'running',
+        label: 'Map the routes',
+        type: 'Explore',
+      },
+    };
+    expect(formatEntry(started)).toBe('[agent ↳] Map the routes (Explore)');
+    const progress: NormalizedEntry = {
+      ts: 't',
+      kind: 'agent',
+      agent: { id: 'tu-1', phase: 'progress', status: 'running' },
+    };
+    expect(formatEntry(progress)).toBeNull();
+    const failed: NormalizedEntry = {
+      ts: 't',
+      kind: 'agent',
+      agent: {
+        id: 'tu-1',
+        phase: 'finished',
+        status: 'failed',
+        label: 'Map the routes',
+        summary: 'ran out of budget',
+      },
+    };
+    expect(formatEntry(failed)).toBe(
+      '[agent ✗] Map the routes — ran out of budget'
+    );
+  });
+
   it('renders a done tool entry with a checkmark', () => {
     const entry: NormalizedEntry = {
       ts: '2026-07-20T00:00:00Z',

@@ -1,3 +1,5 @@
+import type { SubagentEvent, SubagentSummary } from '@dispatch/core';
+
 // The Vibe Kanban pattern: every executor, real or fake, streams a uniform
 // log shape so the transcript/UI never needs to know which executor produced
 // an entry. `kind: 'usage'` entries carry running cost/turn info; everything
@@ -11,11 +13,31 @@
 // this run's own `message_user` call flagging something to the human.
 export interface NormalizedEntry {
   ts: string;
-  kind: 'assistant' | 'tool' | 'thinking' | 'system' | 'usage' | 'message';
+  kind:
+    | 'assistant'
+    | 'tool'
+    | 'thinking'
+    | 'system'
+    | 'usage'
+    | 'message'
+    | 'agent';
   text?: string;
   toolName?: string;
   toolInput?: unknown;
   status?: 'running' | 'done' | 'error';
+  // `kind: 'tool'` and `kind: 'agent'` only: the SDK's id for the tool_use
+  // block this entry records, so later events (a sub-agent's progress, a
+  // tool result) can be tied back to it.
+  toolUseId?: string;
+  // Set on entries the agent did not make itself but one of its sub-agents
+  // did: the tool_use id that spawned that sub-agent. Absent on the run's own
+  // top-level activity.
+  parentToolUseId?: string;
+  // `kind: 'agent'` only: one lifecycle event of a sub-agent this run's agent
+  // spawned (see @dispatch/core's subagents module for the fold). The entry
+  // also keeps the spawning tool call's `toolName`/`toolInput` on the started
+  // event, so the transcript can show what the sub-agent was asked to do.
+  agent?: SubagentEvent;
   from?: 'user' | 'agent';
   // Who sent a `from: 'agent'` message — e.g. the sender run's task title
   // + id ("Fix login bug (r-abc123)"), or a generic fallback when the
@@ -285,6 +307,12 @@ export interface RunMeta {
   // reviewable exactly like any other finished run. Set once and never cleared
   // — a stop cannot be taken back, only escalated to a hard cancel.
   stopRequestedAt?: string;
+  // How many sub-agents this run's agent has fanned out into and where they
+  // stand. Kept up to date live from the `kind: 'agent'` entries as they are
+  // logged, and rebuilt from the same entries when a transcript is replayed,
+  // so lists can show fan-out without reading the transcript. Absent until
+  // the first sub-agent is spawned.
+  subagents?: SubagentSummary;
 }
 
 // A run's kind, defaulted for the transcripts and registry entries written

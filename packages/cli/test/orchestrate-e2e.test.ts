@@ -85,12 +85,18 @@ async function spawnDaemon(
 ): Promise<{
   proc: ChildProcessByStdio<null, Readable, Readable>;
   port: number;
+  // The decide-tier credential, printed once at startup and never written
+  // down — `dispatch approve` needs it, as a real operator would pass it.
+  appToken: string;
 }> {
   const proc = spawn('bun', [SERVER_BIN, '--root', rootDir, '--port', '0'], {
     env: { ...process.env, DISPATCH_HOME: dispatchHome, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  const port = await new Promise<number>((resolvePort, reject) => {
+  const { port, appToken } = await new Promise<{
+    port: number;
+    appToken: string;
+  }>((resolveStart, reject) => {
     let buf = '';
     const timer = setTimeout(
       () => reject(new Error('dispatchd did not report a port in time')),
@@ -99,14 +105,15 @@ async function spawnDaemon(
     proc.stdout.on('data', (chunk: Buffer) => {
       buf += chunk.toString();
       const match = buf.match(/listening on http:\/\/127\.0\.0\.1:(\d+)/);
-      if (match !== null) {
+      const token = buf.match(/^DISPATCH_APP_TOKEN=(\S+)$/m);
+      if (match !== null && token !== null) {
         clearTimeout(timer);
-        resolvePort(Number(match[1]));
+        resolveStart({ port: Number(match[1]), appToken: token[1] });
       }
     });
     proc.on('error', reject);
   });
-  return { proc, port };
+  return { proc, port, appToken };
 }
 
 // Runs the built CLI once as a subprocess with a hard timeout: if the
@@ -167,9 +174,17 @@ describe('headless dispatcher loop (real daemon, built CLI subprocess)', () => {
   let repo: string;
   let dispatchHome: string;
   let daemon: ChildProcessByStdio<null, Readable, Readable>;
+  let appToken: string;
 
+  // Every call carries the app token in the environment, the way an operator
+  // who started `dispatch serve` would have it exported: only `approve` reads
+  // it, and it refuses without one.
   function cli(...args: string[]): string {
-    const result = runCli(args, { cwd: repo, dispatchHome });
+    const result = runCli(args, {
+      cwd: repo,
+      dispatchHome,
+      extra: { DISPATCH_APP_TOKEN: appToken },
+    });
     if (result.code !== 0) {
       const detail = result.stderr.length > 0 ? result.stderr : result.stdout;
       throw new Error(
@@ -185,11 +200,12 @@ describe('headless dispatcher loop (real daemon, built CLI subprocess)', () => {
     cli('init');
     commitAll(repo, 'init');
 
-    const { proc } = await spawnDaemon(repo, dispatchHome, {
+    const { proc, appToken: token } = await spawnDaemon(repo, dispatchHome, {
       DISPATCH_ENABLE_FAKES: '1',
       DISPATCH_FAKE_APPROVAL: '1',
     });
     daemon = proc;
+    appToken = token;
   }, 20_000);
 
   afterAll(() => {

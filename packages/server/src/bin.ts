@@ -57,6 +57,122 @@ import { FakeWarden } from './orchestrator/wardens/fake.js';
 // approve/deny path has something to exercise). Kept as one fixed script rather
 // than something configurable per invocation: this is a test/e2e hook, not a
 // general scripting facility.
+// The scripted lifecycle of `count` fake sub-agents. Spawns come first in a
+// burst, then each sub-agent's tool calls, progress and finish are interleaved
+// in rounds, so at any instant several are running at once — the shape a
+// fan-out actually has, and the one the UI has to stay legible under.
+function fakeSubagentSteps(
+  count: number
+): NonNullable<FakeExecutorScript['steps']> {
+  const labels = [
+    'Map the server routes',
+    'Read the desktop tests',
+    'Check the release workflow',
+    'Audit the CLI commands',
+    'Trace the approval flow',
+    'Survey the git helpers',
+  ];
+  const now = () => new Date().toISOString();
+  const steps: NonNullable<FakeExecutorScript['steps']> = [];
+  const ids = Array.from({ length: count }, (_, i) => `fake-agent-${i + 1}`);
+  steps.push({
+    entry: {
+      ts: now(),
+      kind: 'assistant',
+      text: `Fanning out into ${count} sub-agents to cover the codebase in parallel.`,
+    },
+  });
+  ids.forEach((id, i) => {
+    const label = `${labels[i % labels.length]}${i >= labels.length ? ` (${Math.floor(i / labels.length) + 1})` : ''}`;
+    steps.push({
+      entry: {
+        ts: now(),
+        kind: 'agent',
+        toolUseId: id,
+        toolName: 'Agent',
+        toolInput: {
+          description: label,
+          subagent_type: i % 3 === 0 ? 'Explore' : 'general-purpose',
+          prompt: `${label}. Report file paths and line numbers.`,
+        },
+        agent: {
+          id,
+          phase: 'started',
+          status: 'running',
+          label,
+          type: i % 3 === 0 ? 'Explore' : 'general-purpose',
+        },
+      },
+      delayMs: 60,
+    });
+  });
+  ids.forEach((id, i) => {
+    steps.push({
+      entry: {
+        ts: now(),
+        kind: 'tool',
+        toolName: 'Grep',
+        toolInput: { pattern: 'TODO', path: 'packages' },
+        status: 'running',
+        parentToolUseId: id,
+      },
+      delayMs: 40,
+    });
+    steps.push({
+      entry: {
+        ts: now(),
+        kind: 'tool',
+        toolName: 'Read',
+        toolInput: { file_path: `packages/file-${i + 1}.ts` },
+        status: 'running',
+        parentToolUseId: id,
+      },
+      delayMs: 40,
+    });
+    steps.push({
+      entry: {
+        ts: now(),
+        kind: 'agent',
+        toolUseId: id,
+        agent: {
+          id,
+          phase: 'progress',
+          status: 'running',
+          toolUses: 2,
+          tokens: 1200 + i * 300,
+          durationMs: 1500 + i * 200,
+          lastTool: 'Read',
+          summary: 'Reading the matches',
+        },
+      },
+      delayMs: 40,
+    });
+  });
+  ids.forEach((id, i) => {
+    const failed = (i + 1) % 4 === 0;
+    steps.push({
+      entry: {
+        ts: now(),
+        kind: 'agent',
+        toolUseId: id,
+        agent: {
+          id,
+          phase: 'finished',
+          status: failed ? 'failed' : 'done',
+          toolUses: 2,
+          tokens: 2400 + i * 300,
+          durationMs: 3200 + i * 200,
+          summary: failed
+            ? 'Hit the tool budget before finishing'
+            : `Found ${3 + i} places worth a look`,
+        },
+      },
+      delayMs: 120,
+    });
+  });
+  return steps;
+}
+
 function buildDefaultFakeScript(): FakeExecutorScript {
   const steps: NonNullable<FakeExecutorScript['steps']> = [
     {
@@ -124,6 +240,15 @@ function buildDefaultFakeScript(): FakeExecutorScript {
       commitMessage: 'fake executor: sample change',
     },
   ];
+  // DISPATCH_FAKE_SUBAGENTS=<n> fans the fake run out into n sub-agents the
+  // way a real agent's `Agent` tool calls would: each spawns, makes a couple
+  // of tool calls attributed to it, reports progress, and finishes (every
+  // fourth one failing) with short pauses between, so the desktop's fan-out
+  // tree, rail counts and All agents rows have live sub-agents to show.
+  const subagentCount = Number(process.env.DISPATCH_FAKE_SUBAGENTS);
+  if (Number.isFinite(subagentCount) && subagentCount > 0) {
+    steps.push(...fakeSubagentSteps(subagentCount));
+  }
   if (process.env.DISPATCH_FAKE_APPROVAL === '1') {
     steps.push({
       approval: {

@@ -33,6 +33,29 @@ export function formatEntry(
     case 'message':
       if (entry.text === undefined) return null;
       return `[message ${messageSender(entry)}] ${entry.text}`;
+    case 'agent':
+      return formatAgentEntry(entry);
+  }
+}
+
+// One line per sub-agent lifecycle edge: the spawn and the finish. Progress
+// ticks are skipped — they arrive with every tool call the sub-agent makes,
+// and a watch line per tick would drown the run's own output.
+function formatAgentEntry(entry: NormalizedEntry): string | null {
+  const agent = entry.agent;
+  if (agent === undefined) return null;
+  const name = agent.label ?? agent.id;
+  const type = agent.type !== undefined ? ` (${agent.type})` : '';
+  switch (agent.phase) {
+    case 'started':
+      return `[agent ↳] ${name}${type}`;
+    case 'finished': {
+      const glyph = agent.status === 'done' ? '✓' : '✗';
+      const summary = agent.summary !== undefined ? ` — ${agent.summary}` : '';
+      return `[agent ${glyph}] ${name}${summary}`;
+    }
+    default:
+      return null;
   }
 }
 
@@ -57,6 +80,7 @@ export function formatApprovalRequest(
     `tool:    ${toolName}`,
     `approve: dispatch approve ${runId} ${requestId}`,
     `deny:    dispatch approve ${runId} ${requestId} --deny`,
+    'token:   needs the daemon app token (--token or DISPATCH_APP_TOKEN)',
     '===========================',
     '',
   ].join('\n');

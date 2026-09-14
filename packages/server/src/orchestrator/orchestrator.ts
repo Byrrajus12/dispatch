@@ -2,10 +2,13 @@ import {
   DISPATCH_DIR,
   generateRunId,
   loadConfig,
+  nextSubagentStatus,
   slugify,
+  summarizeSubagents,
   TaskParseError,
   TaskStore,
 } from '@dispatch/core';
+import type { SubagentStatus } from '@dispatch/core';
 import type {
   ActorContext,
   CommandEvidence,
@@ -368,6 +371,12 @@ export class Orchestrator {
   // When each run's claims were last refreshed from git status — see
   // scheduleClaimsRefresh's cooldown check.
   private readonly lastClaimsCheck = new Map<string, number>();
+  // Each live run's sub-agents by spawning tool_use id and their latest
+  // status — the working set recordSubagentEvent folds RunMeta.subagents from.
+  private readonly subagentStatuses = new Map<
+    string,
+    Map<string, SubagentStatus>
+  >();
   // When each failed run was last re-surveyed for orphan-landed work — see
   // scheduleOrphanRecheck.
   private readonly lastOrphanCheck = new Map<string, number>();
@@ -4160,7 +4169,11 @@ export class Orchestrator {
         this.registry.updateMeta(runId, {
           updatedAt: new Date().toISOString(),
         });
+        const fanOutChanged = this.recordSubagentEvent(runId, entry);
         this.ctx.events.broadcast({ type: 'run.log', runId, entry });
+        // A sub-agent starting or ending changes the counts every run list
+        // shows, and lists refetch on run.changed rather than reading logs.
+        if (fanOutChanged) this.ctx.events.broadcast({ type: 'run.changed' });
         this.scheduleClaimsRefresh(runId);
       },
       onApprovalRequest: (request) => {
@@ -4179,6 +4192,30 @@ export class Orchestrator {
       onSession: (sessionId) => this.recordSession(runId, sessionId),
       onFinish: (finish) => this.handleFinish(runId, finish),
     };
+  }
+
+  // Keeps RunMeta.subagents current from the `agent` entries as they are
+  // logged. Returns true when a sub-agent's status changed (a start or an
+  // end), false for progress ticks and every other entry kind. The statuses
+  // live in memory only: a replayed transcript rebuilds the same summary from
+  // its entries (see replayTranscript), so nothing here needs persisting.
+  private recordSubagentEvent(runId: string, entry: NormalizedEntry): boolean {
+    if (entry.kind !== 'agent' || entry.agent === undefined) return false;
+    let statuses = this.subagentStatuses.get(runId);
+    if (statuses === undefined) {
+      statuses = new Map();
+      this.subagentStatuses.set(runId, statuses);
+    }
+    const before = statuses.get(entry.agent.id);
+    const after = nextSubagentStatus(before, entry.agent);
+    statuses.set(entry.agent.id, after);
+    if (before === after) return false;
+    this.registry.updateMeta(runId, {
+      subagents: summarizeSubagents(
+        [...statuses.values()].map((status) => ({ status }))
+      ),
+    });
+    return true;
   }
 
   // Persists a run's resume handle as soon as the executor reports it, so a

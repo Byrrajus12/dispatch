@@ -961,3 +961,131 @@ describe('/api/branches', () => {
     expect(res.status).toBe(404);
   });
 });
+
+// A run's fan-out reaches the run list as counts, kept live while the agent
+// entries stream and identical to what a replayed transcript rebuilds.
+describe('GET /api/runs — subagents', () => {
+  let fanHandle: ServerHandle;
+  let fanBaseUrl: string;
+  let fanRoot: string;
+
+  // Two sub-agents spawn, one finishes, then the run lingers so the live
+  // summary can be read mid-run before the finish lands.
+  function fanOutFakeScript(): FakeExecutor {
+    const spawn = (id: string, label: string) => ({
+      entry: {
+        ts: new Date().toISOString(),
+        kind: 'agent' as const,
+        toolUseId: id,
+        toolName: 'Agent',
+        toolInput: { description: label, subagent_type: 'Explore' },
+        agent: {
+          id,
+          phase: 'started' as const,
+          status: 'running' as const,
+          label,
+          type: 'Explore',
+        },
+      },
+    });
+    return new FakeExecutor({
+      steps: [
+        spawn('tu-a', 'Map the routes'),
+        spawn('tu-b', 'Read the tests'),
+        {
+          entry: {
+            ts: new Date().toISOString(),
+            kind: 'tool',
+            toolName: 'Grep',
+            toolInput: { pattern: 'route' },
+            status: 'running',
+            parentToolUseId: 'tu-a',
+          },
+        },
+        {
+          entry: {
+            ts: new Date().toISOString(),
+            kind: 'agent',
+            toolUseId: 'tu-a',
+            agent: {
+              id: 'tu-a',
+              phase: 'finished',
+              status: 'done',
+              toolUses: 1,
+              summary: 'Twelve routes.',
+            },
+          },
+        },
+        { delayMs: 400 },
+      ],
+      finish: { state: 'finished', costUsd: 0, turns: 1 },
+    });
+  }
+
+  beforeEach(async () => {
+    fanRoot = initDispatchGitRepo();
+    TaskStore.init(fanRoot);
+    fanHandle = await startServer({
+      rootDir: fanRoot,
+      port: 0,
+      writeDaemonFile: false,
+      registerExecutors: (orchestrator) => {
+        orchestrator.registerExecutor('fake-fan', fanOutFakeScript());
+      },
+    });
+    useTestAuth(fanHandle);
+    fanBaseUrl = `http://127.0.0.1:${fanHandle.port}`;
+  });
+
+  afterEach(async () => {
+    await fanHandle.stop();
+    rmSync(fanRoot, { recursive: true, force: true });
+  });
+
+  it('counts sub-agents on the list and the detail while live, and keeps them after the finish', async () => {
+    const task = await json(
+      await fetch(`${fanBaseUrl}/api/tasks`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'Fan out' }),
+      })
+    );
+    const dispatched = await json(
+      await fetch(`${fanBaseUrl}/api/tasks/${task.meta.id}/runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ executor: 'fake-fan' }),
+      })
+    );
+    const expected = { total: 2, running: 1, done: 1, failed: 0, stopped: 0 };
+    await waitFor(async () => {
+      const r = await json(
+        await fetch(`${fanBaseUrl}/api/runs/${dispatched.id}`)
+      );
+      return r.meta.subagents?.done === 1;
+    });
+    const live = (await json(await fetch(`${fanBaseUrl}/api/runs`))).find(
+      (r: { id: string }) => r.id === dispatched.id
+    );
+    expect(live.state).toBe('running');
+    expect(live.subagents).toEqual(expected);
+    const detail = await json(
+      await fetch(`${fanBaseUrl}/api/runs/${dispatched.id}`)
+    );
+    expect(detail.meta.subagents).toEqual(expected);
+    expect(
+      detail.entries.filter((e: { kind: string }) => e.kind === 'agent')
+    ).toHaveLength(3);
+
+    await waitFor(async () => {
+      const r = await json(
+        await fetch(`${fanBaseUrl}/api/runs/${dispatched.id}`)
+      );
+      return r.meta.state === 'finished';
+    });
+    const after = await json(
+      await fetch(`${fanBaseUrl}/api/runs/${dispatched.id}`)
+    );
+    expect(after.meta.subagents).toEqual(expected);
+  });
+});

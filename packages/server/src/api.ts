@@ -3779,6 +3779,10 @@ const DECIDE_TIER_ROUTES: ReadonlyArray<{
   // warden design hangs on — an agent token approving it would let the model
   // approve its own mutations.
   { method: 'POST', segments: ['warden', '*', 'actions', '*', 'confirm'] },
+  // A run's tool-approval gate is an adjudication like the two above: with
+  // it on the request tier, any agent holding the on-disk agent token could
+  // wave its own parked tool call through.
+  { method: 'POST', segments: ['runs', '*', 'approval'] },
 ];
 
 function matchesRoute(

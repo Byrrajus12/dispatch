@@ -601,3 +601,26 @@ test('the waiting row is named by its action summary and a lowercase kind', () =
     screen.getByRole('button', { name: /Cancel run r-1 warden/ })
   ).toBeDefined();
 });
+
+test('a live run that fanned out shows its running/total sub-agent count', () => {
+  render(
+    <LiveRail
+      {...railProps({
+        runs: [
+          run({
+            subagents: {
+              total: 12,
+              running: 5,
+              done: 7,
+              failed: 0,
+              stopped: 0,
+            },
+          }),
+        ],
+      })}
+    />
+  );
+  expect(screen.getByLabelText('5 of 12 sub-agents running').textContent).toBe(
+    '5/12'
+  );
+});
