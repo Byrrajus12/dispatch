@@ -1,12 +1,21 @@
 import type { ApiClient } from '@dispatch/client';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { expect, test } from 'bun:test';
+import { expect, mock, test } from 'bun:test';
+import type { ReactNode } from 'react';
 
 import {
   dataWith,
   testProject,
 } from '../components/settings/fixtures.test-helper';
-import { SettingsView } from './SettingsView';
+
+// The Diffs tab's preview renders through `PierreWorkerPool`, which imports
+// `@pierre/diffs/worker/worker.js?worker&url` — a Vite-only specifier `bun test`
+// cannot resolve. Stubbed to a passthrough, the way DiffSurface.test.tsx does,
+// and the view imported afterwards so the stub is what it sees.
+void mock.module('@/components/runs/PierreWorkerPool', () => ({
+  PierreWorkerPool: ({ children }: { children: ReactNode }) => children,
+}));
+const { SettingsView } = await import('./SettingsView');
 
 const project = testProject;
 const data = dataWith();
