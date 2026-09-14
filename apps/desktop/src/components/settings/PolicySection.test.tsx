@@ -89,13 +89,13 @@ test('a pinned gate reads as pinned and a pin change saves key-by-key', () => {
     />
   );
   expect(screen.getByText('Auto + records (pinned)')).toBeDefined();
-  fireEvent.change(screen.getByLabelText('Merge override'), {
-    target: { value: 'rung' },
-  });
+  fireEvent.click(screen.getByRole('combobox', { name: 'Merge override' }));
+  fireEvent.click(screen.getByRole('option', { name: 'Rung decides' }));
   expect(saves).toEqual([{ policy: { gates: { merge: null } } }]);
-  fireEvent.change(screen.getByLabelText('Scope requests override'), {
-    target: { value: 'block' },
-  });
+  fireEvent.click(
+    screen.getByRole('combobox', { name: 'Scope requests override' })
+  );
+  fireEvent.click(screen.getByRole('option', { name: 'Always block' }));
   expect(saves).toHaveLength(2);
   expect(saves[1]).toEqual({ policy: { gates: { scope: 'block' } } });
 });

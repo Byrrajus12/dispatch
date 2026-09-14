@@ -108,13 +108,13 @@ export function SettingsView({
           )}
         </div>
 
-        <TabsContent value="general">
+        <TabsContent value="general" className="flex flex-col gap-4">
           {data.config !== null && (
             <GeneralSection config={data.config} onSave={save} />
           )}
         </TabsContent>
 
-        <TabsContent value="autonomy">
+        <TabsContent value="autonomy" className="flex flex-col gap-4">
           {data.config !== null && (
             <PolicySection
               config={data.config}
@@ -125,27 +125,27 @@ export function SettingsView({
           )}
         </TabsContent>
 
-        <TabsContent value="agents">
+        <TabsContent value="agents" className="flex flex-col gap-4">
           {data.config !== null && (
             <AgentsSection config={data.config} onSave={save} />
           )}
         </TabsContent>
 
-        <TabsContent value="integrations">
+        <TabsContent value="integrations" className="flex flex-col gap-4">
           <IntegrationsSection data={integrationsData} />
         </TabsContent>
 
-        <TabsContent value="notifications">
+        <TabsContent value="notifications" className="flex flex-col gap-4">
           {data.config !== null && (
             <NotificationsSection config={data.config} onSave={save} />
           )}
         </TabsContent>
 
-        <TabsContent value="daemon">
+        <TabsContent value="daemon" className="flex flex-col gap-4">
           <DaemonSection activeProject={activeProject} data={data} />
         </TabsContent>
 
-        <TabsContent value="diffs">
+        <TabsContent value="diffs" className="flex flex-col gap-4">
           <DiffsSection />
         </TabsContent>
       </Tabs>
