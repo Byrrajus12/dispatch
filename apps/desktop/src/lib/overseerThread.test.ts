@@ -30,6 +30,7 @@ function makeRecord(
     state: 'ready',
     messages,
     pendingActions: [],
+    pendingApprovals: [],
     undeliveredDecisions: [],
     createdAt: '2026-08-10T00:00:00Z',
     updatedAt: '2026-08-10T00:00:05Z',
@@ -256,6 +257,98 @@ describe('buildOverseerThread', () => {
     expect(
       withoutError[0]?.kind === 'failed' ? withoutError[0].error : ''
     ).toContain('Send the message again');
+  });
+
+  test('a parked built-in call renders as one approve card and no spinner', () => {
+    const approval = {
+      requestId: 'req-1',
+      toolName: 'Bash',
+      input: { command: 'git status' },
+      summary: 'Bash: git status',
+      requestedAt: at,
+    };
+    const items = buildOverseerThread(
+      makeRecord(
+        [
+          { role: 'user', text: 'is the tree clean?', at },
+          { role: 'tool', tool: 'Bash', text: 'Bash: git status', at },
+          {
+            role: 'approval',
+            tool: 'Bash',
+            requestId: 'req-1',
+            outcome: 'pending',
+            text: 'Bash: git status',
+            at,
+          },
+        ],
+        { state: 'running', pendingApprovals: [approval] }
+      )
+    );
+    expect(items.map((i) => i.kind)).toEqual(['message', 'tool', 'approve']);
+    expect(items[2]).toEqual({
+      kind: 'approve',
+      key: 'w-1-approve-req-1',
+      approval,
+    });
+  });
+
+  test('a decided call keeps its decision row and drops the stale parked row', () => {
+    const items = buildOverseerThread(
+      makeRecord(
+        [
+          {
+            role: 'approval',
+            tool: 'Bash',
+            requestId: 'req-1',
+            outcome: 'pending',
+            text: 'Bash: git status',
+            at,
+          },
+          {
+            role: 'approval',
+            tool: 'Bash',
+            requestId: 'req-1',
+            outcome: 'allowed',
+            text: 'Allowed: Bash: git status',
+            at,
+          },
+          { role: 'assistant', text: 'Clean.', at },
+        ],
+        { state: 'ready' }
+      )
+    );
+    expect(items).toEqual([
+      {
+        kind: 'outcome',
+        key: 'w-1-msg-1',
+        outcome: 'allowed',
+        text: 'Allowed: Bash: git status',
+        at,
+      },
+      {
+        kind: 'message',
+        key: 'w-1-msg-2',
+        role: 'assistant',
+        text: 'Clean.',
+        at,
+      },
+    ]);
+  });
+
+  test('a parked call missing its transcript row still gets a card', () => {
+    const approval = {
+      requestId: 'req-9',
+      toolName: 'Edit',
+      input: {},
+      summary: 'Edit: a.ts',
+      requestedAt: at,
+    };
+    const items = buildOverseerThread(
+      makeRecord([], { state: 'running', pendingApprovals: [approval] })
+    );
+    expect(items).toEqual([
+      { kind: 'approve', key: 'w-1-approve-req-9', approval },
+    ]);
   });
 
   test('two pending actions each get their own card', () => {

@@ -10,10 +10,13 @@ import { FakeExecutor } from '../src/orchestrator/executors/fake.js';
 import type { OverseerRecord } from '../src/orchestrator/overseer.js';
 import type {
   OverseerBackend,
+  OverseerToolset,
   OverseerTurn,
+  OverseerTurnOptions,
 } from '../src/orchestrator/overseerBackend.js';
 import { FakeOverseer } from '../src/orchestrator/overseers/fake.js';
 import type { FakeOverseerScript } from '../src/orchestrator/overseers/fake.js';
+import type { ApprovalDecision } from '../src/orchestrator/types.js';
 import { json } from './json.js';
 import { runGitSync } from './orchestrator/helpers.js';
 import { useTestAuth, wsUrl } from './testAuth.js';
@@ -365,5 +368,183 @@ describe('POST /api/overseer/:id/actions/:actionId/confirm', () => {
     const ready = await startWithQueuedDispatch();
     const res = await confirm(ready.id, ready.pendingActions[0].id, 'yes');
     expect(res.status).toBe(400);
+  });
+});
+
+// A backend standing in for a full Claude Code session that wants to run one
+// built-in tool: it asks the daemon through `authorizeTool` and replies with
+// what it was told, so the route's effect is readable off the transcript.
+class GatedOverseer implements OverseerBackend {
+  decided: ApprovalDecision | undefined;
+
+  start(
+    _prompt: string,
+    _toolset: OverseerToolset,
+    options?: OverseerTurnOptions
+  ): Promise<OverseerTurn> {
+    return this.turn(options);
+  }
+
+  sendMessage(
+    _sessionId: string | undefined,
+    _message: string,
+    _toolset: OverseerToolset,
+    options?: OverseerTurnOptions
+  ): Promise<OverseerTurn> {
+    return this.turn(options);
+  }
+
+  private async turn(options?: OverseerTurnOptions): Promise<OverseerTurn> {
+    options?.onToolUse?.('Bash', { command: 'git status' });
+    this.decided = await options?.authorizeTool?.({
+      requestId: 'req-1',
+      toolName: 'Bash',
+      input: { command: 'git status' },
+    });
+    return {
+      reply: this.decided?.allow === true ? 'clean tree' : 'could not look',
+      sessionId: 's-1',
+    };
+  }
+}
+
+async function decide(
+  conversationId: string,
+  requestId: string,
+  body: unknown
+): Promise<Response> {
+  return fetch(
+    `${baseUrl}/api/overseer/${conversationId}/approvals/${requestId}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }
+  );
+}
+
+// Opens a conversation against the gated backend and returns the record once
+// its built-in call is parked.
+async function startParked(): Promise<{
+  backend: GatedOverseer;
+  record: OverseerRecord;
+}> {
+  const backend = new GatedOverseer();
+  await startWithOverseer(backend);
+  const { record } = await startConversation('is the tree clean?');
+  await waitFor(
+    async () => (await getRecord(record.id)).pendingApprovals.length > 0
+  );
+  return { backend, record: await getRecord(record.id) };
+}
+
+describe('POST /api/overseer/:id/approvals/:requestId', () => {
+  it('parks the built-in call on the running record until decided', async () => {
+    const { record } = await startParked();
+    expect(record.state).toBe('running');
+    expect(record.pendingApprovals).toEqual([
+      expect.objectContaining({
+        requestId: 'req-1',
+        toolName: 'Bash',
+        summary: 'Bash: git status',
+      }),
+    ]);
+    expect(record.messages.at(-1)).toEqual(
+      expect.objectContaining({
+        role: 'approval',
+        requestId: 'req-1',
+        outcome: 'pending',
+      })
+    );
+  });
+
+  it('allow runs the call and the turn settles on its result', async () => {
+    const { backend, record } = await startParked();
+
+    const res = await decide(record.id, 'req-1', {
+      allow: true,
+      scope: 'session',
+    });
+    expect(res.status).toBe(200);
+    const decided = (await json(res)) as OverseerRecord;
+    expect(decided.pendingApprovals).toEqual([]);
+    expect(decided.messages.at(-1)).toEqual(
+      expect.objectContaining({ role: 'approval', outcome: 'allowed' })
+    );
+
+    const ready = await settled(record.id);
+    expect(backend.decided).toEqual({ allow: true, scope: 'session' });
+    expect(ready.messages.at(-1)).toEqual(
+      expect.objectContaining({ role: 'assistant', text: 'clean tree' })
+    );
+  });
+
+  it('deny hands the reason to the session and nothing runs', async () => {
+    const { backend, record } = await startParked();
+
+    const res = await decide(record.id, 'req-1', {
+      allow: false,
+      reason: 'not now',
+    });
+    expect(res.status).toBe(200);
+
+    const ready = await settled(record.id);
+    expect(backend.decided).toEqual({ allow: false, reason: 'not now' });
+    expect(
+      ready.messages.find(
+        (m) => m.role === 'approval' && m.outcome === 'denied'
+      )?.text
+    ).toBe('Denied: Bash: git status — not now');
+    expect(ready.messages.at(-1)).toEqual(
+      expect.objectContaining({ role: 'assistant', text: 'could not look' })
+    );
+  });
+
+  it('404s an unknown request and an unknown conversation, 400s a bad body', async () => {
+    const { record } = await startParked();
+
+    expect((await decide(record.id, 'req-9', { allow: true })).status).toBe(
+      404
+    );
+    expect((await decide('wc-000000', 'req-1', { allow: true })).status).toBe(
+      404
+    );
+    expect((await decide(record.id, 'req-1', { allow: 'yes' })).status).toBe(
+      400
+    );
+    expect(
+      (await decide(record.id, 'req-1', { allow: true, scope: 'forever' }))
+        .status
+    ).toBe(400);
+    // Still parked: none of those touched it.
+    expect((await getRecord(record.id)).pendingApprovals).toHaveLength(1);
+    await decide(record.id, 'req-1', { allow: false });
+    await settled(record.id);
+  });
+});
+
+describe('POST /api/overseer model choice', () => {
+  it('keeps a chosen model on the record and 400s a blank one', async () => {
+    await startWithOverseer(new FakeOverseer({ ok: true, reply: 'hi' }));
+
+    const chosen = await fetch(`${baseUrl}/api/overseer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt: 'hello', model: 'claude-fable-5-1' }),
+    });
+    expect(chosen.status).toBe(202);
+    expect(((await json(chosen)) as OverseerRecord).model).toBe(
+      'claude-fable-5-1'
+    );
+
+    const blank = await fetch(`${baseUrl}/api/overseer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt: 'hello', model: '  ' }),
+    });
+    expect(blank.status).toBe(400);
+
+    const { record } = await startConversation('plain');
+    expect(record.model).toBeUndefined();
   });
 });

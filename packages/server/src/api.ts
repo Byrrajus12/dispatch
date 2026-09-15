@@ -3072,18 +3072,45 @@ function withdrawQuestion(
   return new Response(null, { status: 204 });
 }
 
+// Validates an optional `model` body field the way createRun does: absent
+// means "the configured role's model"; present must be a non-empty string.
+// Returns the 400 to send, or the model (possibly undefined) to pass on.
+function readOptionalModel(
+  value: unknown
+): { ok: true; model: string | undefined } | { ok: false; response: Response } {
+  if (value === undefined) return { ok: true, model: undefined };
+  if (typeof value !== 'string' || value.trim() === '') {
+    return {
+      ok: false,
+      response: errorResponse(
+        400,
+        'invalid model: expected a non-empty string'
+      ),
+    };
+  }
+  return { ok: true, model: value.trim() };
+}
+
 // POST /api/plan. `planner` is optional (defaults to 'claude'), same
 // contract as createRun's `executor` field above: a name outside what's
 // actually registered on this PlanManager instance (Phase 7's
 // registerPlanner/registeredPlannerNames, mirroring the orchestrator's own
-// executor registry) is a 400 naming every valid option.
+// executor registry) is a 400 naming every valid option. `model` is optional
+// too: the Plans composer's pick for this plan, over the configured `plan`
+// role's model.
 async function startPlan(req: Request, ctx: ApiContext): Promise<Response> {
   const parsed = await readJsonBody(req);
   if (!parsed.ok) return parsed.response;
-  const body = parsed.value as { prompt?: unknown; planner?: unknown };
+  const body = parsed.value as {
+    prompt?: unknown;
+    planner?: unknown;
+    model?: unknown;
+  };
   if (typeof body.prompt !== 'string' || body.prompt.trim() === '') {
     return errorResponse(400, 'invalid prompt: prompt is required');
   }
+  const model = readOptionalModel(body.model);
+  if (!model.ok) return model.response;
   const knownPlannerNames = ctx.planManager.registeredPlannerNames();
   if (
     body.planner !== undefined &&
@@ -3097,7 +3124,14 @@ async function startPlan(req: Request, ctx: ApiContext): Promise<Response> {
   }
   const plannerName =
     typeof body.planner === 'string' ? body.planner : 'claude';
-  const record = ctx.planManager.startPlan(body.prompt, plannerName);
+  const record = ctx.planManager.startPlan(
+    body.prompt,
+    plannerName,
+    undefined,
+    'plan',
+    undefined,
+    model.model
+  );
   return jsonResponse({ planId: record.id }, 202);
 }
 
@@ -3149,13 +3183,21 @@ async function confirmPlan(
 // reply lands asynchronously via the `overseer.changed` broadcast. `backend`
 // follows createRun's `executor` contract: optional, defaults to 'claude', and
 // a name outside what's registered is a 400 naming every valid option.
+// `model` is optional the same way: the composer's pick for this
+// conversation, over the configured `overseer` role's model.
 async function startOverseer(req: Request, ctx: ApiContext): Promise<Response> {
   const parsed = await readJsonBody(req);
   if (!parsed.ok) return parsed.response;
-  const body = parsed.value as { prompt?: unknown; backend?: unknown };
+  const body = parsed.value as {
+    prompt?: unknown;
+    backend?: unknown;
+    model?: unknown;
+  };
   if (typeof body.prompt !== 'string' || body.prompt.trim() === '') {
     return errorResponse(400, 'invalid prompt: prompt is required');
   }
+  const model = readOptionalModel(body.model);
+  if (!model.ok) return model.response;
   const knownBackendNames = ctx.overseerManager.registeredBackendNames();
   if (
     body.backend !== undefined &&
@@ -3169,7 +3211,11 @@ async function startOverseer(req: Request, ctx: ApiContext): Promise<Response> {
   }
   const backendName =
     typeof body.backend === 'string' ? body.backend : 'claude';
-  const record = ctx.overseerManager.start(body.prompt, backendName);
+  const record = ctx.overseerManager.start(
+    body.prompt,
+    backendName,
+    model.model
+  );
   return jsonResponse(record, 202);
 }
 
@@ -3215,6 +3261,46 @@ async function confirmOverseerAction(
     actionId,
     body.approve
   );
+  return jsonResponse(record);
+}
+
+// POST /api/overseer/:id/approvals/:requestId { allow, scope?, reason? } —
+// decides one built-in tool call the overseer's running turn is parked on.
+// Same body as a run's POST /api/runs/:id/approval: allowing runs the call
+// at once (`scope: 'session'` also pre-approves the tool for the rest of the
+// conversation), denying hands `reason` to the model. 404s an unknown
+// conversation or a request that isn't parked on it.
+async function decideOverseerApproval(
+  req: Request,
+  ctx: ApiContext,
+  conversationId: string,
+  requestId: string
+): Promise<Response> {
+  const parsed = await readJsonBody(req);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.value as {
+    allow?: unknown;
+    scope?: unknown;
+    reason?: unknown;
+  };
+  if (typeof body.allow !== 'boolean') {
+    return errorResponse(400, 'invalid allow: expected a boolean');
+  }
+  if (
+    body.scope !== undefined &&
+    body.scope !== 'once' &&
+    body.scope !== 'session'
+  ) {
+    return errorResponse(400, "invalid scope: expected 'once' or 'session'");
+  }
+  if (body.reason !== undefined && typeof body.reason !== 'string') {
+    return errorResponse(400, 'invalid reason: expected a string');
+  }
+  const record = ctx.overseerManager.decideApproval(conversationId, requestId, {
+    allow: body.allow,
+    ...(body.scope !== undefined ? { scope: body.scope } : {}),
+    ...(body.reason !== undefined ? { reason: body.reason } : {}),
+  });
   return jsonResponse(record);
 }
 
@@ -3779,6 +3865,10 @@ const DECIDE_TIER_ROUTES: ReadonlyArray<{
   // overseer design hangs on — an agent token approving it would let the model
   // approve its own mutations.
   { method: 'POST', segments: ['overseer', '*', 'actions', '*', 'confirm'] },
+  // Allowing a built-in tool call the overseer is parked on is the same gate
+  // for the same reason: the model must not be able to wave its own Bash
+  // call through with the agent token.
+  { method: 'POST', segments: ['overseer', '*', 'approvals', '*'] },
   // A run's tool-approval gate is an adjudication like the two above: with
   // it on the request tier, any agent holding the on-disk agent token could
   // wave its own parked tool call through.
@@ -5004,6 +5094,13 @@ export async function handleApi(
         method === 'POST'
       ) {
         return await confirmOverseerAction(req, ctx, segments[1], segments[3]);
+      }
+      if (
+        segments.length === 4 &&
+        segments[2] === 'approvals' &&
+        method === 'POST'
+      ) {
+        return await decideOverseerApproval(req, ctx, segments[1], segments[3]);
       }
     }
 

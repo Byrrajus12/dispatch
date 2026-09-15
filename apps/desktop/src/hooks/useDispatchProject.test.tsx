@@ -102,6 +102,7 @@ function seedGhostRecord(queryClient: QueryClient) {
         status: 'pending',
       },
     ],
+    pendingApprovals: [],
     undeliveredDecisions: [],
     createdAt: '2026-08-10T00:00:00Z',
     updatedAt: '2026-08-10T00:00:05Z',

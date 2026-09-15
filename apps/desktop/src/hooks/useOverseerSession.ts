@@ -8,6 +8,21 @@ import type { Dispatch, SetStateAction } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 
 import { isFakeOverseerDevToolEnabled } from '../lib/devTools';
+import {
+  readRoleModelOverride,
+  resolveRoleModel,
+  storeRoleModelOverride,
+} from '../lib/models';
+
+/** What the human answered to a parked built-in tool call — the body of
+ * `decideOverseerApproval`. */
+export interface OverseerApprovalDecision {
+  allow: boolean;
+  /** 'session' also pre-approves the same tool for the rest of the conversation. */
+  scope?: 'once' | 'session';
+  /** Why it was denied; reaches the model as the refusal. */
+  reason?: string;
+}
 
 /**
  * Every overseer record key for one daemon. useDispatchProject invalidates this
@@ -85,6 +100,27 @@ export interface OverseerSession {
    */
   confirmAction: (actionId: string, approve: boolean) => Promise<void>;
   /**
+   * Decides one built-in tool call the running turn is parked on (see
+   * `OverseerRecord.pendingApprovals`). Allowing runs the call at once and
+   * the turn continues; denying hands the reason to the model. Owns the
+   * lock and the failure exactly as `confirmAction` does, and never rejects:
+   * the outcome is readable on `decidingRequestId` and `decideError`.
+   */
+  decideApproval: (
+    requestId: string,
+    decision: OverseerApprovalDecision
+  ) => Promise<void>;
+  /** Which parked call `decideApproval` is currently deciding, or `null`. */
+  decidingRequestId: string | null;
+  /**
+   * The model the next conversation opens on: the device's remembered pick
+   * for the overseer role, else the project's configured `models.overseer`.
+   * An open conversation keeps the model it started on (`record.model`).
+   */
+  model: string;
+  /** Picks the model for the next conversation and remembers it on this device. */
+  setModel: (id: string) => void;
+  /**
    * Which action `confirmAction` is currently deciding, or `null`. Lives on the
    * session for the same reason `draft` does: the surfaces that render a
    * confirm card are unmounted by ordinary navigation (the rail's tab toggle
@@ -149,7 +185,10 @@ export interface OverseerSession {
 export function useOverseerSession(
   client: ApiClient | null,
   port: number | undefined,
-  projectPath: string | null
+  projectPath: string | null,
+  // The project's configured `models.overseer`, once config has loaded —
+  // what the composer's picker shows until the human picks otherwise.
+  configuredModel?: string
 ): OverseerSession {
   const queryClient = useQueryClient();
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -157,7 +196,26 @@ export function useOverseerSession(
   const [draft, setDraft] = useState('');
 
   const [decidingActionId, setDecidingActionId] = useState<string | null>(null);
+  const [decidingRequestId, setDecidingRequestId] = useState<string | null>(
+    null
+  );
   const [decideError, setDecideError] = useState<string | null>(null);
+
+  // The human's own pick, if any; `null` defers to the project's config. Read
+  // once from device storage — later picks write through `setModel` below.
+  const [chosenModel, setChosenModel] = useState<string | null>(
+    () => readRoleModelOverride('overseer') ?? null
+  );
+  const model =
+    chosenModel ??
+    resolveRoleModel('overseer', {
+      models:
+        configuredModel !== undefined ? { overseer: configuredModel } : {},
+    });
+  const setModel = useCallback((id: string) => {
+    setChosenModel(id);
+    storeRoleModelOverride('overseer', id);
+  }, []);
 
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -171,6 +229,7 @@ export function useOverseerSession(
     setConversationId(null);
     setDraft('');
     setDecidingActionId(null);
+    setDecidingRequestId(null);
     setSendError(null);
     setDecideError(null);
   }, [projectPath]);
@@ -196,10 +255,10 @@ export function useOverseerSession(
       // conversations against the daemon's scripted 'fake' backend instead of
       // the real Claude one. Checked per start, not per hook mount, so
       // flipping the flag applies to the next conversation without a reload.
-      const rec = await client.startOverseer(
-        prompt,
-        isFakeOverseerDevToolEnabled() ? { backend: 'fake' } : {}
-      );
+      const rec = await client.startOverseer(prompt, {
+        model,
+        ...(isFakeOverseerDevToolEnabled() ? { backend: 'fake' } : {}),
+      });
       queryClient.setQueryData(overseerKey(port, rec.id), rec);
       setConversationId(rec.id);
       // See the hook comment: the turn may have already settled while this
@@ -211,7 +270,7 @@ export function useOverseerSession(
       });
       return rec;
     },
-    [client, port, queryClient]
+    [client, model, port, queryClient]
   );
 
   const sendMessage = useCallback(
@@ -307,6 +366,40 @@ export function useOverseerSession(
     [client, conversationId, decidingActionId, port, queryClient]
   );
 
+  // The same cycle as confirmAction, for a parked built-in call. One lock per
+  // kind rather than one shared lock: an action card and an approval card can
+  // be on screen together, and deciding one must not grey out the other for
+  // no reason — but a second click on the same kind is still a no-op.
+  const decideApproval = useCallback(
+    async (requestId: string, decision: OverseerApprovalDecision) => {
+      if (decidingRequestId !== null) return;
+      if (client === null || conversationId === null) {
+        setDecideError('no overseer conversation open');
+        return;
+      }
+      setDecidingRequestId(requestId);
+      setDecideError(null);
+      try {
+        const rec = await client.decideOverseerApproval(
+          conversationId,
+          requestId,
+          decision
+        );
+        queryClient.setQueryData(overseerKey(port, conversationId), rec);
+        // Allowing unblocks the turn, which can settle before this response
+        // lands — the same in-flight-settle race sendMessage reconciles.
+        await queryClient.invalidateQueries({
+          queryKey: overseerKey(port, conversationId),
+        });
+      } catch (err) {
+        setDecideError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setDecidingRequestId(null);
+      }
+    },
+    [client, conversationId, decidingRequestId, port, queryClient]
+  );
+
   const reset = useCallback(() => {
     setConversationId(null);
     setDraft('');
@@ -334,7 +427,11 @@ export function useOverseerSession(
     sendError,
     confirmAction,
     decidingActionId,
+    decideApproval,
+    decidingRequestId,
     decideError,
+    model,
+    setModel,
     reset,
     draft,
     setDraft,

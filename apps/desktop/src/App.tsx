@@ -352,7 +352,8 @@ function App() {
   const overseer = useOverseerSession(
     rawData.client,
     rawData.port,
-    activeProject?.path ?? null
+    activeProject?.path ?? null,
+    rawData.config?.models.overseer
   );
 
   // Opens the full task view; unspecified runId resolves to the task's latest
@@ -841,7 +842,10 @@ function App() {
             projectView={navState.projectView}
             globalView={navState.globalView}
             liveAgentCount={liveRuns.length}
-            overseerPendingCount={overseer.record?.pendingActions.length ?? 0}
+            overseerPendingCount={
+              (overseer.record?.pendingActions.length ?? 0) +
+              (overseer.record?.pendingApprovals.length ?? 0)
+            }
             spendToday={todaySpend}
             badges={{
               board: data.readyIds.size,

@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { ModelPicker } from '../components/chat/ModelPicker';
 import { DependencyGraph } from '../components/graph/DependencyGraph';
 import { PlanQuestionsForm } from '../components/plans/PlanQuestionsForm';
 import { PlanTaskSpecDialog } from '../components/plans/PlanTaskSpecDialog';
@@ -32,6 +33,12 @@ import { DaemonUnavailable } from '../components/shell/DaemonUnavailable';
 import { useToasts } from '../components/shell/Toasts';
 import type { DispatchProjectData } from '../hooks/useDispatchProject';
 import { formatRelativeTimeFromIso } from '../lib/format';
+import {
+  modelLabel,
+  readRoleModelOverride,
+  resolveRoleModel,
+  storeRoleModelOverride,
+} from '../lib/models';
 import type { PlanDraft, PlanThreadItem } from '../lib/planThread';
 import {
   buildPlanThread,
@@ -486,6 +493,18 @@ export function PlansView({
 }: PlansViewProps) {
   const toasts = useToasts();
   const [prompt, setPrompt] = useState(initialPrompt ?? '');
+  // The model the next plan opens on. The human's own pick is remembered per
+  // device (so "always Fable" sticks); until they pick, the project's
+  // configured `models.plan` shows. An open plan keeps the model it started
+  // on, which is what the thread header names.
+  const [chosenModel, setChosenModel] = useState<string | null>(
+    () => readRoleModelOverride('plan') ?? null
+  );
+  const planModel = chosenModel ?? resolveRoleModel('plan', data.config);
+  function pickModel(id: string) {
+    setChosenModel(id);
+    storeRoleModelOverride('plan', id);
+  }
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   // The editable proposal plus its per-row keys and the server proposal it came from — see
@@ -536,7 +555,7 @@ export function PlansView({
     setSubmitError(null);
     setDraft(null);
     try {
-      await data.handleSubmitPrompt(prompt.trim());
+      await data.handleSubmitPrompt(prompt.trim(), planModel);
       setPrompt('');
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : String(err));
@@ -633,6 +652,11 @@ export function PlansView({
   return (
     <div className="mx-auto flex w-full max-w-[60rem] flex-col gap-6">
       <div className="flex items-center justify-end gap-3">
+        {data.planRecord?.model !== undefined && (
+          <span className="text-muted-foreground text-[11px]">
+            Planning on {modelLabel(data.planRecord.model)}
+          </span>
+        )}
         {data.planId !== null && (
           <Button variant="outline" size="sm" onClick={closePlan}>
             <Plus className="size-3.5" /> New plan
@@ -655,7 +679,13 @@ export function PlansView({
             onChange={(e) => setPrompt(e.target.value)}
             className="resize-y text-[13px]"
           />
-          <div className="flex justify-end">
+          <div className="flex items-center justify-end gap-2">
+            <ModelPicker
+              value={planModel}
+              onChange={pickModel}
+              label="Planning model"
+              disabled={submitting}
+            />
             <Button
               disabled={submitting || prompt.trim() === ''}
               onClick={() => void submitPrompt()}

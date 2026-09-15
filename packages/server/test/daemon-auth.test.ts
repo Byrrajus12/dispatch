@@ -431,6 +431,32 @@ describe('run approval tier', () => {
   });
 });
 
+// Allowing a built-in tool call the overseer is parked on is the same gate
+// as the confirm below, for the same reason: the model must not be able to
+// wave its own Bash call through with the agent token.
+describe('overseer approval tier', () => {
+  const approvalPath = '/api/overseer/wc-000000/approvals/req-000000';
+
+  it('403s a decision made with the agent token', async () => {
+    const res = await rawFetch(`${baseUrl}${approvalPath}`, {
+      method: 'POST',
+      headers: { ...auth(agentToken), 'content-type': 'application/json' },
+      body: JSON.stringify({ allow: true }),
+    });
+    expect(res.status).toBe(403);
+    expect((await json<AuthError>(res)).code).toBe('auth_insufficient_tier');
+  });
+
+  it('lets the app token through to the handler', async () => {
+    const res = await rawFetch(`${baseUrl}${approvalPath}`, {
+      method: 'POST',
+      headers: { ...auth(appToken), 'content-type': 'application/json' },
+      body: JSON.stringify({ allow: true }),
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
 describe('overseer confirm tier', () => {
   const confirmPath = '/api/overseer/wc-000000/actions/wa-000000/confirm';
 

@@ -130,6 +130,7 @@ export type {
   VerificationCheck,
   VerificationResult,
   OverseerAction,
+  OverseerApproval,
   OverseerMessage,
   OverseerRecord,
   OverseerState,

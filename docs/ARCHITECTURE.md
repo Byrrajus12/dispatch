@@ -155,7 +155,7 @@ Grouped by what they're for:
 - **Repo** — `/api/git/*`, `/api/impact`, `/api/landing`
 - **Capture** — `/api/inbox/*`, `/api/notes/*`, `/api/conversations`
 - **Overseer** — `/api/overseer`, `/api/overseer/:id/message`, action
-  confirmation
+  confirmation, built-in tool-call approval
 - **Integrations** — `/api/linear/*`
 - **Meta** — `/api/health`, `/api/sync`, `/api/config`, `/api/agents`
 
@@ -205,7 +205,8 @@ Notable modules:
 | `review.ts`                                    | 1068  | Diff review, undeclared-write detection, shared-surface checks         |
 | `worktree.ts`                                  | 955   | Per-run worktree lifecycle                                             |
 | `fixLoop.ts`                                   | 807   | Automatic fix rounds with a cap and escalation steps                   |
-| `overseer.ts` + backend/tools                  | ~545+ | Conversational agent with a tool registry and human-confirmed actions  |
+| `overseer.ts` + backend/tools                  | ~800+ | Full agent session in the checkout: project tools with human-confirmed |
+|                                                |       | actions, built-in tools behind the run permission policy               |
 | `verify.ts`                                    | 360   | Runs `verifySteps` from config, records structured results             |
 | `planner.ts`                                   | 243   | Proposes a task set; indices resolve to real ids at confirm            |
 | `scopeRequests.ts`                             | —     | Runtime scope escalation, decided by app, API, or policy               |

@@ -3,6 +3,7 @@ import type {
   OverseerToolResult,
   OverseerToolset,
   OverseerTurn,
+  OverseerTurnOptions,
 } from '../overseerBackend.js';
 
 /** One tool call a scripted turn makes, in the order the script lists them. */
@@ -80,7 +81,7 @@ export class FakeOverseer implements OverseerBackend {
   async start(
     prompt: string,
     toolset: OverseerToolset,
-    _model?: string
+    _options?: OverseerTurnOptions
   ): Promise<OverseerTurn> {
     return this.runTurn(0, prompt, toolset);
   }
@@ -89,7 +90,7 @@ export class FakeOverseer implements OverseerBackend {
     sessionId: string | undefined,
     message: string,
     toolset: OverseerToolset,
-    _model?: string
+    _options?: OverseerTurnOptions
   ): Promise<OverseerTurn> {
     const consumed =
       sessionId === undefined ? 0 : Number.parseInt(sessionId, 10);

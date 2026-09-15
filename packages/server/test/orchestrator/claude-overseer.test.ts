@@ -6,6 +6,7 @@ import { CLAUDE_INSTALL_HINT } from '../../src/orchestrator/claudeCli.js';
 import type {
   OverseerToolResult,
   OverseerToolset,
+  OverseerTurnOptions,
 } from '../../src/orchestrator/overseerBackend.js';
 import {
   ClaudeOverseer,
@@ -82,7 +83,8 @@ async function runTurn(
   send?: (
     overseer: ClaudeOverseer,
     toolset: OverseerToolset
-  ) => Promise<unknown>
+  ) => Promise<unknown>,
+  options: OverseerTurnOptions = {}
 ): Promise<{ captured?: Options; turn: unknown }> {
   let captured: Options | undefined;
   const queryFn = (args: { options?: Options }) => {
@@ -95,10 +97,15 @@ async function runTurn(
   );
   const turn =
     send === undefined
-      ? await overseer.start('what is going on?', toolset)
+      ? await overseer.start('what is going on?', toolset, options)
       : await send(overseer, toolset);
   return { captured, turn };
 }
+
+// The canUseTool callback's third argument, as far as these tests read it.
+const callOpts = { requestId: 'req-1' } as Parameters<
+  NonNullable<Options['canUseTool']>
+>[2];
 
 describe('ClaudeOverseer Bun compatibility', () => {
   it('imports @anthropic-ai/claude-agent-sdk and constructs under Bun', () => {
@@ -110,42 +117,65 @@ describe('ClaudeOverseer Bun compatibility', () => {
 });
 
 describe('ClaudeOverseer session wiring', () => {
-  it('runs with no built-in tools, no settings sources, and only its own MCP server', async () => {
+  it('runs as a full Claude Code session in the checkout with its own MCP server on top', async () => {
     const { toolset } = stubToolset();
-    const { captured } = await runTurn(successStream(), toolset);
+    const { captured } = await runTurn(successStream(), toolset, undefined, {
+      permissionMode: 'auto',
+      maxTurns: 40,
+      maxBudgetUsd: 2.5,
+    });
 
-    // The overseer holds operator authority, so it gets no Read/Bash/Edit at all.
-    expect(captured?.tools).toEqual([]);
+    // No `tools: []` and no empty settings/skills lists: the overseer is
+    // meant to do everything a `claude` session at this checkout can, and
+    // the checkout's CLAUDE.md only loads with 'project' among the sources.
+    expect(captured?.tools).toBeUndefined();
+    expect(captured?.settingSources).toEqual(['user', 'project', 'local']);
+    expect(captured?.skills).toBeUndefined();
+    expect(captured?.systemPrompt).toEqual({
+      type: 'preset',
+      preset: 'claude_code',
+      append: expect.stringContaining('overseer'),
+    });
+    // Its own tools are pre-approved; the rest go through canUseTool.
     expect(captured?.allowedTools).toEqual([
       `${OVERSEER_TOOL_PREFIX}list_runs`,
       `${OVERSEER_TOOL_PREFIX}cancel_run`,
     ]);
-    expect(captured?.settingSources).toEqual([]);
-    expect(captured?.skills).toEqual([]);
-    expect(captured?.strictMcpConfig).toBe(true);
-    expect(Object.keys(captured?.mcpServers ?? {})).toEqual(['overseer']);
-    expect(captured?.maxTurns).toBeGreaterThan(0);
+    expect(Object.keys(captured?.mcpServers ?? {})).toContain('overseer');
+    // The project's own policy and caps, exactly as a dispatched run gets.
+    expect(captured?.permissionMode).toBe('auto');
+    expect(captured?.maxTurns).toBe(40);
+    expect(captured?.maxBudgetUsd).toBe(2.5);
+  });
+
+  it('leaves the caps and policy to the SDK defaults when the project sets none', async () => {
+    const { toolset } = stubToolset();
+    const { captured } = await runTurn(successStream(), toolset);
+    expect(captured?.permissionMode).toBeUndefined();
+    expect(captured?.maxTurns).toBeUndefined();
+    expect(captured?.maxBudgetUsd).toBeUndefined();
   });
 
   it('tells the model that a mutating call only queues an action', async () => {
     const { toolset } = stubToolset();
     const { captured } = await runTurn(successStream(), toolset);
 
-    // A plain string, not `{ type: 'preset', preset: 'claude_code' }` — that
-    // preset describes a coding agent working in a checkout, which is the
-    // wrong job for a session with no file tools.
-    const prompt = captured?.systemPrompt;
-    expect(typeof prompt).toBe('string');
-    expect(prompt as string).toContain('queues the action for the human');
-    expect(prompt as string).toContain(
-      'never report a mutating action as done'
-    );
+    const prompt = captured?.systemPrompt as { append?: string } | undefined;
+    expect(prompt?.append).toContain('queues the action for the human');
+    expect(prompt?.append).toContain('never report one as done');
+    // And that a built-in denial is the human's answer, not an obstacle.
+    expect(prompt?.append).toContain('respect rather than work around');
   });
 
-  it('allows its own tools with their input intact and refuses everything else', async () => {
+  it('allows its own tools with their input intact without asking anyone', async () => {
     const { toolset } = stubToolset();
-    const { captured } = await runTurn(successStream(), toolset);
-    const callOpts = {} as Parameters<NonNullable<Options['canUseTool']>>[2];
+    let asked = 0;
+    const { captured } = await runTurn(successStream(), toolset, undefined, {
+      authorizeTool: () => {
+        asked += 1;
+        return Promise.resolve({ allow: false });
+      },
+    });
 
     const allowed = await captured?.canUseTool?.(
       `${OVERSEER_TOOL_PREFIX}list_runs`,
@@ -156,11 +186,94 @@ describe('ClaudeOverseer session wiring', () => {
       behavior: 'allow',
       updatedInput: { limit: 3 },
     });
+    expect(asked).toBe(0);
+  });
 
-    for (const forbidden of ['Bash', 'Read', 'mcp__dispatch__task_save']) {
-      const denied = await captured?.canUseTool?.(forbidden, {}, callOpts);
+  it('routes every other tool through authorizeTool and runs it only on allow', async () => {
+    const { toolset } = stubToolset();
+    const seen: unknown[] = [];
+    const answers: { allow: boolean; reason?: string }[] = [
+      { allow: true },
+      { allow: false, reason: 'not on main, thanks' },
+      { allow: false },
+    ];
+    const { captured } = await runTurn(successStream(), toolset, undefined, {
+      authorizeTool: (request) => {
+        seen.push(request);
+        return Promise.resolve(answers.shift() ?? { allow: false });
+      },
+    });
+
+    const allowed = await captured?.canUseTool?.(
+      'Bash',
+      { command: 'git status' },
+      callOpts
+    );
+    expect(allowed).toEqual({
+      behavior: 'allow',
+      updatedInput: { command: 'git status' },
+    });
+    expect(seen[0]).toEqual({
+      requestId: 'req-1',
+      toolName: 'Bash',
+      input: { command: 'git status' },
+    });
+
+    // A refusal carries the human's reason to the model verbatim...
+    const denied = await captured?.canUseTool?.(
+      'Edit',
+      { file_path: 'a.ts' },
+      callOpts
+    );
+    expect(denied).toEqual({
+      behavior: 'deny',
+      message: 'not on main, thanks',
+    });
+    // ...and a bare refusal still says who refused.
+    const bare = await captured?.canUseTool?.('Read', {}, callOpts);
+    expect(bare).toEqual({ behavior: 'deny', message: 'denied by user' });
+  });
+
+  it('refuses every built-in tool when there is no one to ask', async () => {
+    const { toolset } = stubToolset();
+    const { captured } = await runTurn(successStream(), toolset);
+    for (const tool of ['Bash', 'Read', 'mcp__dispatch__task_save']) {
+      const denied = await captured?.canUseTool?.(tool, {}, callOpts);
       expect(denied?.behavior).toBe('deny');
     }
+  });
+
+  it('reports built-in tool calls from assistant messages, not its own', async () => {
+    const { toolset } = stubToolset();
+    const stream = async function* stream() {
+      yield { type: 'system', subtype: 'init', session_id: 'sess-1' };
+      yield {
+        type: 'assistant',
+        session_id: 'sess-1',
+        message: {
+          content: [
+            { type: 'text', text: 'let me look' },
+            { type: 'tool_use', name: 'Bash', input: { command: 'ls' } },
+            {
+              type: 'tool_use',
+              name: `${OVERSEER_TOOL_PREFIX}list_runs`,
+              input: {},
+            },
+          ],
+        },
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        session_id: 'sess-1',
+        result: 'two files',
+      };
+    };
+    const reported: [string, unknown][] = [];
+    await runTurn(stream, toolset, undefined, {
+      onToolUse: (name, input) => reported.push([name, input]),
+    });
+    expect(reported).toEqual([['Bash', { command: 'ls' }]]);
   });
 
   it('returns the reply and session id, and resumes the prior session on a follow-up', async () => {
@@ -173,7 +286,7 @@ describe('ClaudeOverseer session wiring', () => {
       successStream({ session_id: 'sess-2' }),
       toolset,
       (overseer, tools) =>
-        overseer.sendMessage('sess-1', 'and now?', tools, 'm-1')
+        overseer.sendMessage('sess-1', 'and now?', tools, { model: 'm-1' })
     );
     expect(followUp.captured?.resume).toBe('sess-1');
     expect(followUp.captured?.model).toBe('m-1');

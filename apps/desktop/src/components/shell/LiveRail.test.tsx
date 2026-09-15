@@ -33,6 +33,7 @@ function overseerRecord(over: Partial<OverseerRecord> = {}): OverseerRecord {
     state: 'ready',
     messages: [],
     pendingActions: [],
+    pendingApprovals: [],
     undeliveredDecisions: [],
     createdAt: '2026-08-10T00:00:00Z',
     updatedAt: '2026-08-10T00:00:05Z',
@@ -62,7 +63,11 @@ function overseerSession(over: Partial<OverseerSession> = {}): OverseerSession {
     sendError: null,
     confirmAction: () => Promise.resolve(),
     decidingActionId: null,
+    decideApproval: () => Promise.resolve(),
+    decidingRequestId: null,
     decideError: null,
+    model: 'claude-opus-5',
+    setModel: () => {},
     reset: () => {},
     draft: '',
     setDraft: () => {},
@@ -641,4 +646,39 @@ test('a live run that fanned out shows its running/total sub-agent count', () =>
   expect(screen.getByLabelText('5 of 12 sub-agents running').textContent).toBe(
     '5/12'
   );
+});
+
+// A built-in call the turn is parked on counts exactly like a queued action:
+// the tab badge and the collapsed strip must not go quiet while the session
+// is blocked on the human.
+test('a parked tool call counts toward the Overseer badge and names the waiting row', () => {
+  const overseer = overseerSession({
+    conversationId: 'w-1',
+    record: overseerRecord({
+      state: 'running',
+      pendingApprovals: [
+        {
+          requestId: 'req-1',
+          toolName: 'Bash',
+          input: { command: 'git status' },
+          summary: 'Bash: git status',
+          requestedAt: '2026-08-10T00:00:01Z',
+        },
+      ],
+    }),
+  });
+  render(
+    <LiveRail
+      runs={[]}
+      attentionCount={0}
+      overseer={overseer}
+      daemonReady
+      onOpenTask={() => {}}
+      onOpenInbox={() => {}}
+      onOpenOverseer={() => {}}
+      collapsed={false}
+    />
+  );
+  expect(screen.getByRole('tab', { name: 'Overseer 1' })).toBeDefined();
+  expect(screen.getByText('Bash: git status')).toBeDefined();
 });

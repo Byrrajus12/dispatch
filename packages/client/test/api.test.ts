@@ -295,4 +295,69 @@ describe('overseer methods', () => {
       stub.restore();
     }
   });
+
+  it('startOverseer includes model when the caller picks one', async () => {
+    const stub = stubFetch();
+    try {
+      await createApiClient('http://example.test').startOverseer('hi', {
+        model: 'claude-fable-5-1',
+      });
+      expect(sentJson(stub.calls[0])).toEqual({
+        prompt: 'hi',
+        model: 'claude-fable-5-1',
+      });
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('decideOverseerApproval POSTs /api/overseer/:id/approvals/:requestId with the decision', async () => {
+    const stub = stubFetch();
+    try {
+      await createApiClient('http://example.test').decideOverseerApproval(
+        'wc-1',
+        'req-3',
+        { allow: false, reason: 'not that file' }
+      );
+      expect(stub.calls).toHaveLength(1);
+      expect(stub.calls[0].url).toBe(
+        'http://example.test/api/overseer/wc-1/approvals/req-3'
+      );
+      expect(stub.calls[0].init?.method).toBe('POST');
+      expect(sentJson(stub.calls[0])).toEqual({
+        allow: false,
+        reason: 'not that file',
+      });
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+describe('startPlan', () => {
+  it('POSTs /api/plan with just the prompt by default', async () => {
+    const stub = stubFetch();
+    try {
+      await createApiClient('http://example.test').startPlan('build it');
+      expect(stub.calls[0].url).toBe('http://example.test/api/plan');
+      expect(sentJson(stub.calls[0])).toEqual({ prompt: 'build it' });
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('includes model when the composer picks one', async () => {
+    const stub = stubFetch();
+    try {
+      await createApiClient('http://example.test').startPlan('build it', {
+        model: 'claude-fable-5-1',
+      });
+      expect(sentJson(stub.calls[0])).toEqual({
+        prompt: 'build it',
+        model: 'claude-fable-5-1',
+      });
+    } finally {
+      stub.restore();
+    }
+  });
 });

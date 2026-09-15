@@ -1,16 +1,20 @@
 import type {
   OverseerAction,
+  OverseerApproval,
   OverseerMessage,
   OverseerRecord,
 } from '@dispatch/client';
 
 // One rendered row of a overseer conversation, flattened from the record's
 // transcript the same way planThread.ts flattens a plan's. Beyond the plan
-// thread's message/pending/failed rows, the overseer transcript carries two more
-// kinds: `tool` (a read-only status call the assistant made mid-turn) and the
-// action lifecycle, which splits into `confirm` (a queued mutation still
-// awaiting the human — rendered as the approve/deny card) and `outcome` (a
-// decision that already happened, kept as the audit line it is).
+// thread's message/pending/failed rows, the overseer transcript carries three
+// more kinds: `tool` (a tool call the assistant made mid-turn — a status tool
+// or a built-in one), the action lifecycle, which splits into `confirm` (a
+// queued mutation still awaiting the human — rendered as the approve/deny
+// card) and `outcome` (a decision that already happened, kept as the audit
+// line it is), and the approval lifecycle: `approve` (a built-in tool call
+// the running turn is blocked on — the allow/deny card) settling into the
+// same `outcome` rows.
 export type OverseerThreadItem =
   | {
       kind: 'message';
@@ -23,7 +27,7 @@ export type OverseerThreadItem =
   | {
       kind: 'outcome';
       key: string;
-      outcome: 'applied' | 'denied' | 'failed';
+      outcome: 'applied' | 'allowed' | 'denied' | 'failed';
       text: string;
       at: string;
     }
@@ -35,6 +39,7 @@ export type OverseerThreadItem =
        * action came back to `pending` for a retry, and the card should say why. */
       failure: string | null;
     }
+  | { kind: 'approve'; key: string; approval: OverseerApproval }
   | { kind: 'pending'; key: string }
   | { kind: 'failed'; key: string; error: string };
 
@@ -60,6 +65,9 @@ export function buildOverseerThread(
   if (record === undefined) return [];
 
   const pendingById = new Map(record.pendingActions.map((a) => [a.id, a]));
+  const parkedById = new Map(
+    record.pendingApprovals.map((a) => [a.requestId, a])
+  );
   // The transcript index of each still-pending action's newest lifecycle row —
   // the one position its confirm card renders at.
   const lastActionRow = new Map<string, number>();
@@ -73,11 +81,20 @@ export function buildOverseerThread(
 
   const items: OverseerThreadItem[] = [];
   const confirmEmitted = new Set<string>();
+  const approveEmitted = new Set<string>();
   record.messages.forEach((message, i) => {
-    const item = buildRow(record, message, i, pendingById, lastActionRow);
+    const item = buildRow(
+      record,
+      message,
+      i,
+      pendingById,
+      lastActionRow,
+      parkedById
+    );
     if (item !== null) {
       items.push(item);
       if (item.kind === 'confirm') confirmEmitted.add(item.action.id);
+      if (item.kind === 'approve') approveEmitted.add(item.approval.requestId);
     }
   });
 
@@ -95,7 +112,21 @@ export function buildOverseerThread(
     }
   }
 
-  if (record.state === 'running') {
+  // Same guarantee for a parked built-in call: the turn is blocked on it, so
+  // it must be decidable even if its transcript row somehow went missing.
+  for (const approval of record.pendingApprovals) {
+    if (!approveEmitted.has(approval.requestId)) {
+      items.push({
+        kind: 'approve',
+        key: `${record.id}-approve-${approval.requestId}`,
+        approval,
+      });
+    }
+  }
+
+  // A running turn parked on a call is waiting on the human, not working —
+  // the card says so, and a spinner under it would say the opposite.
+  if (record.state === 'running' && record.pendingApprovals.length === 0) {
     items.push({ kind: 'pending', key: `${record.id}-pending` });
   } else if (record.state === 'failed') {
     items.push({
@@ -118,7 +149,8 @@ function buildRow(
   message: OverseerMessage,
   index: number,
   pendingById: Map<string, OverseerAction>,
-  lastActionRow: Map<string, number>
+  lastActionRow: Map<string, number>,
+  parkedById: Map<string, OverseerApproval>
 ): OverseerThreadItem | null {
   const key = `${record.id}-msg-${index}`;
   if (message.role === 'user' || message.role === 'assistant') {
@@ -138,6 +170,32 @@ function buildRow(
       text: message.text,
       at: message.at,
     };
+  }
+
+  // `approval` rows. A parked call renders as its allow/deny card; a decided
+  // one keeps its decision row and drops the stale "parked" row it replaced.
+  if (message.role === 'approval') {
+    const parked =
+      message.requestId !== undefined
+        ? parkedById.get(message.requestId)
+        : undefined;
+    if (parked !== undefined) {
+      return {
+        kind: 'approve',
+        key: `${record.id}-approve-${parked.requestId}`,
+        approval: parked,
+      };
+    }
+    if (message.outcome === 'allowed' || message.outcome === 'denied') {
+      return {
+        kind: 'outcome',
+        key,
+        outcome: message.outcome,
+        text: message.text,
+        at: message.at,
+      };
+    }
+    return null;
   }
 
   // `action` rows. Still awaiting the human: the newest row for that action

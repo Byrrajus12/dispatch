@@ -10,6 +10,7 @@ const props = {
   projectView: 'inbox' as const,
   globalView: 'all-agents' as const,
   liveAgentCount: 3,
+  overseerPendingCount: 0,
   badges: { board: 2 },
   spendToday: 1.5,
   onSetProjectView: () => {},

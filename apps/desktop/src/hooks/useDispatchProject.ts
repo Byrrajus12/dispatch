@@ -497,7 +497,9 @@ export interface DispatchProjectData {
   /** Lands a finished epic branch on the default base — one PR or one local
    * merge, decided server-side off the project's `pr` capability. */
   handleLandEpic: (epicId: string) => Promise<void>;
-  handleSubmitPrompt: (prompt: string) => Promise<string>;
+  /** Opens a plan. `model` is the composer's pick for it, over the configured
+   * `plan` role's model; the plan keeps it for every follow-up. */
+  handleSubmitPrompt: (prompt: string, model?: string) => Promise<string>;
   /** Post a follow-up message onto the active plan conversation. Returns the
    * 202 record (already flipped back to `running`); the assistant's reply +
    * refined proposal land via the `plan.changed` broadcast and refetch. */
@@ -2059,9 +2061,12 @@ export function useDispatchProject(
   // Returns the new plan's id so PlansView can add it to its local session history
   // immediately, without waiting on a refetch.
   const handleSubmitPrompt = useCallback(
-    async (prompt: string): Promise<string> => {
+    async (prompt: string, model?: string): Promise<string> => {
       if (client === null) throw new Error('dispatchd client not ready');
-      const { planId: newPlanId } = await client.startPlan(prompt);
+      const { planId: newPlanId } = await client.startPlan(
+        prompt,
+        model !== undefined ? { model } : {}
+      );
       setPlanId(newPlanId);
       return newPlanId;
     },

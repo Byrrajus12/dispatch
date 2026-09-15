@@ -85,12 +85,20 @@ export function LiveRail({
     (overseer.record === undefined
       ? overseer.recordError === null
       : overseer.record.state === 'running');
-  // Mutations queued for the human. A settled turn with a pending action is
-  // idle, not running — so this is a separate signal: the section must not go
-  // quiet while an approval is stranded behind it.
-  const overseerPendingCount = overseer.record?.pendingActions.length ?? 0;
-  // The oldest queued action — what the Runs-tab waiting row describes.
-  const firstPendingAction = overseer.record?.pendingActions[0];
+  // Mutations queued for the human, plus built-in calls the running turn is
+  // parked on. A settled turn with a pending action is idle, not running — so
+  // this is a separate signal: the section must not go quiet while an
+  // approval is stranded behind it.
+  const overseerPendingCount =
+    (overseer.record?.pendingActions.length ?? 0) +
+    (overseer.record?.pendingApprovals.length ?? 0);
+  // What the Runs-tab waiting row describes: a parked call first (the turn is
+  // blocked on it right now), else the oldest queued action.
+  const firstParked = overseer.record?.pendingApprovals[0];
+  const firstPendingAction =
+    firstParked !== undefined
+      ? { summary: firstParked.summary, createdAt: firstParked.requestedAt }
+      : overseer.record?.pendingActions[0];
   const overseerRow = overseerTurnLive || overseerPendingCount > 0;
   // What "agents running" means everywhere in this section: the run rows plus
   // a overseer turn in flight — the collapsed strip and the expanded Runs tab

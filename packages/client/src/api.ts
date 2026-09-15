@@ -877,6 +877,9 @@ export interface PlanRecord {
   /** `enrich` for a thread expanding an existing task, inbox item or note;
    *  `plan` for the ordinary prompt-first flow. */
   role: PlanRole;
+  /** The model this plan was opened on when the composer chose one; every
+   *  follow-up reuses it. Absent: the configured `plan` role's model. */
+  model?: string;
   state: PlanState;
   messages: PlanMessage[];
   proposal?: PlanProposal;
@@ -939,22 +942,42 @@ export type OverseerState = 'running' | 'ready' | 'failed';
 
 // Mirrors OverseerMessage in packages/server/src/orchestrator/overseer.ts — one
 // transcript entry. `user`/`assistant` are the conversation proper; `tool`
-// records a read-only tool call the assistant made mid-turn; `action` records
-// a mutating tool call's life: queued at `pending`, then
-// `applied`/`denied`/`failed` once a human decides.
+// records a tool call the assistant made mid-turn (a registry status tool or
+// a built-in one); `action` records a mutating registry call's life: queued
+// at `pending`, then `applied`/`denied`/`failed` once a human decides;
+// `approval` records a built-in tool call's life: parked at `pending`, then
+// `allowed`/`denied`.
 export interface OverseerMessage {
-  role: 'user' | 'assistant' | 'tool' | 'action';
+  role: 'user' | 'assistant' | 'tool' | 'action' | 'approval';
   text: string;
   at: string;
-  /** `tool` and `action` entries: which overseer tool the entry is about. */
+  /** `tool`, `action` and `approval` entries: which tool the entry is about. */
   tool?: string;
   /** `action` entries: the OverseerAction this entry reports on. */
   actionId?: string;
+  /** `approval` entries: the OverseerApproval this entry reports on. */
+  requestId?: string;
   /**
-   * `action` entries only. `failed` means the human approved but the effect
-   * itself threw — the action stays pending so it can be retried.
+   * `action` and `approval` entries only. `failed` means the human approved
+   * an action but the effect itself threw — the action stays pending so it
+   * can be retried. `allowed` is an approval's yes; `applied` an action's.
    */
-  outcome?: 'pending' | 'applied' | 'denied' | 'failed';
+  outcome?: 'pending' | 'applied' | 'allowed' | 'denied' | 'failed';
+}
+
+// Mirrors OverseerApproval in packages/server/src/orchestrator/overseer.ts —
+// a built-in tool call (Bash, Edit, a project MCP tool) the overseer's running
+// turn is blocked on until a human decides it through
+// `decideOverseerApproval`. Allowing runs the call at once.
+export interface OverseerApproval {
+  /** The backend's handle for the call; what `decideOverseerApproval` names. */
+  requestId: string;
+  toolName: string;
+  /** The call's input, exactly as the tool will receive it if allowed. */
+  input: unknown;
+  /** One line, safe to render verbatim, saying what the call would do. */
+  summary: string;
+  requestedAt: string;
 }
 
 // Mirrors OverseerAction in packages/server/src/orchestrator/overseerTools.ts —
@@ -979,6 +1002,9 @@ export interface OverseerRecord {
   prompt: string;
   /** Which registered backend this conversation talks to; follow-ups re-resolve it. */
   backendName: string;
+  /** The model this conversation was opened on when the composer chose one;
+   *  every follow-up reuses it. Absent: the configured `overseer` role's model. */
+  model?: string;
   state: OverseerState;
   messages: OverseerMessage[];
   /**
@@ -986,6 +1012,11 @@ export interface OverseerRecord {
    * on yet — the confirmation queue the chat UI renders.
    */
   pendingActions: OverseerAction[];
+  /**
+   * Built-in tool calls the running turn is blocked on, oldest first. Only
+   * non-empty while `state` is `running`.
+   */
+  pendingApprovals: OverseerApproval[];
   /**
    * Decisions the human has made since the last turn, not yet shown to the
    * model; drained into the next `sendOverseerMessage` turn server-side.
@@ -2088,7 +2119,12 @@ export interface ApiClient {
   // for it to move to `ready`/`failed`. `confirmPlan` sends the (possibly
   // client-edited) proposal back verbatim; the server re-validates it from
   // scratch and is the only place that actually writes the epic/tasks.
-  startPlan(prompt: string): Promise<{ planId: string }>;
+  // `model` is the composer's pick for this plan, over the configured `plan`
+  // role's model; the plan keeps it for every follow-up.
+  startPlan(
+    prompt: string,
+    opts?: { model?: string }
+  ): Promise<{ planId: string }>;
   fetchPlan(planId: string): Promise<PlanRecord>;
   /** Every plan's summary, newest activity first — the Plans page's history.
    * Persisted server-side, so it survives restarts and spans windows. */
@@ -2103,9 +2139,11 @@ export interface ApiClient {
   // full record already at `running`; the assistant's reply lands via
   // `overseer.changed`. `backend` follows createRun's `executor` contract:
   // optional, defaults to 'claude' server-side, 400s on an unknown name.
+  // `model` is the composer's pick for this conversation, over the configured
+  // `overseer` role's model; the conversation keeps it for every follow-up.
   startOverseer(
     prompt: string,
-    opts?: { backend?: string }
+    opts?: { backend?: string; model?: string }
   ): Promise<OverseerRecord>;
   getOverseer(id: string): Promise<OverseerRecord>;
   // Sends a follow-up on an existing conversation. Resolves (202) with the
@@ -2123,6 +2161,16 @@ export interface ApiClient {
     conversationId: string,
     actionId: string,
     approve: boolean
+  ): Promise<OverseerRecord>;
+  // Decides one built-in tool call the overseer's running turn is parked on
+  // (see OverseerRecord.pendingApprovals). Same body as `approveRun`: allowing
+  // runs the call at once, `scope: 'session'` also pre-approves the tool for
+  // the rest of the conversation, and `reason` reaches the model on a deny.
+  // 404s an unknown conversation or a request that isn't parked on it.
+  decideOverseerApproval(
+    conversationId: string,
+    requestId: string,
+    decision: { allow: boolean; scope?: 'once' | 'session'; reason?: string }
   ): Promise<OverseerRecord>;
   // Phase 5 P2: epic-level concurrent dispatch. `concurrency` defaults
   // server-side to the project's `orchestrator.epicConcurrency` config.
@@ -2618,10 +2666,13 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
         method: 'POST',
         ...jsonBody({ granted, reason }),
       }),
-    startPlan: (prompt) =>
+    startPlan: (prompt, opts = {}) =>
       request(target, '/api/plan', {
         method: 'POST',
-        ...jsonBody({ prompt }),
+        ...jsonBody({
+          prompt,
+          ...(opts.model !== undefined ? { model: opts.model } : {}),
+        }),
       }),
     fetchPlan: (planId) => request(target, `/api/plan/${planId}`),
     fetchPlans: () => request(target, '/api/plans'),
@@ -2641,6 +2692,7 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
         ...jsonBody({
           prompt,
           ...(opts.backend !== undefined ? { backend: opts.backend } : {}),
+          ...(opts.model !== undefined ? { model: opts.model } : {}),
         }),
       }),
     getOverseer: (id) => request(target, `/api/overseer/${id}`),
@@ -2656,6 +2708,15 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
         {
           method: 'POST',
           ...jsonBody({ approve }),
+        }
+      ),
+    decideOverseerApproval: (conversationId, requestId, decision) =>
+      request(
+        target,
+        `/api/overseer/${conversationId}/approvals/${requestId}`,
+        {
+          method: 'POST',
+          ...jsonBody(decision),
         }
       ),
     startEpic: (epicId, opts = {}) =>

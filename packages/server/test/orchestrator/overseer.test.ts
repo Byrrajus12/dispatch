@@ -1,4 +1,4 @@
-import { TaskStore } from '@dispatch/core';
+import { TaskStore, updateConfig } from '@dispatch/core';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,6 +17,7 @@ import type {
   OverseerBackend,
   OverseerToolset,
   OverseerTurn,
+  OverseerTurnOptions,
 } from '../../src/orchestrator/overseerBackend.js';
 import { FakeOverseer } from '../../src/orchestrator/overseers/fake.js';
 import type { FakeOverseerScript } from '../../src/orchestrator/overseers/fake.js';
@@ -29,6 +30,7 @@ import {
   OrchestratorConflictError,
   OrchestratorNotFoundError,
 } from '../../src/orchestrator/types.js';
+import type { ApprovalDecision } from '../../src/orchestrator/types.js';
 import { initGitRepo } from './helpers.js';
 
 let fakeHome: string;
@@ -627,5 +629,286 @@ describe('OverseerManager queued actions', () => {
     await waitFor(() => h.manager.get(opened.id).state === 'ready');
     expect(retry.prompts[0]).toContain('approved');
     expect(h.manager.get(opened.id).undeliveredDecisions).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Built-in tool gate
+// ---------------------------------------------------------------------------
+
+// A backend standing in for a full Claude Code session: each turn asks the
+// manager about the built-in calls it is scripted to make, in order, and
+// replies with what it was told. `decisions` is what a real session would act
+// on — a call is "run" only if the answer was allow.
+class GatedBackend implements OverseerBackend {
+  readonly decisions: ({ toolName: string } & ApprovalDecision)[] = [];
+  options: OverseerTurnOptions | undefined;
+
+  constructor(
+    private readonly calls: { toolName: string; input: unknown }[],
+    private readonly reply = 'done'
+  ) {}
+
+  start(
+    _prompt: string,
+    _toolset: OverseerToolset,
+    options?: OverseerTurnOptions
+  ): Promise<OverseerTurn> {
+    return this.turn(options);
+  }
+
+  sendMessage(
+    _sessionId: string | undefined,
+    _message: string,
+    _toolset: OverseerToolset,
+    options?: OverseerTurnOptions
+  ): Promise<OverseerTurn> {
+    return this.turn(options);
+  }
+
+  private async turn(options?: OverseerTurnOptions): Promise<OverseerTurn> {
+    this.options = options;
+    let n = 0;
+    for (const call of this.calls) {
+      n += 1;
+      options?.onToolUse?.(call.toolName, call.input);
+      const decision = (await options?.authorizeTool?.({
+        requestId: `req-${n}`,
+        toolName: call.toolName,
+        input: call.input,
+      })) ?? { allow: false };
+      this.decisions.push({ toolName: call.toolName, ...decision });
+    }
+    return { reply: this.reply, sessionId: 'sess' };
+  }
+}
+
+function makeGated(
+  calls: { toolName: string; input: unknown }[]
+): ManagerHarness & { gated: GatedBackend } {
+  const h = makeManager({ ok: true, reply: 'unused' });
+  const gated = new GatedBackend(calls);
+  h.manager.registerBackend('gated', gated);
+  return { ...h, gated };
+}
+
+describe('OverseerManager built-in tool gate', () => {
+  it('parks a built-in call on the record and runs it once the human allows', async () => {
+    const h = makeGated([
+      { toolName: 'Bash', input: { command: 'git status' } },
+    ]);
+
+    const started = h.manager.start('what changed?', 'gated');
+    await waitFor(() => h.manager.get(started.id).pendingApprovals.length > 0);
+
+    const parked = h.manager.get(started.id);
+    expect(parked.state).toBe('running');
+    expect(parked.pendingApprovals).toEqual([
+      {
+        requestId: 'req-1',
+        toolName: 'Bash',
+        input: { command: 'git status' },
+        summary: 'Bash: git status',
+        requestedAt: expect.any(String),
+      },
+    ]);
+    // The transcript shows the call (from onToolUse) and the parked request.
+    expect(parked.messages.map((m) => `${m.role}:${m.outcome ?? ''}`)).toEqual([
+      'user:',
+      'tool:',
+      'approval:pending',
+    ]);
+    // Nothing ran while the human was deciding.
+    expect(h.gated.decisions).toEqual([]);
+
+    const decided = h.manager.decideApproval(started.id, 'req-1', {
+      allow: true,
+    });
+    expect(decided.pendingApprovals).toEqual([]);
+    expect(decided.messages.at(-1)).toMatchObject({
+      role: 'approval',
+      tool: 'Bash',
+      requestId: 'req-1',
+      outcome: 'allowed',
+      text: 'Allowed: Bash: git status',
+    });
+
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(h.gated.decisions).toEqual([{ toolName: 'Bash', allow: true }]);
+  });
+
+  it('hands a denial and its reason to the session', async () => {
+    const h = makeGated([{ toolName: 'Edit', input: { file_path: 'a.ts' } }]);
+    const started = h.manager.start('fix it', 'gated');
+    await waitFor(() => h.manager.get(started.id).pendingApprovals.length > 0);
+
+    const decided = h.manager.decideApproval(started.id, 'req-1', {
+      allow: false,
+      reason: 'not that file',
+    });
+    expect(decided.messages.at(-1)).toMatchObject({
+      role: 'approval',
+      outcome: 'denied',
+      text: 'Denied: Edit: a.ts — not that file',
+    });
+
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(h.gated.decisions).toEqual([
+      { toolName: 'Edit', allow: false, reason: 'not that file' },
+    ]);
+  });
+
+  it('allowing for the conversation skips the human for that tool afterwards', async () => {
+    const h = makeGated([
+      { toolName: 'Bash', input: { command: 'ls' } },
+      { toolName: 'Bash', input: { command: 'ls src' } },
+      { toolName: 'Read', input: { file_path: 'README.md' } },
+    ]);
+    const started = h.manager.start('look around', 'gated');
+    await waitFor(() => h.manager.get(started.id).pendingApprovals.length > 0);
+
+    h.manager.decideApproval(started.id, 'req-1', {
+      allow: true,
+      scope: 'session',
+    });
+    // The second Bash call never parks; the Read still does.
+    await waitFor(
+      () => h.manager.get(started.id).pendingApprovals[0]?.toolName === 'Read'
+    );
+    expect(h.gated.decisions).toEqual([
+      { toolName: 'Bash', allow: true, scope: 'session' },
+      { toolName: 'Bash', allow: true },
+    ]);
+    expect(
+      h.manager
+        .get(started.id)
+        .messages.find((m) => m.role === 'approval' && m.outcome === 'allowed')
+    ).toMatchObject({ text: 'Allowed for this conversation: Bash: ls' });
+    h.manager.decideApproval(started.id, 'req-3', { allow: false });
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+  });
+
+  it('never lets a session grant or acceptEdits wave an irreversible command through', async () => {
+    const h = makeGated([
+      { toolName: 'Bash', input: { command: 'git status' } },
+      { toolName: 'Bash', input: { command: 'git push --force origin main' } },
+    ]);
+    const started = h.manager.start('ship it', 'gated');
+    await waitFor(() => h.manager.get(started.id).pendingApprovals.length > 0);
+    h.manager.decideApproval(started.id, 'req-1', {
+      allow: true,
+      scope: 'session',
+    });
+    // The force-push parks despite the grant.
+    await waitFor(
+      () => h.manager.get(started.id).pendingApprovals[0]?.requestId === 'req-2'
+    );
+    h.manager.decideApproval(started.id, 'req-2', { allow: false });
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(h.gated.decisions.map((d) => d.allow)).toEqual([true, false]);
+  });
+
+  it('under acceptEdits the edit tools run without asking and the rest still park', async () => {
+    updateConfig(repo, { permissionMode: 'acceptEdits' });
+    const h = makeGated([
+      { toolName: 'Edit', input: { file_path: 'a.ts' } },
+      { toolName: 'Bash', input: { command: 'bun test' } },
+    ]);
+    const started = h.manager.start('fix it', 'gated');
+    await waitFor(() => h.manager.get(started.id).pendingApprovals.length > 0);
+    expect(h.gated.decisions).toEqual([{ toolName: 'Edit', allow: true }]);
+    expect(h.manager.get(started.id).pendingApprovals[0]?.toolName).toBe(
+      'Bash'
+    );
+    expect(h.gated.options?.permissionMode).toBe('acceptEdits');
+    h.manager.decideApproval(started.id, 'req-2', { allow: true });
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+  });
+
+  it('refuses a decision for a request that is not parked on that conversation', async () => {
+    const h = makeGated([{ toolName: 'Bash', input: { command: 'ls' } }]);
+    const a = h.manager.start('a', 'gated');
+    await waitFor(() => h.manager.get(a.id).pendingApprovals.length > 0);
+    const b = h.manager.start('b', 'fake');
+    await waitFor(() => h.manager.get(b.id).state === 'ready');
+
+    expect(() =>
+      h.manager.decideApproval(b.id, 'req-1', { allow: true })
+    ).toThrow(OrchestratorNotFoundError);
+    expect(() =>
+      h.manager.decideApproval(a.id, 'req-9', { allow: true })
+    ).toThrow(OrchestratorNotFoundError);
+    // Still parked, still decidable on the right conversation.
+    expect(h.manager.get(a.id).pendingApprovals).toHaveLength(1);
+    h.manager.decideApproval(a.id, 'req-1', { allow: true });
+    // A second decision on the same request finds nothing.
+    expect(() =>
+      h.manager.decideApproval(a.id, 'req-1', { allow: true })
+    ).toThrow(OrchestratorNotFoundError);
+  });
+
+  it('denies whatever is still parked when the turn dies underneath it', async () => {
+    // A backend that parks a call and then throws before it is decided.
+    const dying: OverseerBackend = {
+      start: async (_prompt, _toolset, options) => {
+        void options?.authorizeTool?.({
+          requestId: 'req-x',
+          toolName: 'Bash',
+          input: { command: 'ls' },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        throw new Error('session crashed');
+      },
+      sendMessage: () => Promise.reject(new Error('unused')),
+    };
+    const h = makeManager({ ok: true, reply: 'unused' });
+    h.manager.registerBackend('dying', dying);
+    const started = h.manager.start('hi', 'dying');
+    await waitFor(() => h.manager.get(started.id).state === 'failed');
+
+    const failed = h.manager.get(started.id);
+    expect(failed.pendingApprovals).toEqual([]);
+    expect(failed.messages.at(-1)).toMatchObject({
+      role: 'approval',
+      requestId: 'req-x',
+      outcome: 'denied',
+    });
+    expect(() =>
+      h.manager.decideApproval(started.id, 'req-x', { allow: true })
+    ).toThrow(OrchestratorNotFoundError);
+  });
+});
+
+describe('OverseerManager turn options', () => {
+  it("runs on the overseer role's configured model and the run policy by default", async () => {
+    updateConfig(repo, {
+      models: { overseer: 'claude-fable-5-1' },
+      maxTurns: 12,
+      maxBudgetUsd: 3,
+    });
+    const h = makeGated([]);
+    const started = h.manager.start('hi', 'gated');
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(started.model).toBeUndefined();
+    expect(h.gated.options).toMatchObject({
+      model: 'claude-fable-5-1',
+      permissionMode: 'auto',
+      maxTurns: 12,
+      maxBudgetUsd: 3,
+    });
+  });
+
+  it('keeps a chosen model on the record and reuses it for every follow-up', async () => {
+    const h = makeGated([]);
+    const started = h.manager.start('hi', 'gated', 'claude-fable-5-1');
+    expect(started.model).toBe('claude-fable-5-1');
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(h.gated.options?.model).toBe('claude-fable-5-1');
+
+    // A settings change in between does not move an open conversation.
+    updateConfig(repo, { models: { overseer: 'claude-haiku-4-5' } });
+    h.manager.sendMessage(started.id, 'and?');
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(h.gated.options?.model).toBe('claude-fable-5-1');
   });
 });

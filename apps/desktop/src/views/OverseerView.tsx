@@ -20,9 +20,12 @@ interface OverseerViewProps {
  */
 export function OverseerView({ data, overseer }: OverseerViewProps) {
   // Same gate as OverseerChat's compact reset: a queued mutation must stay
-  // decidable. `record` is already vetoed by useOverseerSession when the daemon
-  // says the conversation is gone, so this cannot lock on a ghost action.
-  const hasPendingAction = (overseer.record?.pendingActions.length ?? 0) > 0;
+  // decidable, and a parked built-in call would block its session for good.
+  // `record` is already vetoed by useOverseerSession when the daemon says the
+  // conversation is gone, so this cannot lock on a ghost.
+  const hasPendingAction =
+    (overseer.record?.pendingActions.length ?? 0) > 0 ||
+    (overseer.record?.pendingApprovals.length ?? 0) > 0;
 
   if (data.portLoading || data.portError || data.client === null) {
     return (

@@ -17,6 +17,7 @@ function overseerRecord(over: Partial<OverseerRecord> = {}): OverseerRecord {
     state: 'ready',
     messages: [],
     pendingActions: [],
+    pendingApprovals: [],
     undeliveredDecisions: [],
     createdAt: '2026-08-10T00:00:00Z',
     updatedAt: '2026-08-10T00:00:05Z',
@@ -46,7 +47,11 @@ function overseerSession(over: Partial<OverseerSession> = {}): OverseerSession {
     sendError: null,
     confirmAction: () => Promise.resolve(),
     decidingActionId: null,
+    decideApproval: () => Promise.resolve(),
+    decidingRequestId: null,
     decideError: null,
+    model: 'claude-opus-5',
+    setModel: () => {},
     reset: () => {},
     draft: '',
     setDraft: () => {},
@@ -494,4 +499,93 @@ test('a turn settling in place re-pins to the bottom', () => {
   // Still two rows — only the identity of the last one changed.
   expect(log.children).toHaveLength(2);
   expect(log.scrollTop).toBe(512);
+});
+
+// A parked built-in call is the one row where the session is blocked right
+// now: the card offers the three answers a run's approval does, and each one
+// reaches the session's decideApproval with the matching decision.
+test('a parked tool call renders an allow/deny card wired to decideApproval', async () => {
+  const decisions: unknown[] = [];
+  const overseer = overseerSession({
+    conversationId: 'w-1',
+    record: overseerRecord({
+      state: 'running',
+      messages: [
+        {
+          role: 'user',
+          text: 'is the tree clean?',
+          at: '2026-08-10T00:00:00Z',
+        },
+        {
+          role: 'approval',
+          tool: 'Bash',
+          requestId: 'req-1',
+          outcome: 'pending',
+          text: 'Bash: git status',
+          at: '2026-08-10T00:00:01Z',
+        },
+      ],
+      pendingApprovals: [
+        {
+          requestId: 'req-1',
+          toolName: 'Bash',
+          input: { command: 'git status' },
+          summary: 'Bash: git status',
+          requestedAt: '2026-08-10T00:00:01Z',
+        },
+      ],
+    }),
+    decideApproval: (requestId, decision) => {
+      decisions.push([requestId, decision]);
+      return Promise.resolve();
+    },
+  });
+  render(<ChatWithDraft overseer={overseer} />);
+
+  expect(screen.getByText('Wants to run')).toBeDefined();
+  expect(screen.getByText('Bash: git status')).toBeDefined();
+  // Blocked on the human, so no "working" spinner row under the card.
+  expect(screen.queryByText('The overseer is working…')).toBeNull();
+
+  await clickAndSettle(
+    screen.getByRole('button', { name: 'Allow: Bash: git status' })
+  );
+  await clickAndSettle(
+    screen.getByRole('button', { name: 'Allow Bash for this conversation' })
+  );
+  await clickAndSettle(
+    screen.getByRole('button', { name: 'Deny: Bash: git status' })
+  );
+  expect(decisions).toEqual([
+    ['req-1', { allow: true }],
+    ['req-1', { allow: true, scope: 'session' }],
+    ['req-1', { allow: false }],
+  ]);
+});
+
+// The opening composer picks the model the conversation opens on; an open
+// conversation names the model it started on and offers no picker.
+test('the opening composer offers the model picker and an open conversation names its model', () => {
+  const picks: string[] = [];
+  const fresh = overseerSession({
+    model: 'claude-opus-5',
+    setModel: (id) => {
+      picks.push(id);
+    },
+  });
+  const first = render(<ChatWithDraft overseer={fresh} />);
+  const picker = screen.getByRole('button', { name: 'Overseer model' });
+  expect(picker.textContent).toContain('Opus 5');
+  first.unmount();
+
+  render(
+    <ChatWithDraft
+      overseer={overseerSession({
+        conversationId: 'w-1',
+        record: overseerRecord({ model: 'claude-fable-5-1' }),
+      })}
+    />
+  );
+  expect(screen.queryByRole('button', { name: 'Overseer model' })).toBeNull();
+  expect(screen.getByText(/Fable 5\.1/)).toBeDefined();
 });

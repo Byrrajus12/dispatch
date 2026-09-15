@@ -1,20 +1,26 @@
-import type { OverseerAction } from '@dispatch/client';
+import type { OverseerAction, OverseerApproval } from '@dispatch/client';
 import {
   Check,
   CircleAlert,
   Plus,
   Send,
   Shield,
+  TerminalSquare,
   Wrench,
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef } from 'react';
 
-import type { OverseerSession } from '../../hooks/useOverseerSession';
+import type {
+  OverseerApprovalDecision,
+  OverseerSession,
+} from '../../hooks/useOverseerSession';
 import { formatRelativeTimeFromIso } from '../../lib/format';
+import { modelLabel } from '../../lib/models';
 import type { OverseerThreadItem } from '../../lib/overseerThread';
 import { buildOverseerThread } from '../../lib/overseerThread';
 import { Markdown } from '../runs/Markdown';
+import { ModelPicker } from './ModelPicker';
 import { cn } from '@/lib/utils';
 import { Button } from '@/ui/button';
 import { Spinner } from '@/ui/spinner';
@@ -135,6 +141,77 @@ function OverseerConfirmCard({
   );
 }
 
+interface OverseerApproveCardProps {
+  approval: OverseerApproval;
+  /** A decision for *this* call is in flight — this card owns the spinner. */
+  deciding: boolean;
+  /** Some approval decision is in flight; every approve card locks. */
+  locked: boolean;
+  onDecide: (decision: OverseerApprovalDecision) => void;
+}
+
+/**
+ * A built-in tool call the overseer's turn is parked on — Bash, Edit, a
+ * project MCP tool — which is a different question from the confirm card
+ * above: nothing is queued for later, the session is blocked right now and
+ * allowing runs the call at once. Three answers rather than two, because
+ * "yes", "yes and stop asking about this tool" and "no" are genuinely
+ * different instructions, the same trio a run's approval offers.
+ */
+function OverseerApproveCard({
+  approval,
+  deciding,
+  locked,
+  onDecide,
+}: OverseerApproveCardProps) {
+  return (
+    <div className="flex flex-col gap-2 self-stretch rounded-md border border-sky-500/40 bg-sky-500/5 px-3 py-2.5">
+      <div className="flex items-center gap-1.5 text-[11px] font-medium tracking-wide text-sky-600 uppercase dark:text-sky-400">
+        <TerminalSquare className="size-3.5" />
+        Wants to run
+        <span className="text-muted-foreground font-mono font-normal normal-case">
+          {approval.toolName}
+        </span>
+      </div>
+      <p className="font-mono text-[12px] break-all">{approval.summary}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          disabled={locked}
+          onClick={() => onDecide({ allow: true })}
+          aria-label={`Allow: ${approval.summary}`}
+        >
+          {deciding ? (
+            <Spinner className="size-3.5" />
+          ) : (
+            <Check className="size-3.5" />
+          )}
+          Allow
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={locked}
+          onClick={() => onDecide({ allow: true, scope: 'session' })}
+          aria-label={`Allow ${approval.toolName} for this conversation`}
+        >
+          Allow for this conversation
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={locked}
+          onClick={() => onDecide({ allow: false })}
+          aria-label={`Deny: ${approval.summary}`}
+        >
+          <X className="size-3.5" />
+          Deny
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /** A decided action's audit line — kept in the transcript so "what actually
  * happened" survives the card it replaced. */
 function OverseerOutcomeRow({
@@ -142,7 +219,7 @@ function OverseerOutcomeRow({
   text,
   at,
 }: {
-  outcome: 'applied' | 'denied' | 'failed';
+  outcome: 'applied' | 'allowed' | 'denied' | 'failed';
   text: string;
   at: string;
 }) {
@@ -150,7 +227,7 @@ function OverseerOutcomeRow({
     <div
       className={cn(
         'flex items-start gap-2 self-start rounded-md border px-3 py-1.5 text-[12px]',
-        outcome === 'applied' &&
+        (outcome === 'applied' || outcome === 'allowed') &&
           'border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400',
         outcome === 'denied' &&
           'border-border bg-muted/40 text-muted-foreground',
@@ -158,7 +235,7 @@ function OverseerOutcomeRow({
           'border-destructive/30 bg-destructive/10 text-destructive'
       )}
     >
-      {outcome === 'applied' ? (
+      {outcome === 'applied' || outcome === 'allowed' ? (
         <Check className="size-3.5 shrink-0 translate-y-0.5" />
       ) : outcome === 'denied' ? (
         <X className="size-3.5 shrink-0 translate-y-0.5" />
@@ -215,6 +292,7 @@ export function OverseerChat({ overseer, compact = false }: OverseerChatProps) {
   // report the failure to nobody. One error at a time is plenty — per-card
   // error maps would complicate a state the failure row on the card covers.
   const decidingId = overseer.decidingActionId;
+  const decidingRequestId = overseer.decidingRequestId;
   const decideError = overseer.decideError;
 
   const thread = useMemo(
@@ -246,11 +324,15 @@ export function OverseerChat({ overseer, compact = false }: OverseerChatProps) {
       ? overseer.recordError === null
       : overseer.record.state === 'running');
 
-  // A queued mutation nobody has decided on. Gates the compact reset: dropping
-  // the conversation is the only way to lose the confirm card in the UI. No
-  // `recordError` guard needed — useOverseerSession clears `record` when the
-  // daemon says the conversation is gone, so this cannot lock on a ghost.
-  const hasPendingAction = (overseer.record?.pendingActions.length ?? 0) > 0;
+  // A queued mutation nobody has decided on, or a built-in call the turn is
+  // parked on. Gates the compact reset: dropping the conversation is the only
+  // way to lose the card in the UI, and a parked call would block its session
+  // for good. No `recordError` guard needed — useOverseerSession clears
+  // `record` when the daemon says the conversation is gone, so this cannot
+  // lock on a ghost.
+  const hasPendingAction =
+    (overseer.record?.pendingActions.length ?? 0) > 0 ||
+    (overseer.record?.pendingApprovals.length ?? 0) > 0;
 
   /**
    * Both composers' submit. Everything past the guard — clearing the draft,
@@ -272,6 +354,13 @@ export function OverseerChat({ overseer, compact = false }: OverseerChatProps) {
   // and the failure — so this is a plain forward rather than a wrapper.
   function decide(actionId: string, approve: boolean) {
     void overseer.confirmAction(actionId, approve);
+  }
+
+  function decideApproval(
+    requestId: string,
+    decision: OverseerApprovalDecision
+  ) {
+    void overseer.decideApproval(requestId, decision);
   }
 
   function renderRow(item: OverseerThreadItem) {
@@ -308,6 +397,18 @@ export function OverseerChat({ overseer, compact = false }: OverseerChatProps) {
             onDecide={(approve) => decide(item.action.id, approve)}
           />
         );
+      case 'approve':
+        return (
+          <OverseerApproveCard
+            key={item.key}
+            approval={item.approval}
+            deciding={decidingRequestId === item.approval.requestId}
+            locked={decidingRequestId !== null}
+            onDecide={(decision) =>
+              decideApproval(item.approval.requestId, decision)
+            }
+          />
+        );
       case 'outcome':
         return (
           <OverseerOutcomeRow
@@ -324,7 +425,7 @@ export function OverseerChat({ overseer, compact = false }: OverseerChatProps) {
             className="border-border bg-muted/40 text-muted-foreground flex items-center gap-2 self-start rounded-md border px-3 py-2 text-[13px]"
           >
             <Spinner className="text-primary size-3.5" />
-            The overseer is looking at the project…
+            The overseer is working…
           </div>
         );
       case 'failed':
@@ -351,8 +452,8 @@ export function OverseerChat({ overseer, compact = false }: OverseerChatProps) {
       >
         <p className="text-muted-foreground text-[13px]">
           {compact
-            ? 'Ask about runs, tasks, the queue. Actions wait for your approval.'
-            : 'Ask about this project — runs, tasks, the merge queue, what needs you. The overseer can also act (dispatch, cancel, approve), but every mutation waits for your explicit approval here first.'}
+            ? 'Ask about runs, tasks, the queue — or the code. Actions wait for your approval.'
+            : 'Ask about this project — runs, tasks, the merge queue, what needs you — or about the code itself: the overseer is a full agent session in the checkout and can read, search, run commands and edit. It can also act on the project (dispatch, cancel, approve), but every mutation waits for your explicit approval here first, and tool calls the permission policy does not settle pause for you to allow.'}
         </p>
         {sendError !== null && (
           <div className="border-destructive/30 bg-destructive/10 text-destructive flex items-center gap-2 rounded-md border px-3 py-2 text-[13px]">
@@ -374,7 +475,15 @@ export function OverseerChat({ overseer, compact = false }: OverseerChatProps) {
           aria-label="Overseer opening question"
           className="resize-y text-[13px]"
         />
-        <div className="flex justify-end">
+        <div className="flex items-center justify-end gap-2">
+          {/* Which model the conversation opens on — remembered per device, so
+              "always Fable" sticks. An open conversation keeps its model. */}
+          <ModelPicker
+            value={overseer.model}
+            onChange={overseer.setModel}
+            label="Overseer model"
+            disabled={sending}
+          />
           <Button
             size={compact ? 'sm' : 'default'}
             disabled={sending || draft.trim() === ''}
@@ -439,6 +548,12 @@ export function OverseerChat({ overseer, compact = false }: OverseerChatProps) {
               : compact
                 ? 'Actions wait for your approval.'
                 : 'Ask a follow-up. Actions always wait for your approval.'}
+            {overseer.record?.model !== undefined && (
+              <span className="opacity-70">
+                {' '}
+                · {modelLabel(overseer.record.model)}
+              </span>
+            )}
           </span>
           {compact && (
             // The full page's "New conversation" lives in its header; the rail
