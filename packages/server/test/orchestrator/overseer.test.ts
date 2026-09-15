@@ -1,4 +1,4 @@
-import { TaskStore } from '@dispatch/core';
+import { TaskStore, updateConfig } from '@dispatch/core';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,18 @@ import { LedgerStore } from '../../src/ledger.js';
 import { FakeExecutor } from '../../src/orchestrator/executors/fake.js';
 import { MergeQueue } from '../../src/orchestrator/mergeQueue.js';
 import { Orchestrator } from '../../src/orchestrator/orchestrator.js';
+import { OverseerManager } from '../../src/orchestrator/overseer.js';
+import type { OverseerRecord } from '../../src/orchestrator/overseer.js';
+import type {
+  OverseerBackend,
+  OverseerToolset,
+  OverseerTurn,
+  OverseerTurnOptions,
+} from '../../src/orchestrator/overseerBackend.js';
+import { FakeOverseer } from '../../src/orchestrator/overseers/fake.js';
+import type { FakeOverseerScript } from '../../src/orchestrator/overseers/fake.js';
+import type { OverseerToolContext } from '../../src/orchestrator/overseerTools.js';
+import { OverseerToolRegistry } from '../../src/orchestrator/overseerTools.js';
 import type { CommandResult } from '../../src/orchestrator/pr.js';
 import { QuestionRegistry } from '../../src/orchestrator/questions.js';
 import {
@@ -18,24 +30,14 @@ import {
   OrchestratorConflictError,
   OrchestratorNotFoundError,
 } from '../../src/orchestrator/types.js';
-import { WardenManager } from '../../src/orchestrator/warden.js';
-import type { WardenRecord } from '../../src/orchestrator/warden.js';
-import type {
-  WardenBackend,
-  WardenToolset,
-  WardenTurn,
-} from '../../src/orchestrator/wardenBackend.js';
-import { FakeWarden } from '../../src/orchestrator/wardens/fake.js';
-import type { FakeWardenScript } from '../../src/orchestrator/wardens/fake.js';
-import type { WardenToolContext } from '../../src/orchestrator/wardenTools.js';
-import { WardenToolRegistry } from '../../src/orchestrator/wardenTools.js';
+import type { ApprovalDecision } from '../../src/orchestrator/types.js';
 import { initGitRepo } from './helpers.js';
 
 let fakeHome: string;
 let repo: string;
 const originalDispatchHome = process.env.DISPATCH_HOME;
 
-// Same teardown contract as wardenTools.test.ts: a merge queue left running
+// Same teardown contract as overseerTools.test.ts: a merge queue left running
 // arms a retry timer, and a 'slow' run left live finishes during some LATER
 // test against whatever DISPATCH_HOME is set then.
 const liveQueues: MergeQueue[] = [];
@@ -44,7 +46,7 @@ const liveOrchestrators: Orchestrator[] = [];
 beforeEach(() => {
   fakeHome = mkdtempSync(join(tmpdir(), 'dispatch-home-'));
   process.env.DISPATCH_HOME = fakeHome;
-  repo = initGitRepo('dispatch-warden-mgr-');
+  repo = initGitRepo('dispatch-overseer-mgr-');
 });
 
 afterEach(async () => {
@@ -79,7 +81,7 @@ async function waitFor(check: () => boolean, timeoutMs = 5000): Promise<void> {
 }
 
 // Answers the git/gh invocations the merge queue makes, so no test here
-// depends on a real rebase/push (copied in shape from wardenTools.test.ts).
+// depends on a real rebase/push (copied in shape from overseerTools.test.ts).
 const stubRunner = async (
   _cwd: string,
   cmd: string[]
@@ -92,8 +94,8 @@ const stubRunner = async (
   return { ok: false, stdout: '', stderr: 'unhandled stub command' };
 };
 
-interface Harness extends WardenToolContext {
-  registry: WardenToolRegistry;
+interface Harness extends OverseerToolContext {
+  registry: OverseerToolRegistry;
   events: EventBus;
   seen: ServerEvent[];
 }
@@ -131,7 +133,7 @@ function makeHarness(): Harness {
     stubRunner
   );
   liveQueues.push(mergeQueue);
-  const ctx: WardenToolContext = {
+  const ctx: OverseerToolContext = {
     store,
     cache,
     orchestrator,
@@ -140,18 +142,18 @@ function makeHarness(): Harness {
     ledgerStore: new LedgerStore(repo),
     defaultExecutor: 'fake',
   };
-  return { ...ctx, registry: new WardenToolRegistry(ctx), events, seen };
+  return { ...ctx, registry: new OverseerToolRegistry(ctx), events, seen };
 }
 
 interface ManagerHarness extends Harness {
-  manager: WardenManager;
-  backend: FakeWarden;
+  manager: OverseerManager;
+  backend: FakeOverseer;
 }
 
-function makeManager(script: FakeWardenScript): ManagerHarness {
+function makeManager(script: FakeOverseerScript): ManagerHarness {
   const h = makeHarness();
-  const backend = new FakeWarden(script);
-  const manager = new WardenManager({
+  const backend = new FakeOverseer(script);
+  const manager = new OverseerManager({
     rootDir: repo,
     registry: h.registry,
     events: h.events,
@@ -164,7 +166,7 @@ function makeManager(script: FakeWardenScript): ManagerHarness {
 async function startAndSettle(
   h: ManagerHarness,
   prompt = 'what is going on?'
-): Promise<WardenRecord> {
+): Promise<OverseerRecord> {
   const started = h.manager.start(prompt, 'fake');
   await waitFor(() => h.manager.get(started.id).state !== 'running');
   return h.manager.get(started.id);
@@ -180,7 +182,7 @@ function makeTask(h: Harness, title: string): string {
 // Turn bookkeeping
 // ---------------------------------------------------------------------------
 
-describe('WardenManager turns', () => {
+describe('OverseerManager turns', () => {
   it('opens at running with the prompt recorded, then lands the reply at ready', async () => {
     const h = makeManager({ ok: true, reply: 'nothing is on fire' });
 
@@ -202,7 +204,7 @@ describe('WardenManager turns', () => {
     });
     // The backend's resume handle is kept for the next turn.
     expect(settled.sessionId).toBe('1');
-    expect(h.seen.some((e) => e.type === 'warden.changed')).toBe(true);
+    expect(h.seen.some((e) => e.type === 'overseer.changed')).toBe(true);
   });
 
   it('runs a status tool during the turn and records what it returned', async () => {
@@ -229,7 +231,7 @@ describe('WardenManager turns', () => {
   });
 
   it('derives a later call input from an earlier result in the same turn', async () => {
-    // The shape bin.ts's default fake warden script relies on: read the ready
+    // The shape bin.ts's default fake overseer script relies on: read the ready
     // list, then queue a dispatch of whatever task that read returned — no
     // hard-coded id anywhere in the script.
     const h = makeManager({
@@ -297,7 +299,7 @@ describe('WardenManager turns', () => {
       'invalid input for cancel_run'
     );
     expect(JSON.stringify(h.backend.observations[1].result.content)).toContain(
-      'unknown warden tool: summon_the_moon'
+      'unknown overseer tool: summon_the_moon'
     );
     // A call that failed its schema is not a queued action.
     expect(record.pendingActions).toEqual([]);
@@ -317,9 +319,9 @@ describe('WardenManager turns', () => {
     const h = makeManager({ ok: true, reply: 'unused' });
     // A backend that never settles, so the conversation stays `running`.
     let release: (() => void) | undefined;
-    const stuck: WardenBackend = {
+    const stuck: OverseerBackend = {
       start: () =>
-        new Promise<WardenTurn>((resolve) => {
+        new Promise<OverseerTurn>((resolve) => {
           release = () => resolve({ reply: 'done' });
         }),
       sendMessage: async () => ({ reply: 'done' }),
@@ -359,7 +361,7 @@ describe('WardenManager turns', () => {
 
   it('advertises every registry tool, flagging which ones mutate', async () => {
     const h = makeManager({ ok: true, reply: 'ok' });
-    let offered: WardenToolset | undefined;
+    let offered: OverseerToolset | undefined;
     h.manager.registerBackend('spy', {
       start: async (_prompt, toolset) => {
         offered = toolset;
@@ -414,13 +416,13 @@ describe('WardenManager turns', () => {
  */
 async function queueDispatch(title = 'Ship the thing'): Promise<{
   h: ManagerHarness;
-  record: WardenRecord;
+  record: OverseerRecord;
   taskId: string;
   actionId: string;
 }> {
   const base = makeHarness();
   const taskId = makeTask(base, title);
-  const backend = new FakeWarden({
+  const backend = new FakeOverseer({
     ok: true,
     turns: [
       {
@@ -430,7 +432,7 @@ async function queueDispatch(title = 'Ship the thing'): Promise<{
       { reply: 'anything else?' },
     ],
   });
-  const manager = new WardenManager({
+  const manager = new OverseerManager({
     rootDir: repo,
     registry: base.registry,
     events: base.events,
@@ -441,7 +443,7 @@ async function queueDispatch(title = 'Ship the thing'): Promise<{
   return { h, record, taskId, actionId: record.pendingActions[0].id };
 }
 
-describe('WardenManager queued actions', () => {
+describe('OverseerManager queued actions', () => {
   it('queues a mutating call with its summary and dispatches nothing', async () => {
     const { h, record, taskId } = await queueDispatch();
 
@@ -559,7 +561,7 @@ describe('WardenManager queued actions', () => {
     const meta = await h.orchestrator.dispatch(taskId, 'slow');
     h.manager.registerBackend(
       'fake',
-      new FakeWarden({
+      new FakeOverseer({
         ok: true,
         calls: [{ tool: 'cancel_run', input: { runId: meta.id } }],
         reply: 'queued a cancel',
@@ -614,18 +616,299 @@ describe('WardenManager queued actions', () => {
     // The turn that would have delivered the news dies before reaching a model.
     h.manager.registerBackend(
       'fake',
-      new FakeWarden({ ok: false, error: 'model unreachable' })
+      new FakeOverseer({ ok: false, error: 'model unreachable' })
     );
     h.manager.sendMessage(opened.id, 'did it go?');
     await waitFor(() => h.manager.get(opened.id).state === 'failed');
     expect(h.manager.get(opened.id).undeliveredDecisions).toHaveLength(1);
 
     // So the retry still carries it.
-    const retry = new FakeWarden({ ok: true, reply: 'yes, it is running' });
+    const retry = new FakeOverseer({ ok: true, reply: 'yes, it is running' });
     h.manager.registerBackend('fake', retry);
     h.manager.sendMessage(opened.id, 'did it go?');
     await waitFor(() => h.manager.get(opened.id).state === 'ready');
     expect(retry.prompts[0]).toContain('approved');
     expect(h.manager.get(opened.id).undeliveredDecisions).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Built-in tool gate
+// ---------------------------------------------------------------------------
+
+// A backend standing in for a full Claude Code session: each turn asks the
+// manager about the built-in calls it is scripted to make, in order, and
+// replies with what it was told. `decisions` is what a real session would act
+// on — a call is "run" only if the answer was allow.
+class GatedBackend implements OverseerBackend {
+  readonly decisions: ({ toolName: string } & ApprovalDecision)[] = [];
+  options: OverseerTurnOptions | undefined;
+
+  constructor(
+    private readonly calls: { toolName: string; input: unknown }[],
+    private readonly reply = 'done'
+  ) {}
+
+  start(
+    _prompt: string,
+    _toolset: OverseerToolset,
+    options?: OverseerTurnOptions
+  ): Promise<OverseerTurn> {
+    return this.turn(options);
+  }
+
+  sendMessage(
+    _sessionId: string | undefined,
+    _message: string,
+    _toolset: OverseerToolset,
+    options?: OverseerTurnOptions
+  ): Promise<OverseerTurn> {
+    return this.turn(options);
+  }
+
+  private async turn(options?: OverseerTurnOptions): Promise<OverseerTurn> {
+    this.options = options;
+    let n = 0;
+    for (const call of this.calls) {
+      n += 1;
+      options?.onToolUse?.(call.toolName, call.input);
+      const decision = (await options?.authorizeTool?.({
+        requestId: `req-${n}`,
+        toolName: call.toolName,
+        input: call.input,
+      })) ?? { allow: false };
+      this.decisions.push({ toolName: call.toolName, ...decision });
+    }
+    return { reply: this.reply, sessionId: 'sess' };
+  }
+}
+
+function makeGated(
+  calls: { toolName: string; input: unknown }[]
+): ManagerHarness & { gated: GatedBackend } {
+  const h = makeManager({ ok: true, reply: 'unused' });
+  const gated = new GatedBackend(calls);
+  h.manager.registerBackend('gated', gated);
+  return { ...h, gated };
+}
+
+describe('OverseerManager built-in tool gate', () => {
+  it('parks a built-in call on the record and runs it once the human allows', async () => {
+    const h = makeGated([
+      { toolName: 'Bash', input: { command: 'git status' } },
+    ]);
+
+    const started = h.manager.start('what changed?', 'gated');
+    await waitFor(() => h.manager.get(started.id).pendingApprovals.length > 0);
+
+    const parked = h.manager.get(started.id);
+    expect(parked.state).toBe('running');
+    expect(parked.pendingApprovals).toEqual([
+      {
+        requestId: 'req-1',
+        toolName: 'Bash',
+        input: { command: 'git status' },
+        summary: 'Bash: git status',
+        requestedAt: expect.any(String),
+      },
+    ]);
+    // The transcript shows the call (from onToolUse) and the parked request.
+    expect(parked.messages.map((m) => `${m.role}:${m.outcome ?? ''}`)).toEqual([
+      'user:',
+      'tool:',
+      'approval:pending',
+    ]);
+    // Nothing ran while the human was deciding.
+    expect(h.gated.decisions).toEqual([]);
+
+    const decided = h.manager.decideApproval(started.id, 'req-1', {
+      allow: true,
+    });
+    expect(decided.pendingApprovals).toEqual([]);
+    expect(decided.messages.at(-1)).toMatchObject({
+      role: 'approval',
+      tool: 'Bash',
+      requestId: 'req-1',
+      outcome: 'allowed',
+      text: 'Allowed: Bash: git status',
+    });
+
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(h.gated.decisions).toEqual([{ toolName: 'Bash', allow: true }]);
+  });
+
+  it('hands a denial and its reason to the session', async () => {
+    const h = makeGated([{ toolName: 'Edit', input: { file_path: 'a.ts' } }]);
+    const started = h.manager.start('fix it', 'gated');
+    await waitFor(() => h.manager.get(started.id).pendingApprovals.length > 0);
+
+    const decided = h.manager.decideApproval(started.id, 'req-1', {
+      allow: false,
+      reason: 'not that file',
+    });
+    expect(decided.messages.at(-1)).toMatchObject({
+      role: 'approval',
+      outcome: 'denied',
+      text: 'Denied: Edit: a.ts — not that file',
+    });
+
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(h.gated.decisions).toEqual([
+      { toolName: 'Edit', allow: false, reason: 'not that file' },
+    ]);
+  });
+
+  it('allowing for the conversation skips the human for that tool afterwards', async () => {
+    const h = makeGated([
+      { toolName: 'Bash', input: { command: 'ls' } },
+      { toolName: 'Bash', input: { command: 'ls src' } },
+      { toolName: 'Read', input: { file_path: 'README.md' } },
+    ]);
+    const started = h.manager.start('look around', 'gated');
+    await waitFor(() => h.manager.get(started.id).pendingApprovals.length > 0);
+
+    h.manager.decideApproval(started.id, 'req-1', {
+      allow: true,
+      scope: 'session',
+    });
+    // The second Bash call never parks; the Read still does.
+    await waitFor(
+      () => h.manager.get(started.id).pendingApprovals[0]?.toolName === 'Read'
+    );
+    expect(h.gated.decisions).toEqual([
+      { toolName: 'Bash', allow: true, scope: 'session' },
+      { toolName: 'Bash', allow: true },
+    ]);
+    expect(
+      h.manager
+        .get(started.id)
+        .messages.find((m) => m.role === 'approval' && m.outcome === 'allowed')
+    ).toMatchObject({ text: 'Allowed for this conversation: Bash: ls' });
+    h.manager.decideApproval(started.id, 'req-3', { allow: false });
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+  });
+
+  it('never lets a session grant or acceptEdits wave an irreversible command through', async () => {
+    const h = makeGated([
+      { toolName: 'Bash', input: { command: 'git status' } },
+      { toolName: 'Bash', input: { command: 'git push --force origin main' } },
+    ]);
+    const started = h.manager.start('ship it', 'gated');
+    await waitFor(() => h.manager.get(started.id).pendingApprovals.length > 0);
+    h.manager.decideApproval(started.id, 'req-1', {
+      allow: true,
+      scope: 'session',
+    });
+    // The force-push parks despite the grant.
+    await waitFor(
+      () => h.manager.get(started.id).pendingApprovals[0]?.requestId === 'req-2'
+    );
+    h.manager.decideApproval(started.id, 'req-2', { allow: false });
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(h.gated.decisions.map((d) => d.allow)).toEqual([true, false]);
+  });
+
+  it('under acceptEdits the edit tools run without asking and the rest still park', async () => {
+    updateConfig(repo, { permissionMode: 'acceptEdits' });
+    const h = makeGated([
+      { toolName: 'Edit', input: { file_path: 'a.ts' } },
+      { toolName: 'Bash', input: { command: 'bun test' } },
+    ]);
+    const started = h.manager.start('fix it', 'gated');
+    await waitFor(() => h.manager.get(started.id).pendingApprovals.length > 0);
+    expect(h.gated.decisions).toEqual([{ toolName: 'Edit', allow: true }]);
+    expect(h.manager.get(started.id).pendingApprovals[0]?.toolName).toBe(
+      'Bash'
+    );
+    expect(h.gated.options?.permissionMode).toBe('acceptEdits');
+    h.manager.decideApproval(started.id, 'req-2', { allow: true });
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+  });
+
+  it('refuses a decision for a request that is not parked on that conversation', async () => {
+    const h = makeGated([{ toolName: 'Bash', input: { command: 'ls' } }]);
+    const a = h.manager.start('a', 'gated');
+    await waitFor(() => h.manager.get(a.id).pendingApprovals.length > 0);
+    const b = h.manager.start('b', 'fake');
+    await waitFor(() => h.manager.get(b.id).state === 'ready');
+
+    expect(() =>
+      h.manager.decideApproval(b.id, 'req-1', { allow: true })
+    ).toThrow(OrchestratorNotFoundError);
+    expect(() =>
+      h.manager.decideApproval(a.id, 'req-9', { allow: true })
+    ).toThrow(OrchestratorNotFoundError);
+    // Still parked, still decidable on the right conversation.
+    expect(h.manager.get(a.id).pendingApprovals).toHaveLength(1);
+    h.manager.decideApproval(a.id, 'req-1', { allow: true });
+    // A second decision on the same request finds nothing.
+    expect(() =>
+      h.manager.decideApproval(a.id, 'req-1', { allow: true })
+    ).toThrow(OrchestratorNotFoundError);
+  });
+
+  it('denies whatever is still parked when the turn dies underneath it', async () => {
+    // A backend that parks a call and then throws before it is decided.
+    const dying: OverseerBackend = {
+      start: async (_prompt, _toolset, options) => {
+        void options?.authorizeTool?.({
+          requestId: 'req-x',
+          toolName: 'Bash',
+          input: { command: 'ls' },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        throw new Error('session crashed');
+      },
+      sendMessage: () => Promise.reject(new Error('unused')),
+    };
+    const h = makeManager({ ok: true, reply: 'unused' });
+    h.manager.registerBackend('dying', dying);
+    const started = h.manager.start('hi', 'dying');
+    await waitFor(() => h.manager.get(started.id).state === 'failed');
+
+    const failed = h.manager.get(started.id);
+    expect(failed.pendingApprovals).toEqual([]);
+    expect(failed.messages.at(-1)).toMatchObject({
+      role: 'approval',
+      requestId: 'req-x',
+      outcome: 'denied',
+    });
+    expect(() =>
+      h.manager.decideApproval(started.id, 'req-x', { allow: true })
+    ).toThrow(OrchestratorNotFoundError);
+  });
+});
+
+describe('OverseerManager turn options', () => {
+  it("runs on the overseer role's configured model and the run policy by default", async () => {
+    updateConfig(repo, {
+      models: { overseer: 'claude-fable-5-1' },
+      maxTurns: 12,
+      maxBudgetUsd: 3,
+    });
+    const h = makeGated([]);
+    const started = h.manager.start('hi', 'gated');
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(started.model).toBeUndefined();
+    expect(h.gated.options).toMatchObject({
+      model: 'claude-fable-5-1',
+      permissionMode: 'auto',
+      maxTurns: 12,
+      maxBudgetUsd: 3,
+    });
+  });
+
+  it('keeps a chosen model on the record and reuses it for every follow-up', async () => {
+    const h = makeGated([]);
+    const started = h.manager.start('hi', 'gated', 'claude-fable-5-1');
+    expect(started.model).toBe('claude-fable-5-1');
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(h.gated.options?.model).toBe('claude-fable-5-1');
+
+    // A settings change in between does not move an open conversation.
+    updateConfig(repo, { models: { overseer: 'claude-haiku-4-5' } });
+    h.manager.sendMessage(started.id, 'and?');
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(h.gated.options?.model).toBe('claude-fable-5-1');
   });
 });

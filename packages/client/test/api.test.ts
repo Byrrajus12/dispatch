@@ -204,16 +204,18 @@ function sentJson(call: { init?: RequestInit }): unknown {
   return JSON.parse(body);
 }
 
-// The warden chat bindings — each method must hit the exact route the server
+// The overseer chat bindings — each method must hit the exact route the server
 // registered in packages/server/src/api.ts, with the body shape its handler
 // validates.
-describe('warden methods', () => {
-  it('startWarden POSTs /api/warden with just the prompt when no backend is given', async () => {
+describe('overseer methods', () => {
+  it('startOverseer POSTs /api/overseer with just the prompt when no backend is given', async () => {
     const stub = stubFetch();
     try {
-      await createApiClient('http://example.test').startWarden('what is live?');
+      await createApiClient('http://example.test').startOverseer(
+        'what is live?'
+      );
       expect(stub.calls).toHaveLength(1);
-      expect(stub.calls[0].url).toBe('http://example.test/api/warden');
+      expect(stub.calls[0].url).toBe('http://example.test/api/overseer');
       expect(stub.calls[0].init?.method).toBe('POST');
       // `backend` must be absent, not `undefined`: the server 400s any
       // non-string value, and JSON.stringify would drop it either way — this
@@ -226,10 +228,10 @@ describe('warden methods', () => {
     }
   });
 
-  it('startWarden includes backend when the caller picks one', async () => {
+  it('startOverseer includes backend when the caller picks one', async () => {
     const stub = stubFetch();
     try {
-      await createApiClient('http://example.test').startWarden('hi', {
+      await createApiClient('http://example.test').startOverseer('hi', {
         backend: 'fake',
       });
       expect(sentJson(stub.calls[0])).toEqual({
@@ -241,28 +243,28 @@ describe('warden methods', () => {
     }
   });
 
-  it('getWarden GETs /api/warden/:id', async () => {
+  it('getOverseer GETs /api/overseer/:id', async () => {
     const stub = stubFetch();
     try {
-      await createApiClient('http://example.test').getWarden('wc-1');
+      await createApiClient('http://example.test').getOverseer('wc-1');
       expect(stub.calls).toHaveLength(1);
-      expect(stub.calls[0].url).toBe('http://example.test/api/warden/wc-1');
+      expect(stub.calls[0].url).toBe('http://example.test/api/overseer/wc-1');
       expect(stub.calls[0].init?.method).toBeUndefined();
     } finally {
       stub.restore();
     }
   });
 
-  it('sendWardenMessage POSTs /api/warden/:id/message with { text }', async () => {
+  it('sendOverseerMessage POSTs /api/overseer/:id/message with { text }', async () => {
     const stub = stubFetch();
     try {
-      await createApiClient('http://example.test').sendWardenMessage(
+      await createApiClient('http://example.test').sendOverseerMessage(
         'wc-1',
         'and the merge queue?'
       );
       expect(stub.calls).toHaveLength(1);
       expect(stub.calls[0].url).toBe(
-        'http://example.test/api/warden/wc-1/message'
+        'http://example.test/api/overseer/wc-1/message'
       );
       expect(stub.calls[0].init?.method).toBe('POST');
       expect(sentJson(stub.calls[0])).toEqual({
@@ -273,21 +275,86 @@ describe('warden methods', () => {
     }
   });
 
-  it('confirmWardenAction POSTs /api/warden/:id/actions/:actionId/confirm with { approve }', async () => {
+  it('confirmOverseerAction POSTs /api/overseer/:id/actions/:actionId/confirm with { approve }', async () => {
     const stub = stubFetch();
     try {
-      await createApiClient('http://example.test').confirmWardenAction(
+      await createApiClient('http://example.test').confirmOverseerAction(
         'wc-1',
         'wa-9',
         false
       );
       expect(stub.calls).toHaveLength(1);
       expect(stub.calls[0].url).toBe(
-        'http://example.test/api/warden/wc-1/actions/wa-9/confirm'
+        'http://example.test/api/overseer/wc-1/actions/wa-9/confirm'
       );
       expect(stub.calls[0].init?.method).toBe('POST');
       expect(sentJson(stub.calls[0])).toEqual({
         approve: false,
+      });
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('startOverseer includes model when the caller picks one', async () => {
+    const stub = stubFetch();
+    try {
+      await createApiClient('http://example.test').startOverseer('hi', {
+        model: 'claude-fable-5-1',
+      });
+      expect(sentJson(stub.calls[0])).toEqual({
+        prompt: 'hi',
+        model: 'claude-fable-5-1',
+      });
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('decideOverseerApproval POSTs /api/overseer/:id/approvals/:requestId with the decision', async () => {
+    const stub = stubFetch();
+    try {
+      await createApiClient('http://example.test').decideOverseerApproval(
+        'wc-1',
+        'req-3',
+        { allow: false, reason: 'not that file' }
+      );
+      expect(stub.calls).toHaveLength(1);
+      expect(stub.calls[0].url).toBe(
+        'http://example.test/api/overseer/wc-1/approvals/req-3'
+      );
+      expect(stub.calls[0].init?.method).toBe('POST');
+      expect(sentJson(stub.calls[0])).toEqual({
+        allow: false,
+        reason: 'not that file',
+      });
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+describe('startPlan', () => {
+  it('POSTs /api/plan with just the prompt by default', async () => {
+    const stub = stubFetch();
+    try {
+      await createApiClient('http://example.test').startPlan('build it');
+      expect(stub.calls[0].url).toBe('http://example.test/api/plan');
+      expect(sentJson(stub.calls[0])).toEqual({ prompt: 'build it' });
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it('includes model when the composer picks one', async () => {
+    const stub = stubFetch();
+    try {
+      await createApiClient('http://example.test').startPlan('build it', {
+        model: 'claude-fable-5-1',
+      });
+      expect(sentJson(stub.calls[0])).toEqual({
+        prompt: 'build it',
+        model: 'claude-fable-5-1',
       });
     } finally {
       stub.restore();

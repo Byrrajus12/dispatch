@@ -61,9 +61,9 @@ async function getRun(
 let baselineRunIds: Set<string> | null = null;
 
 /**
- * The warden chat against the scripted fake backend (`FakeWarden`, registered
+ * The overseer chat against the scripted fake backend (`FakeOverseer`, registered
  * by bin.ts under DISPATCH_ENABLE_FAKES=1 and selected via the
- * `dispatch.devFakeWarden` devtool flag). The script's turns are: a status
+ * `dispatch.devFakeOverseer` devtool flag). The script's turns are: a status
  * answer derived from a real `list_runs` read, then two turns that each queue
  * a `dispatch_task` of the first ready task on the fake executor. That gives
  * the flow this spec exists to cover: status Q/A, a confirm card, the deny
@@ -76,10 +76,10 @@ let baselineRunIds: Set<string> | null = null;
  * ('1 Failed' / '5 Needs review') were re-verified intact afterward. It also
  * caught a real race on its first run — a turn settling before the start
  * response landed left the transcript on the pending spinner forever — fixed
- * in useWardenSession by invalidating the record query after each mutation
+ * in useOverseerSession by invalidating the record query after each mutation
  * write.
  */
-test.describe('warden chat end to end', () => {
+test.describe('overseer chat end to end', () => {
   test.afterEach(async ({ request }) => {
     // Undo this spec's one deliberate mutation even on mid-test failure, so
     // nothing leaks into the counts and board columns the screenshot suite's
@@ -104,7 +104,7 @@ test.describe('warden chat end to end', () => {
         `http://localhost:${DAEMON_PORT}/api/runs/${runId}/archive`,
         { headers, data: { archived: true } }
       );
-      // The fake warden only ever dispatches a *ready* task, and ready means
+      // The fake overseer only ever dispatches a *ready* task, and ready means
       // unblocked `todo` — so `todo` is exactly the pre-test status.
       await request.patch(
         `http://localhost:${DAEMON_PORT}/api/tasks/${run.meta.taskId}`,
@@ -125,30 +125,30 @@ test.describe('warden chat end to end', () => {
 
     baselineRunIds = await listRunIds(request);
 
-    // Route new conversations to the daemon's 'fake' warden backend — set
+    // Route new conversations to the daemon's 'fake' overseer backend — set
     // before load, same as any localStorage-keyed devtool. The live rail
     // starts collapsed (its own key — the retired dispatch:overview-rail is
     // deliberately ignored by LiveRail): expanded, it repeats task titles as
     // row buttons, double-counting the Runs-view assertions below.
     await page.addInitScript(() => {
-      window.localStorage.setItem('dispatch.devFakeWarden', '1');
+      window.localStorage.setItem('dispatch.devFakeOverseer', '1');
       window.localStorage.setItem('dispatch:live-rail', '1');
     });
     await page.goto(authedUrl(baseURL));
     await page.getByText('Dispatch').first().waitFor();
 
-    // The Warden tab lives in the sidebar's global section (no ⌘N hint, so
+    // The Overseer tab lives in the sidebar's global section (no ⌘N hint, so
     // its accessible name is exactly its label). `exact` because role-name
     // matching is case-insensitive substring by default: the rail names a
-    // waiting warden row "<summary> warden <time>", and any future button
+    // waiting overseer row "<summary> overseer <time>", and any future button
     // mentioning the word would otherwise make this ambiguous under strict
-    // mode. Nothing else is named exactly "Warden".
-    await page.getByRole('button', { name: 'Warden', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Warden' })).toBeVisible();
+    // mode. Nothing else is named exactly "Overseer".
+    await page.getByRole('button', { name: 'Overseer', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Overseer' })).toBeVisible();
 
     // --- Status round trip (scripted turn 0) ---------------------------
     await page
-      .getByLabel('Warden opening question')
+      .getByLabel('Overseer opening question')
       .fill("What's going on in this project?");
     // `exact` matters: role-name matching is substring-based, and "Ask"
     // otherwise also matches the sidebar's "Tasks" row.
@@ -212,7 +212,7 @@ test.describe('warden chat end to end', () => {
         .first()
     ).toBeVisible();
     const rowsBefore = await runRows.count();
-    await page.getByRole('button', { name: 'Warden', exact: true }).click();
+    await page.getByRole('button', { name: 'Overseer', exact: true }).click();
 
     // --- Ask again (scripted turn 2), approve this time ----------------
     await page
@@ -241,7 +241,7 @@ test.describe('warden chat end to end', () => {
   });
 
   /**
-   * The same gated flow driven from the LiveRail's Warden tab — the compact
+   * The same gated flow driven from the LiveRail's Overseer tab — the compact
    * surface the first test's collapsed rail deliberately hides. The rail
    * stays expanded here (no Runs-view row counting happens in this test, so
    * its run-row buttons are harmless), and the deny path is re-verified
@@ -253,12 +253,12 @@ test.describe('warden chat end to end', () => {
    * (e2e/paths.ts) is gitignored and keyed by root path, so a worktree has
    * none to seed from. Two of its assumptions are therefore held by unit
    * tests instead, in the suite that does run — LiveRail.test.tsx pins that
-   * the rail's Warden control is a role=tab (so `getByRole('button', {name:
-   * 'Warden'})` below cannot go ambiguous against the sidebar's nav button)
-   * and that the waiting row is named "<summary> warden" in lowercase, which
-   * is what the `/with the fake executor warden/` locator depends on.
+   * the rail's Overseer control is a role=tab (so `getByRole('button', {name:
+   * 'Overseer'})` below cannot go ambiguous against the sidebar's nav button)
+   * and that the waiting row is named "<summary> overseer" in lowercase, which
+   * is what the `/with the fake executor overseer/` locator depends on.
    */
-  test('the rail Warden tab drives the same human-gated flow', async ({
+  test('the rail Overseer tab drives the same human-gated flow', async ({
     page,
     baseURL,
     request,
@@ -268,21 +268,21 @@ test.describe('warden chat end to end', () => {
     baselineRunIds = await listRunIds(request);
 
     await page.addInitScript(() => {
-      window.localStorage.setItem('dispatch.devFakeWarden', '1');
+      window.localStorage.setItem('dispatch.devFakeOverseer', '1');
       window.localStorage.setItem('dispatch:live-rail', '0');
     });
     await page.goto(authedUrl(baseURL));
     await page.getByText('Dispatch').first().waitFor();
 
     // The rail's tabs are radix role=tab, so this never collides with the
-    // sidebar's "Warden" nav *button* under strict mode.
-    const wardenTab = page.getByRole('tab', { name: 'Warden' });
-    await wardenTab.click();
+    // sidebar's "Overseer" nav *button* under strict mode.
+    const overseerTab = page.getByRole('tab', { name: 'Overseer' });
+    await overseerTab.click();
 
-    // The compact chat reuses the full page's aria-labels; the Warden page
+    // The compact chat reuses the full page's aria-labels; the Overseer page
     // itself is not open, so each resolves uniquely.
     await page
-      .getByLabel('Warden opening question')
+      .getByLabel('Overseer opening question')
       .fill("What's going on in this project?");
     await page.getByRole('button', { name: 'Ask', exact: true }).click();
     await expect(
@@ -297,19 +297,19 @@ test.describe('warden chat end to end', () => {
     const confirmHeader = page.getByText('Needs your approval');
     await expect(confirmHeader).toBeVisible({ timeout: 15_000 });
 
-    // While the approval waits, the Runs tab lists the warden as a waiting
+    // While the approval waits, the Runs tab lists the overseer as a waiting
     // agent named by the queued action, and clicking the row returns to the
     // chat. Matched by accessible name rather than by text: the row's name
-    // ends "… with the fake executor warden <time>", which the confirm card's
+    // ends "… with the fake executor overseer <time>", which the confirm card's
     // own summary text does not, so this stays unambiguous even if the chat
     // is on screen.
     await page.getByRole('tab', { name: 'Runs' }).click();
-    const wardenRow = page.getByRole('button', {
-      name: /with the fake executor warden/,
+    const overseerRow = page.getByRole('button', {
+      name: /with the fake executor overseer/,
     });
-    await expect(wardenRow).toBeVisible();
-    await wardenRow.click();
-    await expect(wardenTab).toHaveAttribute('aria-selected', 'true');
+    await expect(overseerRow).toBeVisible();
+    await overseerRow.click();
+    await expect(overseerTab).toHaveAttribute('aria-selected', 'true');
 
     // --- Deny from the rail: nothing may happen server-side -------------
     await page.getByRole('button', { name: /^Deny:/ }).click();

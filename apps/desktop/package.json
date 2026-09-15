@@ -32,7 +32,6 @@
     "@tauri-apps/plugin-process": "catalog:",
     "@tauri-apps/plugin-updater": "catalog:",
     "lucide-react": "catalog:",
-    "radix-ui": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-markdown": "catalog:",

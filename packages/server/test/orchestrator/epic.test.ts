@@ -116,7 +116,7 @@ function createEpicWithChildren(
 // 2026-09-08: every run in a 35-run fleet executed on the CLI's default model
 // instead of the project's configured `models.execute`, because only the HTTP
 // dispatch route resolved that fallback — the epic engine's auto-fill (and the
-// warden's dispatch tool) passed no `defaults` at all. It surfaced as a whole
+// overseer's dispatch tool) passed no `defaults` at all. It surfaced as a whole
 // epic dying on one model's usage limit while the config named another.
 describe('dispatch model default', () => {
   it('records the project-configured models.execute on an epic auto-fill', async () => {

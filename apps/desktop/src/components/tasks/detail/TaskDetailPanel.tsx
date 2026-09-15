@@ -646,21 +646,23 @@ export function TaskDetailPanel({
                     Dispatch
                   </Button>
                   <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        className="text-muted-foreground hover:bg-muted/60 hover:text-foreground h-auto gap-1 rounded-md border border-transparent px-2 py-1 text-[12px] has-[>svg]:px-2"
-                      >
-                        {modelLabel(model)}
-                        <ChevronDown className="size-3" />
-                      </Button>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="text-muted-foreground hover:bg-muted/60 hover:text-foreground h-auto gap-1 rounded-md border border-transparent px-2 py-1 text-[12px] has-[>svg]:px-2"
+                        />
+                      }
+                    >
+                      {modelLabel(model)}
+                      <ChevronDown className="size-3" />
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="start">
                       {MODELS.map((m) => (
                         <DropdownMenuItem
                           key={m.id}
-                          onSelect={() => setModel(m.id)}
+                          onClick={() => setModel(m.id)}
                           className="gap-2 pr-8 text-[13px]"
                         >
                           <span className="flex-1">{m.label}</span>

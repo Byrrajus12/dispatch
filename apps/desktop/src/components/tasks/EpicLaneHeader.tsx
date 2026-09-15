@@ -176,30 +176,34 @@ export function EpicLaneHeader({
               </div>
             )}
             <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  aria-label={`Open ${epic.meta.id}`}
-                  onClick={() => onOpenTask(epic.meta.id)}
-                  className="text-muted-foreground/70 hover:bg-accent hover:text-foreground h-6 shrink-0 rounded-md px-1 font-mono text-[11px]"
-                >
-                  {epic.meta.id}
-                </Button>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    aria-label={`Open ${epic.meta.id}`}
+                    onClick={() => onOpenTask(epic.meta.id)}
+                    className="text-muted-foreground/70 hover:bg-accent hover:text-foreground h-6 shrink-0 rounded-md px-1 font-mono text-[11px]"
+                  />
+                }
+              >
+                {epic.meta.id}
               </TooltipTrigger>
               <TooltipContent>Open epic</TooltipContent>
             </Tooltip>
             <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  aria-label={`View dependency graph for ${epic.meta.id}`}
-                  onClick={() => setShowGraph(true)}
-                  className="text-muted-foreground hover:bg-accent hover:text-foreground size-auto shrink-0 rounded-md p-1 has-[>svg]:px-1"
-                >
-                  <Waypoints className="size-3" />
-                </Button>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    aria-label={`View dependency graph for ${epic.meta.id}`}
+                    onClick={() => setShowGraph(true)}
+                    className="text-muted-foreground hover:bg-accent hover:text-foreground size-auto shrink-0 rounded-md p-1 has-[>svg]:px-1"
+                  />
+                }
+              >
+                <Waypoints className="size-3" />
               </TooltipTrigger>
               <TooltipContent>View dependency graph</TooltipContent>
             </Tooltip>

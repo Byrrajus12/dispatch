@@ -114,12 +114,21 @@ const TASKS_VIEW_OPTIONS: {
   { id: 'milestones', label: 'Milestones', icon: Target },
 ];
 
+// The active project's overseer: a full agent session in the checkout that
+// also holds the daemon's own controls (dispatch, approve, cancel). It is a
+// GlobalView — it answers about whichever project is active, from any view —
+// but it is pinned to the very top of the rail rather than listed with the
+// other global pages: it is the surface everything else can be driven from,
+// so it should be the first row rather than the one you scroll down to.
+const OVERSEER_VIEW = {
+  id: 'overseer',
+  label: 'Overseer',
+  icon: Shield,
+} as const;
+
 const GLOBAL_VIEWS: { id: GlobalView; label: string; icon: typeof Radar }[] = [
   { id: 'all-agents', label: 'All Agents', icon: Radar },
   { id: 'sessions', label: 'Sessions', icon: Play },
-  // The active project's chat assistant. Global-section, not a project row:
-  // it answers about whichever project is active, from any view.
-  { id: 'warden', label: 'Warden', icon: Shield },
   { id: 'settings', label: 'Settings', icon: Cog },
   // Dev-only primitive review surface — `DEV` is inlined at build time, so this
   // entry (and GalleryView itself) is dead code in a production build.
@@ -172,6 +181,10 @@ interface SidebarProps {
   /** Count of non-terminal runs for this project — the "All Agents" badge, so you can tell
    * something is live without leaving whatever you're looking at. */
   liveAgentCount: number;
+  /** Overseer tool calls and queued actions waiting on the human — the Overseer row's badge,
+   * with the attention dot, so a parked overseer is visible from every view. Zero or absent
+   * renders no badge. */
+  overseerPendingCount?: number;
   /** Live per-row counts. A row with no entry, or a zero, renders no badge at all — a rail of
    * "0"s is noise, and the absence of a number is itself the information. */
   badges: Partial<Record<ProjectView, number>>;
@@ -219,6 +232,7 @@ export function Sidebar({
   syncStatus,
   onDisableAutoCommit,
   liveRail,
+  overseerPendingCount = 0,
 }: SidebarProps) {
   const { state, toggleSidebar } = useSidebar();
   const collapsed = state === 'collapsed';
@@ -303,7 +317,23 @@ export function Sidebar({
     }),
   ];
 
+  // The rail's first row, in a section of its own: see OVERSEER_VIEW.
+  const OverseerIcon = OVERSEER_VIEW.icon;
+  const overseerSection: SidebarNavSection = {
+    id: 'overseer',
+    items: [
+      {
+        id: OVERSEER_VIEW.id,
+        label: OVERSEER_VIEW.label,
+        icon: <OverseerIcon strokeWidth={2} />,
+        count: overseerPendingCount > 0 ? overseerPendingCount : undefined,
+        state: overseerPendingCount > 0 ? 'attention' : undefined,
+      } satisfies SidebarNavItem,
+    ],
+  };
+
   const sections: SidebarNavSection[] = [
+    overseerSection,
     ...projectSections,
     { id: 'global', items: globalItems },
   ];
@@ -355,23 +385,25 @@ export function Sidebar({
           </span>
         )}
         <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              aria-expanded={!collapsed}
-              aria-controls="dispatch-sidebar"
-              onClick={() => toggleSidebar()}
-              className="text-muted-foreground hover:text-foreground shrink-0 transition-colors duration-150"
-            >
-              {collapsed ? (
-                <ChevronRight className="size-4" />
-              ) : (
-                <ChevronLeft className="size-4" />
-              )}
-            </Button>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                aria-expanded={!collapsed}
+                aria-controls="dispatch-sidebar"
+                onClick={() => toggleSidebar()}
+                className="text-muted-foreground hover:text-foreground shrink-0 transition-colors duration-150"
+              />
+            }
+          >
+            {collapsed ? (
+              <ChevronRight className="size-4" />
+            ) : (
+              <ChevronLeft className="size-4" />
+            )}
           </TooltipTrigger>
           <TooltipContent side="right">
             {collapsed ? 'Expand sidebar' : 'Collapse sidebar'}

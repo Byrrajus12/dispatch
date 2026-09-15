@@ -4,6 +4,14 @@ import { expect, test } from 'bun:test';
 
 import { EscalationEditor } from './EscalationEditor';
 
+// Base UI commits a select item on a click that began on it (a bare click is
+// treated as one that opened the list under the pointer), so press first.
+function chooseOption(name: string) {
+  const option = screen.getByRole('option', { name });
+  fireEvent.pointerDown(option);
+  fireEvent.click(option);
+}
+
 const steps: EscalationStep[] = [
   { round: 1, strategy: 'resume', modelTier: 'standard' },
   { round: 2, strategy: 'fresh', modelTier: 'high' },
@@ -78,7 +86,7 @@ test('changing a strategy select patches only that row', () => {
   let next: EscalationStep[] = [];
   render(<EscalationEditor steps={steps} onChange={(s) => (next = s)} />);
   fireEvent.click(screen.getByRole('combobox', { name: 'Round 1 strategy' }));
-  fireEvent.click(screen.getByRole('option', { name: 'Fresh agent' }));
+  chooseOption('Fresh agent');
   expect(next).toEqual([
     { round: 1, strategy: 'fresh', modelTier: 'standard' },
     { round: 2, strategy: 'fresh', modelTier: 'high' },

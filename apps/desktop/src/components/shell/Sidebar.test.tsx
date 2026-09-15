@@ -10,6 +10,7 @@ const props = {
   projectView: 'inbox' as const,
   globalView: 'all-agents' as const,
   liveAgentCount: 3,
+  overseerPendingCount: 0,
   badges: { board: 2 },
   spendToday: 1.5,
   onSetProjectView: () => {},
@@ -55,6 +56,18 @@ test('the exported view order is the cmd+N order App.tsx indexes into', () => {
   ]);
 });
 
+test('the Overseer is the first row of the rail and carries its pending count', () => {
+  mount(true, { overseerPendingCount: 2 });
+  const rows = screen.getAllByRole('button');
+  // Above Control room, above the Workspace heading: it is the page everything
+  // else can be driven from, not one more global destination at the bottom.
+  expect(rows[0].textContent).toContain('Overseer');
+  expect(rows[0].textContent).toContain('2');
+  // No shortcut number: cmd+N counts project views only, and the Overseer is
+  // not one of them.
+  expect(rows[0].textContent).not.toContain('⌘');
+});
+
 test('expanded rail shows every row with its shortcut number', () => {
   mount(true);
   // The number counts across stages, not within one — cutting the rail into groups must not
@@ -83,7 +96,7 @@ test('collapsed rail hides labels but keeps every accessible name', () => {
     ...RAIL_LABELS,
     'All Agents',
     'Sessions',
-    'Warden',
+    'Overseer',
     'Settings',
   ]) {
     expect(

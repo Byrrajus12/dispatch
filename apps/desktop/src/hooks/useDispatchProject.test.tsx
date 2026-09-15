@@ -35,7 +35,7 @@ let openScopeRequests = new Map<string, RunScopeRequest[]>();
 const scopeRequestListings: string[] = [];
 
 // Only `createApiClient` is replaced — the rest of the module (ApiError, which
-// useWardenSession's 404 veto instanceof-checks) has to stay real.
+// useOverseerSession's 404 veto instanceof-checks) has to stay real.
 void mock.module('@dispatch/client', () => ({
   ...dispatchClient,
   createApiClient: () => ({
@@ -59,7 +59,7 @@ void mock.module('@dispatch/client', () => ({
 
 // Imported after the mocks above so the hook closes over them.
 const { useDispatchProject } = await import('./useDispatchProject');
-const { wardenKey } = await import('./useWardenSession');
+const { overseerKey } = await import('./useOverseerSession');
 
 function wrapper(queryClient: QueryClient) {
   return ({ children }: { children: ReactNode }) => (
@@ -68,7 +68,7 @@ function wrapper(queryClient: QueryClient) {
 }
 
 // Mounts the hook and waits until it has opened its WS connection, returning
-// the query client the test seeds a ghost warden record into.
+// the query client the test seeds a ghost overseer record into.
 async function mountConnected() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -86,7 +86,7 @@ async function mountConnected() {
 // leaves it: one pending action, which is what the rail's waiting row, its
 // amber badge and both disabled "New conversation" controls read.
 function seedGhostRecord(queryClient: QueryClient) {
-  queryClient.setQueryData(wardenKey(PORT, 'w-1'), {
+  queryClient.setQueryData(overseerKey(PORT, 'w-1'), {
     id: 'w-1',
     prompt: 'what is going on?',
     backendName: 'fake',
@@ -102,42 +102,43 @@ function seedGhostRecord(queryClient: QueryClient) {
         status: 'pending',
       },
     ],
+    pendingApprovals: [],
     undeliveredDecisions: [],
     createdAt: '2026-08-10T00:00:00Z',
     updatedAt: '2026-08-10T00:00:05Z',
   });
-  return queryClient.getQueryState(wardenKey(PORT, 'w-1'));
+  return queryClient.getQueryState(overseerKey(PORT, 'w-1'));
 }
 
 // The daemon's `hello` is sent from its websocket `open` handler, so it is the
 // one frame that marks a *connection* — including the reconnect after a
-// restart, which drops every in-memory warden record at once. Nothing else
-// reports that: `warden.changed` can never arrive for a conversation the
+// restart, which drops every in-memory overseer record at once. Nothing else
+// reports that: `overseer.changed` can never arrive for a conversation the
 // daemon no longer has. This asserts the wiring, not the response to it —
-// useWardenSession.test.tsx covers the far end.
-test('hello invalidates every cached warden record for this daemon', async () => {
+// useOverseerSession.test.tsx covers the far end.
+test('hello invalidates every cached overseer record for this daemon', async () => {
   const queryClient = await mountConnected();
   seedGhostRecord(queryClient);
-  expect(queryClient.getQueryState(wardenKey(PORT, 'w-1'))?.isInvalidated).toBe(
-    false
-  );
+  expect(
+    queryClient.getQueryState(overseerKey(PORT, 'w-1'))?.isInvalidated
+  ).toBe(false);
 
   act(() => {
     sink?.onEvent({ type: 'hello', version: '0.0.1' });
   });
 
-  expect(queryClient.getQueryState(wardenKey(PORT, 'w-1'))?.isInvalidated).toBe(
-    true
-  );
+  expect(
+    queryClient.getQueryState(overseerKey(PORT, 'w-1'))?.isInvalidated
+  ).toBe(true);
 });
 
 // The regression this pairs with: the invalidation used to sit in the first
 // positional argument of `connectEvents`, which is `onChange` and fires only
 // for `task.changed`. That is a task-file write, not a connection — so a
 // dispatchd restart on a project whose tasks are not changing left the ghost
-// record in place, while every ordinary task edit refetched the warden for no
+// record in place, while every ordinary task edit refetched the overseer for no
 // reason. Pinning both directions keeps the callback from drifting back.
-test('a task change does not invalidate warden records', async () => {
+test('a task change does not invalidate overseer records', async () => {
   const queryClient = await mountConnected();
   seedGhostRecord(queryClient);
 
@@ -145,9 +146,9 @@ test('a task change does not invalidate warden records', async () => {
     sink?.onChange();
   });
 
-  expect(queryClient.getQueryState(wardenKey(PORT, 'w-1'))?.isInvalidated).toBe(
-    false
-  );
+  expect(
+    queryClient.getQueryState(overseerKey(PORT, 'w-1'))?.isInvalidated
+  ).toBe(false);
 });
 
 function runFixture(id: string, state: RunMeta['state']): RunMeta {

@@ -129,10 +129,11 @@ export type {
   UpdateNotePatch,
   VerificationCheck,
   VerificationResult,
-  WardenAction,
-  WardenMessage,
-  WardenRecord,
-  WardenState,
+  OverseerAction,
+  OverseerApproval,
+  OverseerMessage,
+  OverseerRecord,
+  OverseerState,
 } from './api';
 export { reduceProposal } from './proposalReducer';
 export type { ProposalAction } from './proposalReducer';

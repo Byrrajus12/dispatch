@@ -124,7 +124,7 @@ export interface ExecutorStartOptions {
   maxTurns?: number;
   maxBudgetUsd?: number;
   // The Claude model this run should use (an SDK model id like
-  // 'claude-opus-4-8' or an alias like 'sonnet'), chosen at dispatch time.
+  // 'claude-opus-5' or an alias like 'sonnet'), chosen at dispatch time.
   // Optional — omitted falls back to the SDK/CLI default, so FakeExecutor
   // fixtures and callers that don't care never need to set it.
   model?: string;

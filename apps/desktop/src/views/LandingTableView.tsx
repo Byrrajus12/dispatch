@@ -357,15 +357,17 @@ export function LandingTableView({
               attempt, or re-queued. Kept reachable, never as headline rows. */}
           {staleAttempts.length > 0 && (
             <Collapsible open={staleOpen} onOpenChange={setStaleOpen}>
-              <CollapsibleTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  className="text-muted-foreground hover:text-foreground h-auto w-fit px-1.5 py-1 text-[11.5px] font-normal"
-                >
-                  {staleOpen ? 'Hide' : 'Show'} {staleAttempts.length} stale{' '}
-                  {staleAttempts.length === 1 ? 'attempt' : 'attempts'}
-                </Button>
+              <CollapsibleTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-muted-foreground hover:text-foreground h-auto w-fit px-1.5 py-1 text-[11.5px] font-normal"
+                  />
+                }
+              >
+                {staleOpen ? 'Hide' : 'Show'} {staleAttempts.length} stale{' '}
+                {staleAttempts.length === 1 ? 'attempt' : 'attempts'}
               </CollapsibleTrigger>
               <CollapsibleContent className="mt-1 flex flex-col gap-0.5">
                 {staleAttempts.map((entry) => (
@@ -395,15 +397,17 @@ export function LandingTableView({
           )}
 
           <Collapsible open={landedOpen} onOpenChange={setLandedOpen}>
-            <CollapsibleTrigger asChild>
-              <Button
-                variant="ghost"
-                size="xs"
-                className="text-muted-foreground hover:text-foreground h-auto w-fit px-1.5 py-1 text-[11.5px] font-normal"
-              >
-                {landedOpen ? 'Hide' : 'Show'} recently landed (
-                {landedTasks.length})
-              </Button>
+            <CollapsibleTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="text-muted-foreground hover:text-foreground h-auto w-fit px-1.5 py-1 text-[11.5px] font-normal"
+                />
+              }
+            >
+              {landedOpen ? 'Hide' : 'Show'} recently landed (
+              {landedTasks.length})
             </CollapsibleTrigger>
             <CollapsibleContent className="mt-1 flex flex-col gap-0.5">
               {landedTasks.length === 0 ? (

@@ -53,12 +53,14 @@ describe('demo daemon', () => {
       }
     );
     try {
-      const { port, agentToken: token } = await parseDaemonStdout(
-        proc.stdout,
-        20_000
-      );
+      const {
+        port,
+        agentToken: token,
+        appToken,
+      } = await parseDaemonStdout(proc.stdout, 20_000);
       expect(port).toBeDefined();
       expect(token).toBeDefined();
+      expect(appToken).toBeDefined();
 
       const base = `http://127.0.0.1:${port}`;
       const auth = {
@@ -105,9 +107,12 @@ describe('demo daemon', () => {
         state = run.meta.state;
         if (state === 'awaiting-approval' && !approved) {
           approved = true;
+          // The approval is an adjudication: since v0.30.0 the daemon holds
+          // it to the app token, so an agent cannot approve its own parked
+          // call. Everything else here is the agent's own read/dispatch path.
           const res = await fetch(`${base}/api/runs/${runId}/approval`, {
             method: 'POST',
-            headers: auth,
+            headers: { ...auth, authorization: `Bearer ${appToken}` },
             body: JSON.stringify({ requestId: approvalRequestId, allow: true }),
           });
           expect(res.status).toBeLessThan(300);

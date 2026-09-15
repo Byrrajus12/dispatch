@@ -63,33 +63,33 @@ function PropertyDropdown({
   const selected = options.find((o) => o.value === value);
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          aria-label={ariaLabel}
-          onClick={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
-          className={cn(
-            'h-auto font-normal hover:text-foreground focus-visible:outline-none focus-visible:ring-ring/40',
-            variant === 'icon'
-              ? 'size-5 justify-center rounded p-0 has-[>svg]:px-0 hover:bg-muted/70 focus-visible:ring-2'
-              : 'w-full justify-start gap-2 rounded-md px-2 py-1.5 has-[>svg]:px-2 text-[13px] hover:bg-muted/60 focus-visible:ring-1'
-          )}
-        >
-          {variant === 'icon' ? (
-            (selected?.glyph ?? null)
-          ) : (
-            <>
-              {selected?.glyph}
-              <span
-                className={cn('truncate', muted && 'text-muted-foreground')}
-              >
-                {selected?.label}
-              </span>
-            </>
-          )}
-        </Button>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            aria-label={ariaLabel}
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            className={cn(
+              'h-auto font-normal hover:text-foreground focus-visible:outline-none focus-visible:ring-ring/40',
+              variant === 'icon'
+                ? 'size-5 justify-center rounded p-0 has-[>svg]:px-0 hover:bg-muted/70 focus-visible:ring-2'
+                : 'w-full justify-start gap-2 rounded-md px-2 py-1.5 has-[>svg]:px-2 text-[13px] hover:bg-muted/60 focus-visible:ring-1'
+            )}
+          />
+        }
+      >
+        {variant === 'icon' ? (
+          (selected?.glyph ?? null)
+        ) : (
+          <>
+            {selected?.glyph}
+            <span className={cn('truncate', muted && 'text-muted-foreground')}>
+              {selected?.label}
+            </span>
+          </>
+        )}
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
@@ -99,7 +99,7 @@ function PropertyDropdown({
         {options.map((o) => (
           <DropdownMenuItem
             key={o.value}
-            onSelect={() => onChange(o.value)}
+            onClick={() => onChange(o.value)}
             className="gap-2 pr-8 text-[13px]"
           >
             {o.glyph}

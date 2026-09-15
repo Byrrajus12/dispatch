@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
 import { buildAgentSessions } from '../../src/orchestrator/agentSessions.js';
+import type { OverseerRecord } from '../../src/orchestrator/overseer.js';
 import type { DraftRecord, PlanRecord } from '../../src/orchestrator/plan.js';
-import type { WardenRecord } from '../../src/orchestrator/warden.js';
 
 function plan(over: Partial<PlanRecord> = {}): PlanRecord {
   return {
@@ -35,7 +35,7 @@ function draft(over: Partial<DraftRecord> = {}): DraftRecord {
   };
 }
 
-function warden(over: Partial<WardenRecord> = {}): WardenRecord {
+function overseer(over: Partial<OverseerRecord> = {}): OverseerRecord {
   return {
     id: 'w-1',
     prompt: 'what is running?',
@@ -43,6 +43,7 @@ function warden(over: Partial<WardenRecord> = {}): WardenRecord {
     state: 'ready',
     messages: [],
     pendingActions: [],
+    pendingApprovals: [],
     undeliveredDecisions: [],
     createdAt: '2026-08-11T00:00:00.000Z',
     updatedAt: '2026-08-11T00:00:00.000Z',
@@ -58,13 +59,13 @@ describe('buildAgentSessions', () => {
         plan({ id: 'plan-2', role: 'enrich', subject: 'Fix the header' }),
       ],
       [draft()],
-      [warden()]
+      [overseer()]
     );
     const byId = new Map(sessions.map((s) => [s.id, s]));
     expect(byId.get('plan-1')?.kind).toBe('plan');
     expect(byId.get('plan-2')?.kind).toBe('enrich');
     expect(byId.get('draft-1')?.kind).toBe('draft');
-    expect(byId.get('w-1')?.kind).toBe('warden');
+    expect(byId.get('w-1')?.kind).toBe('overseer');
   });
 
   it('prefers an enrich plan subject over its boilerplate prompt', () => {
@@ -126,7 +127,7 @@ describe('buildAgentSessions', () => {
     const sessions = buildAgentSessions(
       [plan({ id: 'plan-1', updatedAt: '2026-08-11T01:00:00.000Z' })],
       [draft({ id: 'draft-1', updatedAt: '2026-08-11T03:00:00.000Z' })],
-      [warden({ id: 'w-1', updatedAt: '2026-08-11T02:00:00.000Z' })]
+      [overseer({ id: 'w-1', updatedAt: '2026-08-11T02:00:00.000Z' })]
     );
     expect(sessions.map((s) => s.id)).toEqual(['draft-1', 'w-1', 'plan-1']);
   });

@@ -10,6 +10,14 @@ import { expect, test } from 'bun:test';
 import { testConfig } from './fixtures.test-helper';
 import { PolicySection } from './PolicySection';
 
+// Base UI commits a select item on a click that began on it (a bare click is
+// treated as one that opened the list under the pointer), so press first.
+function chooseOption(name: string) {
+  const option = screen.getByRole('option', { name });
+  fireEvent.pointerDown(option);
+  fireEvent.click(option);
+}
+
 function configAt(
   rung: number,
   gates: PolicyConfig['gates'] = {}
@@ -90,12 +98,12 @@ test('a pinned gate reads as pinned and a pin change saves key-by-key', () => {
   );
   expect(screen.getByText('Auto + records (pinned)')).toBeDefined();
   fireEvent.click(screen.getByRole('combobox', { name: 'Merge override' }));
-  fireEvent.click(screen.getByRole('option', { name: 'Rung decides' }));
+  chooseOption('Rung decides');
   expect(saves).toEqual([{ policy: { gates: { merge: null } } }]);
   fireEvent.click(
     screen.getByRole('combobox', { name: 'Scope requests override' })
   );
-  fireEvent.click(screen.getByRole('option', { name: 'Always block' }));
+  chooseOption('Always block');
   expect(saves).toHaveLength(2);
   expect(saves[1]).toEqual({ policy: { gates: { scope: 'block' } } });
 });

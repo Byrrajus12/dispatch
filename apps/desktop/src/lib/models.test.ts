@@ -10,10 +10,13 @@ import { modelDisplayName } from './models.ts';
 describe('modelDisplayName', () => {
   test('maps a current dispatchable model id to its label', () => {
     expect(modelDisplayName('claude-opus-5')).toBe('Opus 5');
-    expect(modelDisplayName('claude-fable-5')).toBe('Fable 5');
+    expect(modelDisplayName('claude-fable-5-1')).toBe('Fable 5.1');
   });
 
   test('maps historical (non-dispatchable) model ids seen in ingested sessions', () => {
+    // Fable 5 and Opus 4.8 left the picker but still appear in past sessions;
+    // the exact historical entry wins over the `claude-fable-5` prefix of 5.1.
+    expect(modelDisplayName('claude-fable-5')).toBe('Fable 5');
     expect(modelDisplayName('claude-opus-4-8')).toBe('Opus 4.8');
     expect(modelDisplayName('claude-opus-4-7')).toBe('Opus 4.7');
     expect(modelDisplayName('claude-sonnet-4-6')).toBe('Sonnet 4.6');

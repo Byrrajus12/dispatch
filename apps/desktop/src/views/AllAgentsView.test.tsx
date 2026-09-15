@@ -103,7 +103,7 @@ test('agentSessionBucket and agentSessionFeedState cover every session state', (
   expect(agentSessionFeedState(session({ state: 'failed' }))).toBe('failed');
 });
 
-// The point of the whole change: a planner, an enrich agent, a draft and a warden all
+// The point of the whole change: a planner, an enrich agent, a draft and a overseer all
 // appear on the page, labelled, alongside the runs.
 test('conversation agents render alongside runs with their kind labels', () => {
   mount({
@@ -112,7 +112,7 @@ test('conversation agents render alongside runs with their kind labels', () => {
       session({ id: 'plan-1', kind: 'plan', title: 'Plan the widget' }),
       session({ id: 'plan-2', kind: 'enrich', title: 'Fix the header' }),
       session({ id: 'draft-1', kind: 'draft', title: 'Draft a task' }),
-      session({ id: 'w-1', kind: 'warden', title: 'What is running?' }),
+      session({ id: 'w-1', kind: 'overseer', title: 'What is running?' }),
     ],
   });
   expect(screen.getByText('A task run')).toBeDefined();
@@ -123,7 +123,7 @@ test('conversation agents render alongside runs with their kind labels', () => {
   expect(screen.getByText('Draft a task')).toBeDefined();
   expect(screen.getByText('draft')).toBeDefined();
   expect(screen.getByText('What is running?')).toBeDefined();
-  expect(screen.getByText('warden')).toBeDefined();
+  expect(screen.getByText('overseer')).toBeDefined();
 });
 
 test('the state filter applies to conversation agents too', () => {

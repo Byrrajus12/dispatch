@@ -124,17 +124,19 @@ export function BrainDumpFab({
         </DialogContent>
       </Dialog>
       <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            size="icon"
-            onClick={() => onOpenChange(!open)}
-            aria-label="Add to Brain dump"
-            aria-expanded={open}
-            className="bg-accent text-accent-foreground hover:bg-accent/80 fixed right-4 bottom-4 z-50 size-9 rounded-full shadow-lg"
-          >
-            <Brain className="size-4.5" />
-          </Button>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              size="icon"
+              onClick={() => onOpenChange(!open)}
+              aria-label="Add to Brain dump"
+              aria-expanded={open}
+              className="bg-accent text-accent-foreground hover:bg-accent/80 fixed right-4 bottom-4 z-50 size-9 rounded-full shadow-lg"
+            />
+          }
+        >
+          <Brain className="size-4.5" />
         </TooltipTrigger>
         <TooltipContent side="left">Add to Brain dump (⌘D)</TooltipContent>
       </Tooltip>

@@ -106,12 +106,12 @@ export type ServerEvent =
   // Carries its result for the same reason `board.sync` does: this is a
   // live feed of an activity nothing else would tell a client about.
   | { type: 'receipts.export'; result: ReceiptsResult }
-  // A warden chat conversation changed: a turn started or settled, a tool call
+  // A overseer chat conversation changed: a turn started or settled, a tool call
   // landed in its transcript, or a queued action was confirmed. Same "go
   // refetch, no payload beyond the id" contract as `plan.changed` — a turn
   // appends several entries, and a client rendering the thread wants the whole
   // record anyway.
-  | { type: 'warden.changed'; conversationId: string }
+  | { type: 'overseer.changed'; conversationId: string }
   // The decision feed's contents changed: something started or stopped
   // awaiting a human. Same "go refetch" contract as task.changed — the feed is
   // derived on every read (see decisionFeed.ts), so there is no increment to

@@ -61,37 +61,41 @@ export function StashesPanel({
             </span>
           </div>
           <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                disabled={busy}
-                aria-label="Pop (S)"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onPop(stash.index);
-                }}
-              >
-                <Undo2 className="size-3.5" />
-              </Button>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  disabled={busy}
+                  aria-label="Pop (S)"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onPop(stash.index);
+                  }}
+                />
+              }
+            >
+              <Undo2 className="size-3.5" />
             </TooltipTrigger>
             <TooltipContent>Pop (S)</TooltipContent>
           </Tooltip>
           <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                disabled={busy}
-                className="hover:text-destructive"
-                aria-label="Drop"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRequestDrop(stash);
-                }}
-              >
-                <Trash2 className="size-3.5" />
-              </Button>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  disabled={busy}
+                  className="hover:text-destructive"
+                  aria-label="Drop"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRequestDrop(stash);
+                  }}
+                />
+              }
+            >
+              <Trash2 className="size-3.5" />
             </TooltipTrigger>
             <TooltipContent>Drop</TooltipContent>
           </Tooltip>

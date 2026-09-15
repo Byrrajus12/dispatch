@@ -143,20 +143,22 @@ export function TitleBar({
           open={switcherOpen}
           onOpenChange={() => onToggleSwitcher()}
         >
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              title={projectPath ?? projectName}
-              className="text-foreground hover:text-foreground h-7 max-w-56 rounded-md px-2 text-[13px] font-medium transition-colors duration-150"
-            >
-              <span
-                className="size-2 shrink-0 rounded-full"
-                style={{ background: colorForProject(projectName) }}
+          <DropdownMenuTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                title={projectPath ?? projectName}
+                className="text-foreground hover:text-foreground h-7 max-w-56 rounded-md px-2 text-[13px] font-medium transition-colors duration-150"
               />
-              <span className="min-w-0 flex-1 truncate">{projectName}</span>
-              <ChevronsUpDown className="text-muted-foreground size-3.5 shrink-0" />
-            </Button>
+            }
+          >
+            <span
+              className="size-2 shrink-0 rounded-full"
+              style={{ background: colorForProject(projectName) }}
+            />
+            <span className="min-w-0 flex-1 truncate">{projectName}</span>
+            <ChevronsUpDown className="text-muted-foreground size-3.5 shrink-0" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-56">
             <DropdownMenuItem disabled className="text-muted-foreground">
@@ -178,7 +180,7 @@ export function TitleBar({
                 <DropdownMenuItem
                   key={p.path}
                   title={p.path}
-                  onSelect={() => onSelectProject(p.path)}
+                  onClick={() => onSelectProject(p.path)}
                 >
                   <span
                     className="size-2 shrink-0 rounded-full"
@@ -189,7 +191,7 @@ export function TitleBar({
               ))
             )}
             <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => onAddProject()}>
+            <DropdownMenuItem onClick={() => onAddProject()}>
               <Plus className="text-muted-foreground size-3.5" />
               <span className="flex-1">Add project</span>
             </DropdownMenuItem>
@@ -233,35 +235,37 @@ export function TitleBar({
           every Radix-initiated change — trigger click, outside click, Escape — through the
           same toggle. */}
       <Popover open={inboxOpen} onOpenChange={() => onToggleInbox()}>
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label={bellAriaLabel(pendingCount, unreadCount)}
-            title="Notifications"
-            className="text-muted-foreground hover:text-foreground relative shrink-0 transition-colors duration-150"
-          >
-            <Bell className="size-4" strokeWidth={2} />
-            {/* Decisions awaiting a human get the persistent numeric pill — it clears only
+        <PopoverTrigger
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={bellAriaLabel(pendingCount, unreadCount)}
+              title="Notifications"
+              className="text-muted-foreground hover:text-foreground relative shrink-0 transition-colors duration-150"
+            />
+          }
+        >
+          <Bell className="size-4" strokeWidth={2} />
+          {/* Decisions awaiting a human get the persistent numeric pill — it clears only
                 when the items resolve, never by opening the popover. The bare accent dot
                 stays as the milder affordance for unread history entries. */}
-            {pendingCount > 0 ? (
+          {pendingCount > 0 ? (
+            <span
+              aria-hidden
+              className="bg-primary text-primary-foreground absolute -top-0.5 -right-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 font-mono text-[9px] leading-none font-medium tabular-nums"
+            >
+              {pendingCount > 99 ? '99+' : pendingCount}
+            </span>
+          ) : (
+            unreadCount > 0 && (
               <span
                 aria-hidden
-                className="bg-primary text-primary-foreground absolute -top-0.5 -right-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 font-mono text-[9px] leading-none font-medium tabular-nums"
-              >
-                {pendingCount > 99 ? '99+' : pendingCount}
-              </span>
-            ) : (
-              unreadCount > 0 && (
-                <span
-                  aria-hidden
-                  className="bg-primary absolute top-0.5 right-0.5 size-1.5 rounded-full"
-                />
-              )
-            )}
-          </Button>
+                className="bg-primary absolute top-0.5 right-0.5 size-1.5 rounded-full"
+              />
+            )
+          )}
         </PopoverTrigger>
         <PopoverContent align="end" side="bottom" className="w-[26rem] p-0">
           {inboxPanel}

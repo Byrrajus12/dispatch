@@ -594,15 +594,17 @@ export function BranchesView({
             Dispatch agent
           </Button>
           <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Keyboard shortcuts (?)"
-                onClick={() => setKeymapOpen(true)}
-              >
-                <HelpCircle className="size-4" />
-              </Button>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Keyboard shortcuts (?)"
+                  onClick={() => setKeymapOpen(true)}
+                />
+              }
+            >
+              <HelpCircle className="size-4" />
             </TooltipTrigger>
             <TooltipContent>Keyboard shortcuts (?)</TooltipContent>
           </Tooltip>
@@ -1190,8 +1192,8 @@ function ConfirmDialog({
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
-          <AlertDialogDescription asChild>
-            <div>{description}</div>
+          <AlertDialogDescription render={<div />}>
+            {description}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

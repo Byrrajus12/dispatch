@@ -63,6 +63,10 @@ export interface PlanRecord {
   // Which config.models role resolves this conversation's model ('enrich' for
   // api.ts's enrich* flows). Stored so follow-ups re-read the same role.
   role: 'plan' | 'enrich';
+  // The model this plan was opened on, when the caller chose one (the Plans
+  // composer's picker). Every follow-up reuses it so a plan is one model
+  // throughout; absent, each turn reads the role's configured model afresh.
+  model?: string;
   state: PlanState;
   // The full conversation transcript, appended to on every turn: the user
   // message first, then the assistant reply once the turn settles.
@@ -303,8 +307,10 @@ export class PlanManager {
   }
 
   // Fresh per-call read of `config.models`, so a settings change takes effect
-  // on the very next call with no daemon restart.
-  private resolveModel(role: 'plan' | 'enrich'): string {
+  // on the very next call with no daemon restart — unless the plan was opened
+  // on a chosen model, which wins for every turn of that plan.
+  private resolveModel(role: 'plan' | 'enrich', chosen?: string): string {
+    if (chosen !== undefined) return chosen;
     const { models } = loadConfig(this.ctx.rootDir);
     return role === 'enrich' ? models.enrich : models.plan;
   }
@@ -316,7 +322,8 @@ export class PlanManager {
     plannerName = 'claude',
     sourceNoteId?: string,
     role: 'plan' | 'enrich' = 'plan',
-    subject?: string
+    subject?: string,
+    model?: string
   ): PlanRecord {
     const planner = this.planners.get(plannerName);
     if (planner === undefined) {
@@ -328,6 +335,7 @@ export class PlanManager {
       prompt,
       plannerName,
       role,
+      ...(model !== undefined ? { model } : {}),
       state: 'running',
       messages: [{ role: 'user', text: prompt, at: now }],
       questions: [],
@@ -342,8 +350,8 @@ export class PlanManager {
     // settles) so history lists — this window's and any other's — show the
     // running plan right away.
     this.ctx.events.broadcast({ type: 'plan.changed', planId: record.id });
-    const model = this.resolveModel(role);
-    void this.runTurn(record.id, () => planner.start(prompt, model, 'plan'));
+    const resolved = this.resolveModel(role, model);
+    void this.runTurn(record.id, () => planner.start(prompt, resolved, 'plan'));
     return record;
   }
 
@@ -526,7 +534,7 @@ export class PlanManager {
     this.recordStore.append(updated);
     this.ctx.events.broadcast({ type: 'plan.changed', planId });
     const sessionId = record.sessionId;
-    const model = this.resolveModel(record.role);
+    const model = this.resolveModel(record.role, record.model);
     void this.runTurn(planId, () =>
       planner.sendMessage(sessionId, message, model, 'plan')
     );

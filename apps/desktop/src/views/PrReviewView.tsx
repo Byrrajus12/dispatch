@@ -336,7 +336,7 @@ function Header({
           on={filesOpen}
           onClick={onToggleFiles}
           label={filesOpen ? 'Hide files' : 'Show files'}
-          className="text-accent-foreground hover:text-accent-foreground data-[state=on]:text-accent-foreground border-none p-0 text-[11px] hover:bg-transparent data-[state=on]:bg-transparent"
+          className="text-accent-foreground hover:text-accent-foreground data-pressed:text-accent-foreground border-none p-0 text-[11px] hover:bg-transparent data-pressed:bg-transparent"
         >
           {filesOpen ? 'Hide files' : 'Show files'}
         </IconToggle>
@@ -344,7 +344,7 @@ function Header({
           on={railOpen}
           onClick={onToggleRail}
           label={railOpen ? 'Hide review' : `Review (${railCount})`}
-          className="text-accent-foreground hover:text-accent-foreground data-[state=on]:text-accent-foreground border-none p-0 text-[11px] hover:bg-transparent data-[state=on]:bg-transparent"
+          className="text-accent-foreground hover:text-accent-foreground data-pressed:text-accent-foreground border-none p-0 text-[11px] hover:bg-transparent data-pressed:bg-transparent"
         >
           {railOpen ? 'Hide review' : `Review (${railCount})`}
         </IconToggle>

@@ -394,11 +394,11 @@ function CheckRow({ group }: { group: CheckGroup }) {
       onOpenChange={setExpanded}
       className="text-[12.5px]"
     >
-      {/* `group` + `group-data-[state=open]:rotate-90` rather than `expanded &&
-          'rotate-90'` — the chevron reacts to the trigger's own Radix data-state
+      {/* `group` + `group-data-panel-open:rotate-90` rather than `expanded &&
+          'rotate-90'` — the chevron reacts to the trigger's own `data-panel-open`
           instead of threading local state down another level. */}
       <CollapsibleTrigger className="group flex w-full items-baseline gap-1.5 text-left">
-        <ChevronRight className="size-3 shrink-0 self-center transition-transform group-data-[state=open]:rotate-90" />
+        <ChevronRight className="size-3 shrink-0 self-center transition-transform group-data-panel-open:rotate-90" />
         <span className="min-w-0 flex-1">{group.rule}</span>
         <span className="dense-meta shrink-0">
           {group.files.length} file{group.files.length === 1 ? '' : 's'}

@@ -31,7 +31,7 @@ interface AllAgentsViewProps {
    * exception, because it is an explicit act by the person reading this list. */
   runs: RunMeta[];
   /** Every in-memory conversation agent — planner chats, "add detail" enrich agents, task
-   * drafts and warden chats. The other half of "all agents": these never appear in `runs`
+   * drafts and overseer chats. The other half of "all agents": these never appear in `runs`
    * (they have no worktree and no RunMeta), so before this prop existed a planner reading
    * the repo was invisible on the very page named after it. */
   sessions: AgentSessionMeta[];
@@ -130,7 +130,7 @@ type AgentRow =
 
 /**
  * Every agent this repo has run: task runs (including the ones you killed) merged with the
- * conversation agents — planners, "add detail" drafters, task drafts, wardens.
+ * conversation agents — planners, "add detail" drafters, task drafts, overseers.
  *
  * A dense table rather than cards, because the value here is scanning down a column: turns and
  * spend line up so an outlier is visible without reading a single row. Terminal runs recede but
@@ -256,7 +256,7 @@ export function AllAgentsView({
                 const { session } = entry;
                 return (
                   // Not clickable: a conversation agent has no run detail page to jump to —
-                  // its own surface (Plans, the drafts tray, Warden) owns the full record.
+                  // its own surface (Plans, the drafts tray, Overseer) owns the full record.
                   <TaskRow
                     key={entry.key}
                     title={session.title}

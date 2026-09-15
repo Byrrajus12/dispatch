@@ -51,32 +51,34 @@ export function DraftTray({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        {/* Compact titlebar trigger: icon plus the count pill when anything is pending. The
-            pill keeps its status colouring — a waiting question is the one count that doubles
-            as a state and needs to stand out even at this size. */}
-        <Button
-          type="button"
-          variant="ghost"
-          title="AI task drafts"
-          aria-label={`AI task drafts${badgeCount > 0 ? ` (${badgeCount})` : ''}${
-            questionCount > 0 ? ', waiting on your answer' : ''
-          }`}
-          className="text-foreground/80 hover:bg-accent/60 hover:text-foreground/80 h-7 shrink-0 gap-1 rounded-md px-1.5 text-[13px] font-normal transition-colors duration-150"
-        >
-          <Sparkles className="size-4 shrink-0" strokeWidth={2} />
-          {badgeCount > 0 && (
-            <CountChip
-              count={badgeCount}
-              className={cn(
-                'flex min-w-[1.1rem] items-center justify-center rounded-full px-1 font-sans text-[10px] font-medium tracking-normal normal-nums',
-                questionCount > 0
-                  ? 'bg-state-waiting-surface text-state-waiting border-state-waiting-edge border'
-                  : 'bg-secondary text-secondary-foreground'
-              )}
-            />
-          )}
-        </Button>
+      {/* Compact titlebar trigger: icon plus the count pill when anything is pending. The
+          pill keeps its status colouring — a waiting question is the one count that doubles
+          as a state and needs to stand out even at this size. */}
+      <PopoverTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            title="AI task drafts"
+            aria-label={`AI task drafts${badgeCount > 0 ? ` (${badgeCount})` : ''}${
+              questionCount > 0 ? ', waiting on your answer' : ''
+            }`}
+            className="text-foreground/80 hover:bg-accent/60 hover:text-foreground/80 h-7 shrink-0 gap-1 rounded-md px-1.5 text-[13px] font-normal transition-colors duration-150"
+          />
+        }
+      >
+        <Sparkles className="size-4 shrink-0" strokeWidth={2} />
+        {badgeCount > 0 && (
+          <CountChip
+            count={badgeCount}
+            className={cn(
+              'flex min-w-[1.1rem] items-center justify-center rounded-full px-1 font-sans text-[10px] font-medium tracking-normal normal-nums',
+              questionCount > 0
+                ? 'bg-state-waiting-surface text-state-waiting border-state-waiting-edge border'
+                : 'bg-secondary text-secondary-foreground'
+            )}
+          />
+        )}
       </PopoverTrigger>
       <PopoverContent align="end" side="bottom" className="w-[26rem] p-0">
         <div className="shadow-hairline-bottom px-3 py-2">

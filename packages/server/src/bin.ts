@@ -14,15 +14,15 @@ import { resolveStoreBackend, startServer } from './index.js';
 import { ClaudeExecutor } from './orchestrator/executors/claude.js';
 import type { FakeExecutorScript } from './orchestrator/executors/fake.js';
 import { FakeExecutor } from './orchestrator/executors/fake.js';
+import { ClaudeOverseer } from './orchestrator/overseers/claude.js';
+import type {
+  FakeOverseerScript,
+  FakeOverseerTurn,
+} from './orchestrator/overseers/fake.js';
+import { FakeOverseer } from './orchestrator/overseers/fake.js';
 import type { PlanProposal } from './orchestrator/planner.js';
 import { ClaudePlanner } from './orchestrator/planners/claude.js';
 import { FakePlanner } from './orchestrator/planners/fake.js';
-import { ClaudeWarden } from './orchestrator/wardens/claude.js';
-import type {
-  FakeWardenScript,
-  FakeWardenTurn,
-} from './orchestrator/wardens/fake.js';
-import { FakeWarden } from './orchestrator/wardens/fake.js';
 
 // ---------------------------------------------------------------------------
 // Phase 7 fakes hook (DISPATCH_ENABLE_FAKES / DISPATCH_FAKE_APPROVAL)
@@ -31,7 +31,7 @@ import { FakeWarden } from './orchestrator/wardens/fake.js';
 // desktop app's release-build sidecar) registers ONLY the real ClaudeExecutor
 // (as 'claude') and ClaudePlanner (as 'claude') — see index.ts's own
 // defaults. Setting `DISPATCH_ENABLE_FAKES=1` in this process's environment
-// additionally registers a FakeExecutor, FakePlanner, and FakeWarden, all
+// additionally registers a FakeExecutor, FakePlanner, and FakeOverseer, all
 // under the name 'fake', alongside the real ones — never replacing 'claude'.
 // This exists purely so the CLI's headless integration tests (and any other e2e script)
 // can drive a REAL spawned daemon through a full run/plan lifecycle without
@@ -299,13 +299,13 @@ const DEFAULT_FAKE_PROPOSAL: PlanProposal = {
   ],
 };
 
-// One mutating turn of the default fake warden script: read the ready list,
+// One mutating turn of the default fake overseer script: read the ready list,
 // then queue a dispatch of the FIRST ready task on the fake executor — derived
 // from the live board rather than a hard-coded id, so the script works against
 // any fixture. Queue, not run: the dispatch happens only if a human approves
 // the pending action in the chat UI, which is exactly the confirm/deny seam
 // the desktop e2e suite exercises.
-const FAKE_WARDEN_MUTATING_TURN: FakeWardenTurn = {
+const FAKE_OVERSEER_MUTATING_TURN: FakeOverseerTurn = {
   calls: [
     { tool: 'list_ready_tasks' },
     {
@@ -333,12 +333,12 @@ const FAKE_WARDEN_MUTATING_TURN: FakeWardenTurn = {
   },
 };
 
-// The one default script every DISPATCH_ENABLE_FAKES daemon's 'fake' warden
+// The one default script every DISPATCH_ENABLE_FAKES daemon's 'fake' overseer
 // backend plays: a status turn that answers from a real list_runs read, then
 // two identical mutating turns (queue-deny-requeue-approve is the flow the
 // desktop e2e drives, so the second ask must queue again). Fixed like the
 // executor/planner defaults above — a test/e2e hook, not a scripting facility.
-function buildDefaultFakeWardenScript(): FakeWardenScript {
+function buildDefaultFakeOverseerScript(): FakeOverseerScript {
   return {
     ok: true,
     turns: [
@@ -353,8 +353,8 @@ function buildDefaultFakeWardenScript(): FakeWardenScript {
           return `Status check: this project has ${total} runs on record, ${live} of them live.`;
         },
       },
-      FAKE_WARDEN_MUTATING_TURN,
-      FAKE_WARDEN_MUTATING_TURN,
+      FAKE_OVERSEER_MUTATING_TURN,
+      FAKE_OVERSEER_MUTATING_TURN,
     ],
   };
 }
@@ -438,12 +438,12 @@ const handle = await startServer({
         );
       }
     : undefined,
-  registerWardens: enableFakes
-    ? (wardenManager) => {
-        wardenManager.registerBackend('claude', new ClaudeWarden(rootDir));
-        wardenManager.registerBackend(
+  registerOverseers: enableFakes
+    ? (overseerManager) => {
+        overseerManager.registerBackend('claude', new ClaudeOverseer(rootDir));
+        overseerManager.registerBackend(
           'fake',
-          new FakeWarden(buildDefaultFakeWardenScript())
+          new FakeOverseer(buildDefaultFakeOverseerScript())
         );
       }
     : undefined,
@@ -466,7 +466,7 @@ console.log(
 
 if (enableFakes) {
   console.log(
-    'dispatchd: DISPATCH_ENABLE_FAKES=1 — fake executor/planner/warden registered (test/e2e only)'
+    'dispatchd: DISPATCH_ENABLE_FAKES=1 — fake executor/planner/overseer registered (test/e2e only)'
   );
 }
 

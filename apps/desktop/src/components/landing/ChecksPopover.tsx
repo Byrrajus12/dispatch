@@ -81,10 +81,10 @@ export function ChecksPopover({ checks, url }: ChecksPopoverProps) {
 
   return (
     <Popover>
-      <PopoverTrigger asChild>
-        <button type="button" className="cursor-pointer">
-          <PrChecksPill checks={checks} />
-        </button>
+      <PopoverTrigger
+        render={<button type="button" className="cursor-pointer" />}
+      >
+        <PrChecksPill checks={checks} />
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64 p-3">
         <div className="flex flex-col gap-1.5 text-[12px]">

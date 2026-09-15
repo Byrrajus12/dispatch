@@ -144,16 +144,18 @@ export function LandingRow({
     <TableRow>
       <TableCell>
         <Tooltip>
-          <TooltipTrigger asChild>
-            <span
-              aria-hidden
-              className="inline-block size-2 shrink-0 rounded-full"
-              style={{
-                backgroundColor: color,
-                boxShadow: `0 0 0 3px color-mix(in srgb, ${color} 16%, transparent)`,
-              }}
-            />
-          </TooltipTrigger>
+          <TooltipTrigger
+            render={
+              <span
+                aria-hidden
+                className="inline-block size-2 shrink-0 rounded-full"
+                style={{
+                  backgroundColor: color,
+                  boxShadow: `0 0 0 3px color-mix(in srgb, ${color} 16%, transparent)`,
+                }}
+              />
+            }
+          />
           <TooltipContent>{row.gate.detail}</TooltipContent>
         </Tooltip>
       </TableCell>
@@ -380,19 +382,21 @@ function WorktreeCell({
           if (!open) setAskingFork(false);
         }}
       >
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={client === null || busy}
-            onClick={() => {
-              if (pr.isCrossRepository) setAskingFork(true);
-              else void checkout(false);
-            }}
-          >
-            Check out
-          </Button>
+        <PopoverTrigger
+          render={
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={client === null || busy}
+              onClick={() => {
+                if (pr.isCrossRepository) setAskingFork(true);
+                else void checkout(false);
+              }}
+            />
+          }
+        >
+          Check out
         </PopoverTrigger>
         <PopoverContent align="end" className="w-72">
           <ForkConfirm
@@ -412,19 +416,21 @@ function WorktreeCell({
     <div className="flex items-center gap-1">
       <StatusPill tone={sync.tone}>{sync.label}</StatusPill>
       <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost"
-            aria-label={`Worktree actions for #${pr.number}`}
-          >
-            <MoreHorizontal className="size-3.5" />
-          </Button>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              aria-label={`Worktree actions for #${pr.number}`}
+            />
+          }
+        >
+          <MoreHorizontal className="size-3.5" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem
-            onSelect={() => {
+            onClick={() => {
               openInEditor(worktree.path).catch((err: unknown) => {
                 console.error(`Failed to open ${worktree.path}:`, err);
               });
@@ -434,7 +440,7 @@ function WorktreeCell({
             Open in editor
           </DropdownMenuItem>
           <DropdownMenuItem
-            onSelect={() => {
+            onClick={() => {
               void navigator.clipboard
                 ?.writeText(worktree.path)
                 .catch(() => undefined);
@@ -444,7 +450,7 @@ function WorktreeCell({
             Copy path
           </DropdownMenuItem>
           <DropdownMenuItem
-            onSelect={() => {
+            onClick={() => {
               revealInFinder(worktree.path).catch((err: unknown) => {
                 console.error(`Failed to reveal ${worktree.path}:`, err);
               });
@@ -457,7 +463,7 @@ function WorktreeCell({
           <DropdownMenuItem
             variant="destructive"
             disabled={busy}
-            onSelect={() => void remove()}
+            onClick={() => void remove()}
           >
             <Trash2 className="size-3.5" />
             Remove

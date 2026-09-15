@@ -198,21 +198,23 @@ function SubjectCombobox({
   const selected = options.find((o) => o.id === value);
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          aria-haspopup="listbox"
-          aria-expanded={open}
-          aria-label={ariaLabel}
-          className="w-80 justify-between font-normal"
-        >
-          <span className={cnTruncate(selected === undefined)}>
-            {selected?.label ?? placeholder}
-          </span>
-          <ChevronsUpDown className="size-3.5 shrink-0 opacity-50" />
-        </Button>
+      <PopoverTrigger
+        render={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-haspopup="listbox"
+            aria-expanded={open}
+            aria-label={ariaLabel}
+            className="w-80 justify-between font-normal"
+          />
+        }
+      >
+        <span className={cnTruncate(selected === undefined)}>
+          {selected?.label ?? placeholder}
+        </span>
+        <ChevronsUpDown className="size-3.5 shrink-0 opacity-50" />
       </PopoverTrigger>
       <PopoverContent align="start" className="w-96 p-0">
         <Command>

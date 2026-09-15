@@ -16,7 +16,7 @@ const GROUPS: SearchGroup[] = [
     id: 'agents',
     label: 'Agents',
     items: [
-      { id: 'a-warden', label: 'Warden' },
+      { id: 'a-overseer', label: 'Overseer' },
       { id: 'a-cartographer', label: 'Cartographer' },
     ],
   },
@@ -39,12 +39,12 @@ describe('filterGroups', () => {
   });
 
   test('matches item labels by case-insensitive substring', () => {
-    const result = filterGroups(GROUPS, 'WARDEN');
+    const result = filterGroups(GROUPS, 'OVERSEER');
     expect(result).toEqual([
       {
         id: 'agents',
         label: 'Agents',
-        items: [{ id: 'a-warden', label: 'Warden' }],
+        items: [{ id: 'a-overseer', label: 'Overseer' }],
       },
     ]);
   });
@@ -59,7 +59,7 @@ describe('filterGroups', () => {
 
   test('matches across multiple groups at once', () => {
     const result = filterGroups(GROUPS, 'a');
-    // "Rework the kanban columns" (a), "Warden" (a), "Cartographer" (a), "Start a new run" (a)
+    // "Rework the kanban columns" (a), "Overseer" (a), "Cartographer" (a), "Start a new run" (a)
     expect(result.map((group) => group.id)).toEqual([
       'tasks',
       'agents',
@@ -74,7 +74,7 @@ describe('filterGroups', () => {
 
   test('does not mutate the input groups', () => {
     const before = JSON.parse(JSON.stringify(GROUPS));
-    filterGroups(GROUPS, 'warden');
+    filterGroups(GROUPS, 'overseer');
     expect(GROUPS).toEqual(before);
   });
 });

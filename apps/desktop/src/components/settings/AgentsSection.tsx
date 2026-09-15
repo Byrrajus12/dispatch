@@ -4,7 +4,6 @@ import type {
   ModelConfig,
 } from '@dispatch/core/browser';
 import { MODEL_ROLES } from '@dispatch/core/browser';
-import { RadioGroup as RadioGroupPrimitive } from 'radix-ui';
 import { useEffect, useState } from 'react';
 
 import { MODELS } from '../../lib/models';
@@ -13,7 +12,6 @@ import { HintText, Panel, PanelHeader, PanelRow } from '@/ui/chrome';
 import { Field, FieldDescription, FieldLabel } from '@/ui/field';
 import { Input } from '@/ui/input';
 import { Label } from '@/ui/label';
-import { RadioGroup } from '@/ui/radio-group';
 import {
   Select,
   SelectContent,
@@ -38,6 +36,10 @@ interface AgentsSectionProps {
 // packages/core/src/config.ts so the schema doesn't have to be read.
 const ROLE_INFO: Record<keyof ModelConfig, { label: string; hint: string }> = {
   execute: { label: 'Coding runs', hint: 'The agent that edits the repo.' },
+  overseer: {
+    label: 'Overseer',
+    hint: 'The overseer chat: a full agent session in the checkout that also holds the project controls.',
+  },
   plan: { label: 'Planning', hint: 'Multi-turn planning conversations.' },
   draft: {
     label: 'Task drafting',
@@ -181,27 +183,28 @@ export function AgentsSection({ config, onSave }: AgentsSectionProps) {
         <span className="text-[12px]">
           When an agent wants to do something consequential
         </span>
-        <RadioGroup
-          value={config.orchestrator.permissionMode}
-          onValueChange={(next) => void onSave({ permissionMode: next })}
-          className="gap-1.5"
+        {/* Native radios rather than the Radio primitive: these are styled
+            with `accent-*` as real inputs anyway, and a real input is what
+            keeps `getByLabelText(...).checked` meaningful in the tests. */}
+        <div
+          role="radiogroup"
+          aria-label="When an agent wants to do something consequential"
+          className="grid gap-1.5"
         >
           {PERMISSION_MODES.map(([mode, label]) => (
             <Label key={mode} className="flex items-center gap-2 font-normal">
-              {/* asChild swaps Radix's button for a real input so
-                  getByLabelText/.checked keep working. */}
-              <RadioGroupPrimitive.Item asChild value={mode}>
-                <input
-                  type="radio"
-                  checked={config.orchestrator.permissionMode === mode}
-                  readOnly
-                  className="accent-accent size-3.5"
-                />
-              </RadioGroupPrimitive.Item>
+              <input
+                type="radio"
+                name="permission-mode"
+                value={mode}
+                checked={config.orchestrator.permissionMode === mode}
+                onChange={() => void onSave({ permissionMode: mode })}
+                className="accent-accent size-3.5"
+              />
               <span className="text-[13px]">{label}</span>
             </Label>
           ))}
-        </RadioGroup>
+        </div>
         <HintText>
           Auto lets the SDK&rsquo;s own classifier approve every tool, so a
           dispatched agent proceeds unattended instead of stalling on the first

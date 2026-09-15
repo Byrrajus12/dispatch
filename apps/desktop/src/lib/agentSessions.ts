@@ -9,7 +9,7 @@ export const AGENT_SESSION_KIND_LABEL: Record<AgentSessionKind, string> = {
   plan: 'planner',
   enrich: 'detail',
   draft: 'draft',
-  warden: 'warden',
+  overseer: 'overseer',
 };
 
 /**

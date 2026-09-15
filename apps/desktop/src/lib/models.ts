@@ -16,14 +16,9 @@ export const MODELS: ModelOption[] = [
     hint: 'The default for real work',
   },
   {
-    id: 'claude-fable-5',
-    label: 'Fable 5',
+    id: 'claude-fable-5-1',
+    label: 'Fable 5.1',
     hint: 'Hardest work. Premium pricing.',
-  },
-  {
-    id: 'claude-opus-4-8',
-    label: 'Opus 4.8',
-    hint: 'Previous-generation Opus',
   },
   {
     id: 'claude-sonnet-5',
@@ -65,6 +60,51 @@ export function resolveExecuteModel(
   return readStoredOverride() ?? config?.models?.execute ?? DEFAULT_MODEL;
 }
 
+/** The config roles whose composer offers a per-conversation model pick. */
+export type PickableRole = 'plan' | 'overseer';
+
+// Per-device storage key for one role's remembered pick.
+function roleStorageKey(role: PickableRole): string {
+  return `dispatch:model:${role}`;
+}
+
+// The model the user last picked for `role` on this device, if it is still a
+// valid choice. Never throws when `localStorage` is missing (SSR/tests) or
+// refuses access (a private window).
+export function readRoleModelOverride(role: PickableRole): string | undefined {
+  try {
+    if (typeof window === 'undefined') return undefined;
+    const stored = window.localStorage.getItem(roleStorageKey(role));
+    return stored !== null && MODELS.some((m) => m.id === stored)
+      ? stored
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Remembers a composer pick for `role` on this device, so "always Fable for
+// planning" sticks without a trip to Settings. Best-effort: a storage failure
+// only costs the memory, not the pick itself.
+export function storeRoleModelOverride(role: PickableRole, id: string): void {
+  try {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(roleStorageKey(role), id);
+  } catch {
+    // Nothing to do: the caller still holds the pick in state.
+  }
+}
+
+// The model a plan or overseer conversation opens on when the composer has
+// not been touched: the device's remembered pick for the role, else the
+// project's configured model for it, else the built-in default.
+export function resolveRoleModel(
+  role: PickableRole,
+  config: { models?: Partial<Record<PickableRole, string>> } | null | undefined
+): string {
+  return readRoleModelOverride(role) ?? config?.models?.[role] ?? DEFAULT_MODEL;
+}
+
 // A short human label for a model id (for run headers/session), falling back to the raw id so
 // an unknown/older model still shows something meaningful.
 export function modelLabel(id: string | undefined): string | undefined {
@@ -77,6 +117,8 @@ export function modelLabel(id: string | undefined): string | undefined {
 // non-billable `<synthetic>` sentinel. Kept beside `MODELS` so all id→label mapping lives in
 // one file, per the parser's "map raw ids to display names in one place" note.
 const HISTORICAL_MODEL_LABELS: Record<string, string> = {
+  'claude-fable-5': 'Fable 5',
+  'claude-opus-4-8': 'Opus 4.8',
   'claude-opus-4-7': 'Opus 4.7',
   'claude-sonnet-4-6': 'Sonnet 4.6',
   '<synthetic>': 'Synthetic',

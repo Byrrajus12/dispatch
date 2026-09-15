@@ -180,7 +180,7 @@ function ToolRow({ entry, live }: { entry: NormalizedEntry; live: boolean }) {
       onOpenChange={setOpen}
       className="flex min-w-0 flex-col gap-1"
     >
-      <CollapsibleTrigger asChild>{chip}</CollapsibleTrigger>
+      <CollapsibleTrigger render={chip} />
       <CollapsibleContent className="min-w-0">{view.body}</CollapsibleContent>
     </Collapsible>
   );
@@ -267,7 +267,7 @@ function AgentRow({ entry }: { entry: NormalizedEntry }) {
       onOpenChange={setOpen}
       className="flex min-w-0 flex-col gap-1"
     >
-      <CollapsibleTrigger asChild>{chip}</CollapsibleTrigger>
+      <CollapsibleTrigger render={chip} />
       <CollapsibleContent className="min-w-0">{body}</CollapsibleContent>
     </Collapsible>
   );

@@ -1,5 +1,5 @@
 import { Maximize2 } from 'lucide-react';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 import { ErrorBoundary } from '../shell/ErrorBoundary';
 import type { TaskDetailPanelProps } from './detail';
@@ -18,6 +18,7 @@ export function TaskPeekDialog({
   onExpand,
   ...panelProps
 }: TaskDetailPanelProps & { onClose: () => void; onExpand: () => void }) {
+  const contentRef = useRef<HTMLDivElement>(null);
   // Cmd/Ctrl+Enter grows the peek into the full task view.
   useEffect(() => {
     function handleKey(event: KeyboardEvent) {
@@ -39,16 +40,14 @@ export function TaskPeekDialog({
       <DialogContent
         className="flex h-[85vh] max-h-[760px] w-[min(960px,94vw)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[960px]"
         aria-describedby={undefined}
-        // Radix's default open-autofocus lands on the first tabbable descendant — which is
+        // The default open-autofocus lands on the first tabbable descendant — which is
         // the (pre-filled) title field — and browsers select a text input's full value when
         // it's focused this way, not just place a caret. Left alone, opening this dialog and
         // pressing any key (even Space) would silently wipe the task's title. Focus the
-        // content root itself instead (Radix gives it `tabIndex={-1}` for exactly this) —
+        // content root itself instead (the popup carries `tabIndex={-1}` for exactly this) —
         // Tab still reaches the title field normally, just without the drive-by select-all.
-        onOpenAutoFocus={(event) => {
-          event.preventDefault();
-          (event.currentTarget as HTMLElement).focus();
-        }}
+        ref={contentRef}
+        initialFocus={contentRef}
       >
         <DialogTitle className="sr-only">
           {panelProps.doc.meta.title || 'Task detail'}

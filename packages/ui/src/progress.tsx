@@ -1,13 +1,17 @@
-import { Progress as ProgressPrimitive } from 'radix-ui';
-import * as React from 'react';
+'use client';
+
+import { Progress as ProgressPrimitive } from '@base-ui/react/progress';
 
 import { cn } from './lib/utils';
 
+// Base UI sizes the indicator itself (its width is the completed percentage
+// of `value` against `max`, 100 by default) and marks the root
+// `data-indeterminate` when `value` is `null`.
 function Progress({
   className,
   value,
   ...props
-}: React.ComponentProps<typeof ProgressPrimitive.Root>) {
+}: ProgressPrimitive.Root.Props) {
   return (
     <ProgressPrimitive.Root
       data-slot="progress"
@@ -18,11 +22,15 @@ function Progress({
       )}
       {...props}
     >
-      <ProgressPrimitive.Indicator
-        data-slot="progress-indicator"
-        className="bg-primary h-full w-full flex-1 transition-all"
-        style={{ transform: `translateX(-${100 - (value || 0)}%)` }}
-      />
+      <ProgressPrimitive.Track
+        data-slot="progress-track"
+        className="relative flex h-full w-full items-center overflow-hidden"
+      >
+        <ProgressPrimitive.Indicator
+          data-slot="progress-indicator"
+          className="bg-primary h-full transition-all"
+        />
+      </ProgressPrimitive.Track>
     </ProgressPrimitive.Root>
   );
 }

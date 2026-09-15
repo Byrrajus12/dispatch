@@ -1,9 +1,9 @@
-import type { RunMeta, WardenAction, WardenRecord } from '@dispatch/client';
+import type { OverseerAction, OverseerRecord, RunMeta } from '@dispatch/client';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, expect, test } from 'bun:test';
 import { useState } from 'react';
 
-import type { WardenSession } from '../../hooks/useWardenSession';
+import type { OverseerSession } from '../../hooks/useOverseerSession';
 import { LiveRail } from './LiveRail';
 
 function run(over: Partial<RunMeta> = {}): RunMeta {
@@ -22,10 +22,10 @@ function run(over: Partial<RunMeta> = {}): RunMeta {
   } as RunMeta;
 }
 
-// The same record/action fixtures wardenThread.test.ts builds — the section's
-// Warden tab renders through the identical WardenSession seam WardenView
+// The same record/action fixtures overseerThread.test.ts builds — the section's
+// Overseer tab renders through the identical OverseerSession seam OverseerView
 // uses, so a fake session with a canned record is the whole test backend.
-function wardenRecord(over: Partial<WardenRecord> = {}): WardenRecord {
+function overseerRecord(over: Partial<OverseerRecord> = {}): OverseerRecord {
   return {
     id: 'w-1',
     prompt: 'what is going on?',
@@ -33,6 +33,7 @@ function wardenRecord(over: Partial<WardenRecord> = {}): WardenRecord {
     state: 'ready',
     messages: [],
     pendingActions: [],
+    pendingApprovals: [],
     undeliveredDecisions: [],
     createdAt: '2026-08-10T00:00:00Z',
     updatedAt: '2026-08-10T00:00:05Z',
@@ -40,7 +41,7 @@ function wardenRecord(over: Partial<WardenRecord> = {}): WardenRecord {
   };
 }
 
-function wardenAction(over: Partial<WardenAction> = {}): WardenAction {
+function overseerAction(over: Partial<OverseerAction> = {}): OverseerAction {
   return {
     id: 'act-1',
     tool: 'cancel_run',
@@ -52,7 +53,7 @@ function wardenAction(over: Partial<WardenAction> = {}): WardenAction {
   };
 }
 
-function wardenSession(over: Partial<WardenSession> = {}): WardenSession {
+function overseerSession(over: Partial<OverseerSession> = {}): OverseerSession {
   return {
     conversationId: null,
     record: undefined,
@@ -62,7 +63,11 @@ function wardenSession(over: Partial<WardenSession> = {}): WardenSession {
     sendError: null,
     confirmAction: () => Promise.resolve(),
     decidingActionId: null,
+    decideApproval: () => Promise.resolve(),
+    decidingRequestId: null,
     decideError: null,
+    model: 'claude-opus-5',
+    setModel: () => {},
     reset: () => {},
     draft: '',
     setDraft: () => {},
@@ -74,11 +79,11 @@ function railProps(over: Partial<Parameters<typeof LiveRail>[0]> = {}) {
   return {
     runs: [],
     attentionCount: 0,
-    warden: wardenSession(),
+    overseer: overseerSession(),
     daemonReady: true,
     onOpenTask: () => {},
     onOpenInbox: () => {},
-    onOpenWarden: () => {},
+    onOpenOverseer: () => {},
     collapsed: false,
     ...over,
   };
@@ -87,16 +92,18 @@ function railProps(over: Partial<Parameters<typeof LiveRail>[0]> = {}) {
 // Radix Tabs activates a trigger on mousedown, not click — one helper so every
 // test switches tabs the way the widget actually listens.
 function selectTab(name: string | RegExp) {
-  fireEvent.mouseDown(screen.getByRole('tab', { name }));
+  fireEvent.click(screen.getByRole('tab', { name }));
 }
 
-// The section unmounts the warden chat whenever its tab is not showing, so the
+// The section unmounts the overseer chat whenever its tab is not showing, so the
 // composer draft has to be state that outlives it — App holds it in
-// useWardenSession. This is that seam, so the draft tests exercise the real
+// useOverseerSession. This is that seam, so the draft tests exercise the real
 // arrangement rather than a chat that merely never unmounted.
 function RailWithDraft(props: Parameters<typeof LiveRail>[0]) {
   const [draft, setDraft] = useState('');
-  return <LiveRail {...props} warden={{ ...props.warden, draft, setDraft }} />;
+  return (
+    <LiveRail {...props} overseer={{ ...props.overseer, draft, setDraft }} />
+  );
 }
 
 // The section persists its active tab on mount, so every test must start
@@ -171,7 +178,7 @@ test('the collapsed strip still shows the attention count and opens the inbox', 
 });
 
 // Collapsed, the run rows and headings disappear — only the essentials survive: the
-// attention count (above), a queued warden approval, and that agents are running at all.
+// attention count (above), a queued overseer approval, and that agents are running at all.
 test('the collapsed strip drops rows but keeps the running count', () => {
   render(
     <LiveRail
@@ -186,20 +193,20 @@ test('the collapsed strip drops rows but keeps the running count', () => {
   expect(screen.getByTitle('2 agents running').textContent).toContain('2');
 });
 
-test('the Warden tab swaps the run list for the warden composer, and back', () => {
+test('the Overseer tab swaps the run list for the overseer composer, and back', () => {
   render(<LiveRail {...railProps({ runs: [run()] })} />);
 
   // Ordinary radix tab bodies: only the selected panel is mounted.
   expect(screen.getByText('Do the thing')).toBeDefined();
-  expect(screen.queryByLabelText('Warden opening question')).toBeNull();
+  expect(screen.queryByLabelText('Overseer opening question')).toBeNull();
 
-  selectTab('Warden');
+  selectTab('Overseer');
   expect(screen.queryByText('Do the thing')).toBeNull();
-  expect(screen.getByLabelText('Warden opening question')).toBeDefined();
+  expect(screen.getByLabelText('Overseer opening question')).toBeDefined();
 
   selectTab('Runs');
   expect(screen.getByText('Do the thing')).toBeDefined();
-  expect(screen.queryByLabelText('Warden opening question')).toBeNull();
+  expect(screen.queryByLabelText('Overseer opening question')).toBeNull();
 });
 
 // Each trigger sets aria-controls unconditionally, so a section that renders
@@ -208,7 +215,7 @@ test('the Warden tab swaps the run list for the warden composer, and back', () =
 test('the selected tab controls a real, labelled tabpanel', () => {
   render(<LiveRail {...railProps()} />);
 
-  for (const name of ['Runs', 'Warden']) {
+  for (const name of ['Runs', 'Overseer']) {
     selectTab(name);
     const trigger = screen.getByRole('tab', { name });
     const panelId = trigger.getAttribute('aria-controls') ?? '';
@@ -225,16 +232,17 @@ test('the selected tab controls a real, labelled tabpanel', () => {
 // message only survives because the draft belongs to the session.
 test('a composer draft survives switching tabs', () => {
   render(<RailWithDraft {...railProps()} />);
-  selectTab('Warden');
+  selectTab('Overseer');
 
-  fireEvent.change(screen.getByLabelText('Warden opening question'), {
+  fireEvent.change(screen.getByLabelText('Overseer opening question'), {
     target: { value: 'half a thought' },
   });
 
   selectTab('Runs');
-  selectTab('Warden');
+  selectTab('Overseer');
   expect(
-    screen.getByLabelText<HTMLTextAreaElement>('Warden opening question').value
+    screen.getByLabelText<HTMLTextAreaElement>('Overseer opening question')
+      .value
   ).toBe('half a thought');
 });
 
@@ -246,30 +254,32 @@ test('a composer draft survives the sidebar collapsing and expanding', () => {
     return (
       <LiveRail
         {...railProps({
-          warden: { ...wardenSession(), draft, setDraft },
+          overseer: { ...overseerSession(), draft, setDraft },
           collapsed,
         })}
       />
     );
   }
-  window.localStorage.setItem('dispatch:live-rail-tab', 'warden');
+  window.localStorage.setItem('dispatch:live-rail-tab', 'overseer');
   const view = render(<Harness collapsed={false} />);
   expect(
-    screen.getByLabelText<HTMLTextAreaElement>('Warden opening question').value
+    screen.getByLabelText<HTMLTextAreaElement>('Overseer opening question')
+      .value
   ).toBe('half a thought');
 
   view.rerender(<Harness collapsed />);
-  expect(screen.queryByLabelText('Warden opening question')).toBeNull();
+  expect(screen.queryByLabelText('Overseer opening question')).toBeNull();
 
   view.rerender(<Harness collapsed={false} />);
   expect(
-    screen.getByLabelText<HTMLTextAreaElement>('Warden opening question').value
+    screen.getByLabelText<HTMLTextAreaElement>('Overseer opening question')
+      .value
   ).toBe('half a thought');
 });
 
 // The attention strip is the section's one always-on signal — switching to the
-// warden conversation must not hide that something is waiting on a human.
-test('the attention strip stays visible on the Warden tab', () => {
+// overseer conversation must not hide that something is waiting on a human.
+test('the attention strip stays visible on the Overseer tab', () => {
   render(
     <LiveRail
       {...railProps({
@@ -278,7 +288,7 @@ test('the attention strip stays visible on the Warden tab', () => {
       })}
     />
   );
-  selectTab('Warden');
+  selectTab('Overseer');
   expect(screen.getByText('1 waiting on you →')).toBeDefined();
 });
 
@@ -288,17 +298,19 @@ test('the active tab round-trips through dispatch:live-rail-tab', () => {
   const first = render(<LiveRail {...railProps()} />);
   expect(window.localStorage.getItem('dispatch:live-rail-tab')).toBe('runs');
 
-  selectTab('Warden');
-  expect(window.localStorage.getItem('dispatch:live-rail-tab')).toBe('warden');
+  selectTab('Overseer');
+  expect(window.localStorage.getItem('dispatch:live-rail-tab')).toBe(
+    'overseer'
+  );
   first.unmount();
 
   render(<LiveRail {...railProps()} />);
-  expect(screen.getByLabelText('Warden opening question')).toBeDefined();
+  expect(screen.getByLabelText('Overseer opening question')).toBeDefined();
 });
 
-test('a pending warden action renders the confirm card in the section and decides through the session', async () => {
+test('a pending overseer action renders the confirm card in the section and decides through the session', async () => {
   const decisions: unknown[] = [];
-  const record = wardenRecord({
+  const record = overseerRecord({
     state: 'ready',
     messages: [
       { role: 'user', text: 'cancel r-1', at: '2026-08-10T00:00:01Z' },
@@ -310,9 +322,9 @@ test('a pending warden action renders the confirm card in the section and decide
         at: '2026-08-10T00:00:02Z',
       },
     ],
-    pendingActions: [wardenAction()],
+    pendingActions: [overseerAction()],
   });
-  const warden = wardenSession({
+  const overseer = overseerSession({
     conversationId: 'w-1',
     record,
     confirmAction: (actionId: string, approve: boolean) => {
@@ -320,9 +332,9 @@ test('a pending warden action renders the confirm card in the section and decide
       return Promise.resolve();
     },
   });
-  render(<LiveRail {...railProps({ warden })} />);
-  // The pending count rides the tab's accessible name ("Warden 1").
-  selectTab(/^Warden/);
+  render(<LiveRail {...railProps({ overseer })} />);
+  // The pending count rides the tab's accessible name ("Overseer 1").
+  selectTab(/^Overseer/);
 
   expect(screen.getByText('Needs your approval')).toBeDefined();
   expect(screen.getByText('Cancel run r-1')).toBeDefined();
@@ -343,7 +355,7 @@ test('a pending warden action renders the confirm card in the section and decide
 // again is how a second click reaches an action the server already claimed.
 // The lock lives on the session precisely so the remount cannot lose it.
 test('a decision in flight stays locked across a tab flip', () => {
-  const record = wardenRecord({
+  const record = overseerRecord({
     messages: [
       {
         role: 'action',
@@ -353,15 +365,15 @@ test('a decision in flight stays locked across a tab flip', () => {
         at: '2026-08-10T00:00:02Z',
       },
     ],
-    pendingActions: [wardenAction()],
+    pendingActions: [overseerAction()],
   });
-  const warden = wardenSession({
+  const overseer = overseerSession({
     conversationId: 'w-1',
     record,
     decidingActionId: 'act-1',
   });
-  render(<LiveRail {...railProps({ warden })} />);
-  selectTab(/^Warden/);
+  render(<LiveRail {...railProps({ overseer })} />);
+  selectTab(/^Overseer/);
   expect(
     screen.getByRole<HTMLButtonElement>('button', {
       name: 'Approve: Cancel run r-1',
@@ -370,7 +382,7 @@ test('a decision in flight stays locked across a tab flip', () => {
 
   selectTab('Runs');
   expect(screen.queryByText('Needs your approval')).toBeNull();
-  selectTab(/^Warden/);
+  selectTab(/^Overseer/);
 
   expect(
     screen.getByRole<HTMLButtonElement>('button', {
@@ -384,88 +396,96 @@ test('a decision in flight stays locked across a tab flip', () => {
   ).toBe(true);
 });
 
-// A warden turn in flight is an agent at work: it earns a Runs-tab row with
-// the 'warden' kind label, and its "open" action is the section's Warden tab.
-test('a running warden turn shows on the Runs tab and clicking it switches tabs', () => {
-  const warden = wardenSession({
+// A overseer turn in flight is an agent at work: it earns a Runs-tab row with
+// the 'overseer' kind label, and its "open" action is the section's Overseer tab.
+test('a running overseer turn shows on the Runs tab and clicking it switches tabs', () => {
+  const overseer = overseerSession({
     conversationId: 'w-1',
-    record: wardenRecord({ state: 'running' }),
+    record: overseerRecord({ state: 'running' }),
   });
-  render(<LiveRail {...railProps({ runs: [run()], warden })} />);
+  render(<LiveRail {...railProps({ runs: [run()], overseer })} />);
 
-  expect(screen.getByText('warden')).toBeDefined();
+  expect(screen.getByText('overseer')).toBeDefined();
   fireEvent.click(screen.getByText('what is going on?'));
   expect(screen.getByLabelText('Follow-up message')).toBeDefined();
-  expect(window.localStorage.getItem('dispatch:live-rail-tab')).toBe('warden');
+  expect(window.localStorage.getItem('dispatch:live-rail-tab')).toBe(
+    'overseer'
+  );
 });
 
-test('a settled warden conversation does not add a Runs-tab row', () => {
-  const warden = wardenSession({
+test('a settled overseer conversation does not add a Runs-tab row', () => {
+  const overseer = overseerSession({
     conversationId: 'w-1',
-    record: wardenRecord({ state: 'ready' }),
+    record: overseerRecord({ state: 'ready' }),
   });
-  render(<LiveRail {...railProps({ warden })} />);
+  render(<LiveRail {...railProps({ overseer })} />);
   expect(screen.getByText('No agents running.')).toBeDefined();
-  expect(screen.queryByText('warden')).toBeNull();
+  expect(screen.queryByText('overseer')).toBeNull();
 });
 
 // A failed record fetch (daemon restart → the stale id 404s, and the query has
 // retry: false) leaves record undefined forever. That is a broken
 // conversation, not an agent at work — no phantom running row.
-test('a failed warden record fetch does not fake a running row', () => {
-  const warden = wardenSession({
+test('a failed overseer record fetch does not fake a running row', () => {
+  const overseer = overseerSession({
     conversationId: 'w-1',
     record: undefined,
-    recordError: 'warden conversation w-1 not found (404)',
+    recordError: 'overseer conversation w-1 not found (404)',
   });
-  render(<LiveRail {...railProps({ warden })} />);
+  render(<LiveRail {...railProps({ overseer })} />);
   expect(screen.getByText('No agents running.')).toBeDefined();
-  expect(screen.queryByText('warden')).toBeNull();
+  expect(screen.queryByText('overseer')).toBeNull();
 });
 
 // A settled turn holding a queued mutation is state 'ready' — idle — but the
 // section must not go quiet while an approval is stranded on the human.
-test('a queued approval keeps the warden visible: waiting row plus tab badge', () => {
-  const warden = wardenSession({
+test('a queued approval keeps the overseer visible: waiting row plus tab badge', () => {
+  const overseer = overseerSession({
     conversationId: 'w-1',
-    record: wardenRecord({ state: 'ready', pendingActions: [wardenAction()] }),
+    record: overseerRecord({
+      state: 'ready',
+      pendingActions: [overseerAction()],
+    }),
   });
-  render(<LiveRail {...railProps({ warden })} />);
+  render(<LiveRail {...railProps({ overseer })} />);
 
   expect(screen.queryByText('No agents running.')).toBeNull();
-  expect(screen.getByText('warden')).toBeDefined();
+  expect(screen.getByText('overseer')).toBeDefined();
   // The row names the thing that is actually waiting — the queued action —
   // not the conversation's opening question from possibly hours earlier.
   expect(screen.getByText('Cancel run r-1')).toBeDefined();
   expect(screen.queryByText('what is going on?')).toBeNull();
-  expect(screen.getByRole('tab', { name: 'Warden 1' })).toBeDefined();
+  expect(screen.getByRole('tab', { name: 'Overseer 1' })).toBeDefined();
 });
 
-test('the collapsed strip counts a live warden turn as a running agent', () => {
-  const warden = wardenSession({
+test('the collapsed strip counts a live overseer turn as a running agent', () => {
+  const overseer = overseerSession({
     conversationId: 'w-1',
-    record: wardenRecord({ state: 'running' }),
+    record: overseerRecord({ state: 'running' }),
   });
   render(
-    <LiveRail {...railProps({ runs: [run()], warden, collapsed: true })} />
+    <LiveRail {...railProps({ runs: [run()], overseer, collapsed: true })} />
   );
   expect(screen.getByTitle('2 agents running').textContent).toContain('2');
 });
 
 // The collapsed icon strip cannot expand the sidebar it lives in, so a queued
-// approval leads to the full Warden page instead of an inline tab.
-test('the collapsed strip surfaces a queued approval and opens the Warden page', () => {
+// approval leads to the full Overseer page instead of an inline tab.
+test('the collapsed strip surfaces a queued approval and opens the Overseer page', () => {
   let opened = false;
-  const warden = wardenSession({
+  const overseer = overseerSession({
     conversationId: 'w-1',
-    record: wardenRecord({ state: 'ready', pendingActions: [wardenAction()] }),
+    record: overseerRecord({
+      state: 'ready',
+      pendingActions: [overseerAction()],
+    }),
   });
   render(
     <LiveRail
       {...railProps({
-        warden,
+        overseer,
         collapsed: true,
-        onOpenWarden: () => {
+        onOpenOverseer: () => {
           opened = true;
         },
       })}
@@ -477,46 +497,46 @@ test('the collapsed strip surfaces a queued approval and opens the Warden page',
   expect(opened).toBe(true);
 });
 
-// Same gate WardenView applies: no composer whose first Ask would throw a
+// Same gate OverseerView applies: no composer whose first Ask would throw a
 // developer-facing 'client not ready' error.
-test('the Warden tab explains when the daemon is unavailable instead of rendering a composer', () => {
+test('the Overseer tab explains when the daemon is unavailable instead of rendering a composer', () => {
   render(<LiveRail {...railProps({ daemonReady: false })} />);
-  selectTab('Warden');
-  expect(screen.queryByLabelText('Warden opening question')).toBeNull();
+  selectTab('Overseer');
+  expect(screen.queryByLabelText('Overseer opening question')).toBeNull();
   expect(screen.getByText(/daemon isn't available/)).toBeDefined();
 });
 
 // A single failed *background* refetch mid-turn keeps the cached running
-// record — the warden is demonstrably at work, and the row must not flicker
+// record — the overseer is demonstrably at work, and the row must not flicker
 // out on a transient error.
 test('a transient refetch error mid-turn keeps the running row', () => {
-  const warden = wardenSession({
+  const overseer = overseerSession({
     conversationId: 'w-1',
-    record: wardenRecord({ state: 'running' }),
+    record: overseerRecord({ state: 'running' }),
     recordError: 'daemon busy (500)',
   });
-  render(<LiveRail {...railProps({ warden })} />);
-  expect(screen.getByText('warden')).toBeDefined();
+  render(<LiveRail {...railProps({ overseer })} />);
+  expect(screen.getByText('overseer')).toBeDefined();
   expect(screen.queryByText('No agents running.')).toBeNull();
 });
 
 // A conversation dispatchd has lost arrives here as `record: undefined` —
-// useWardenSession does that veto on the 404 itself — so there is nothing left
+// useOverseerSession does that veto on the 404 itself — so there is nothing left
 // to advertise: no waiting row, no tab badge, no collapsed badge.
 test('a conversation the daemon has lost shows no phantom approval signals', () => {
-  const warden = wardenSession({
+  const overseer = overseerSession({
     conversationId: 'w-1',
     record: undefined,
-    recordError: 'warden conversation w-1 not found (404)',
+    recordError: 'overseer conversation w-1 not found (404)',
   });
-  const { rerender } = render(<LiveRail {...railProps({ warden })} />);
+  const { rerender } = render(<LiveRail {...railProps({ overseer })} />);
 
   expect(screen.getByText('No agents running.')).toBeDefined();
   expect(screen.queryByText('Cancel run r-1')).toBeNull();
-  expect(screen.getByRole('tab', { name: 'Warden' })).toBeDefined();
-  expect(screen.queryByRole('tab', { name: 'Warden 1' })).toBeNull();
+  expect(screen.getByRole('tab', { name: 'Overseer' })).toBeDefined();
+  expect(screen.queryByRole('tab', { name: 'Overseer 1' })).toBeNull();
 
-  rerender(<LiveRail {...railProps({ warden, collapsed: true })} />);
+  rerender(<LiveRail {...railProps({ overseer, collapsed: true })} />);
   expect(
     screen.queryByRole('button', { name: '1 action awaiting your approval' })
   ).toBeNull();
@@ -526,62 +546,65 @@ test('a conversation the daemon has lost shows no phantom approval signals', () 
 // action is real and still queued server-side, so every signal has to hold.
 // Going quiet here is the one failure this section exists to prevent.
 test('a transient refetch error keeps every queued-approval signal', () => {
-  const warden = wardenSession({
+  const overseer = overseerSession({
     conversationId: 'w-1',
-    record: wardenRecord({ state: 'ready', pendingActions: [wardenAction()] }),
+    record: overseerRecord({
+      state: 'ready',
+      pendingActions: [overseerAction()],
+    }),
     recordError: 'daemon busy (500)',
   });
-  const { rerender } = render(<LiveRail {...railProps({ warden })} />);
+  const { rerender } = render(<LiveRail {...railProps({ overseer })} />);
 
   expect(screen.getByText('Cancel run r-1')).toBeDefined();
-  expect(screen.getByRole('tab', { name: 'Warden 1' })).toBeDefined();
+  expect(screen.getByRole('tab', { name: 'Overseer 1' })).toBeDefined();
 
-  rerender(<LiveRail {...railProps({ warden, collapsed: true })} />);
+  rerender(<LiveRail {...railProps({ overseer, collapsed: true })} />);
   expect(
     screen.getByRole('button', { name: '1 action awaiting your approval' })
   ).toBeDefined();
 });
 
-// The section's Warden control must never be a *button* named "Warden": the
+// The section's Overseer control must never be a *button* named "Overseer": the
 // sidebar's global nav already has one, and Playwright resolves
-// `getByRole('button', { name: 'Warden' })` across the whole page under strict
+// `getByRole('button', { name: 'Overseer' })` across the whole page under strict
 // mode. A second exact match anywhere makes that locator throw, which takes
-// out warden.spec.ts at its first navigation step — the only automated
+// out overseer.spec.ts at its first navigation step — the only automated
 // coverage of the human-gated approve path. Radix renders TabsTrigger as
 // role=tab, which is what keeps the two apart; this pins that so a swap to a
 // plain <Button> cannot land quietly.
-test('the Warden tab is a tab, not a second button named "Warden"', () => {
+test('the Overseer tab is a tab, not a second button named "Overseer"', () => {
   render(<LiveRail {...railProps({ runs: [run()] })} />);
 
-  expect(screen.getByRole('tab', { name: 'Warden' })).toBeDefined();
-  expect(screen.queryAllByRole('button', { name: 'Warden' })).toHaveLength(0);
+  expect(screen.getByRole('tab', { name: 'Overseer' })).toBeDefined();
+  expect(screen.queryAllByRole('button', { name: 'Overseer' })).toHaveLength(0);
 
-  // Also on the Warden panel itself, where the compact reset lives — it is
+  // Also on the Overseer panel itself, where the compact reset lives — it is
   // deliberately named "Start a new conversation" for this reason.
-  selectTab('Warden');
-  expect(screen.queryAllByRole('button', { name: 'Warden' })).toHaveLength(0);
+  selectTab('Overseer');
+  expect(screen.queryAllByRole('button', { name: 'Overseer' })).toHaveLength(0);
 });
 
 // The collapsed strip is the other surface that could reintroduce the clash:
-// its approval badge is named for what is waiting, not for the warden.
-test('the collapsed strip has no button named "Warden" either', () => {
+// its approval badge is named for what is waiting, not for the overseer.
+test('the collapsed strip has no button named "Overseer" either', () => {
   render(
     <LiveRail
       {...railProps({
         collapsed: true,
-        warden: wardenSession({
+        overseer: overseerSession({
           conversationId: 'w-1',
-          record: wardenRecord({ pendingActions: [wardenAction()] }),
+          record: overseerRecord({ pendingActions: [overseerAction()] }),
         }),
       })}
     />
   );
 
-  expect(screen.queryAllByRole('button', { name: 'Warden' })).toHaveLength(0);
+  expect(screen.queryAllByRole('button', { name: 'Overseer' })).toHaveLength(0);
 });
 
-// warden.spec.ts finds the Runs-tab waiting row by the accessible name
-// `/with the fake executor warden/` — the queued action's summary followed by
+// overseer.spec.ts finds the Runs-tab waiting row by the accessible name
+// `/with the fake executor overseer/` — the queued action's summary followed by
 // the row's kind label. That label is lowercase in the DOM and only *looks*
 // capitalised (Tailwind `capitalize`), which is invisible from the spec and
 // would silently stop matching if the markup started capitalising it for real.
@@ -589,16 +612,16 @@ test('the waiting row is named by its action summary and a lowercase kind', () =
   render(
     <LiveRail
       {...railProps({
-        warden: wardenSession({
+        overseer: overseerSession({
           conversationId: 'w-1',
-          record: wardenRecord({ pendingActions: [wardenAction()] }),
+          record: overseerRecord({ pendingActions: [overseerAction()] }),
         }),
       })}
     />
   );
 
   expect(
-    screen.getByRole('button', { name: /Cancel run r-1 warden/ })
+    screen.getByRole('button', { name: /Cancel run r-1 overseer/ })
   ).toBeDefined();
 });
 
@@ -623,4 +646,39 @@ test('a live run that fanned out shows its running/total sub-agent count', () =>
   expect(screen.getByLabelText('5 of 12 sub-agents running').textContent).toBe(
     '5/12'
   );
+});
+
+// A built-in call the turn is parked on counts exactly like a queued action:
+// the tab badge and the collapsed strip must not go quiet while the session
+// is blocked on the human.
+test('a parked tool call counts toward the Overseer badge and names the waiting row', () => {
+  const overseer = overseerSession({
+    conversationId: 'w-1',
+    record: overseerRecord({
+      state: 'running',
+      pendingApprovals: [
+        {
+          requestId: 'req-1',
+          toolName: 'Bash',
+          input: { command: 'git status' },
+          summary: 'Bash: git status',
+          requestedAt: '2026-08-10T00:00:01Z',
+        },
+      ],
+    }),
+  });
+  render(
+    <LiveRail
+      runs={[]}
+      attentionCount={0}
+      overseer={overseer}
+      daemonReady
+      onOpenTask={() => {}}
+      onOpenInbox={() => {}}
+      onOpenOverseer={() => {}}
+      collapsed={false}
+    />
+  );
+  expect(screen.getByRole('tab', { name: 'Overseer 1' })).toBeDefined();
+  expect(screen.getByText('Bash: git status')).toBeDefined();
 });

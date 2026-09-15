@@ -61,6 +61,9 @@ import { FixLoop, FixLoopStore } from './orchestrator/fixLoop.js';
 import { JjManager } from './orchestrator/jj.js';
 import { MergeQueue } from './orchestrator/mergeQueue.js';
 import { Orchestrator } from './orchestrator/orchestrator.js';
+import { OverseerManager } from './orchestrator/overseer.js';
+import { ClaudeOverseer } from './orchestrator/overseers/claude.js';
+import { OverseerToolRegistry } from './orchestrator/overseerTools.js';
 import { scopeRequestsPath } from './orchestrator/paths.js';
 import { PlanManager } from './orchestrator/plan.js';
 import { ClaudePlanner } from './orchestrator/planners/claude.js';
@@ -81,9 +84,6 @@ import { ReviewRunner } from './orchestrator/review.js';
 import { ScopeRequestRegistry } from './orchestrator/scopeRequests.js';
 import { TERMINAL_RUN_STATES } from './orchestrator/types.js';
 import { VerificationRunner } from './orchestrator/verify.js';
-import { WardenManager } from './orchestrator/warden.js';
-import { ClaudeWarden } from './orchestrator/wardens/claude.js';
-import { WardenToolRegistry } from './orchestrator/wardenTools.js';
 import {
   policyActivityAppender,
   policyDecisionClassifier,
@@ -170,11 +170,11 @@ export interface StartServerOptions {
   // SDK's plan mode; bin.ts's DISPATCH_ENABLE_FAKES gate additionally
   // registers a 'fake' planner alongside the real one for CLI e2e testing.
   registerPlanners?: (planManager: PlanManager) => void;
-  // Same seam again for the warden's chat backends, in place of the
-  // production default (ClaudeWarden as 'claude' only). Tests register a
-  // FakeWarden (see orchestrator/wardens/fake.ts) under 'claude' so no
+  // Same seam again for the overseer's chat backends, in place of the
+  // production default (ClaudeOverseer as 'claude' only). Tests register a
+  // FakeOverseer (see orchestrator/overseers/fake.ts) under 'claude' so no
   // endpoint test ever drives a real Agent SDK conversation.
-  registerWardens?: (wardenManager: WardenManager) => void;
+  registerOverseers?: (overseerManager: OverseerManager) => void;
   // Overrides PrManager's gh/git seam and its capability-detection seam
   // (both take the same CommandRunner shape) so tests can exercise the PR
   // review path without a real GitHub remote or a logged-in gh CLI.
@@ -1024,15 +1024,15 @@ async function bootServer(
   // not exist yet at the point PrManager is constructed.
   prManager.startPolling(opts.prPollIntervalMs);
 
-  // The warden chat assistant (see orchestrator/warden.ts), assembled here
+  // The overseer chat assistant (see orchestrator/overseer.ts), assembled here
   // alongside PlanManager against the same shared peers. Its tool registry is
   // the confirmation gate: mutating tool calls queue as pending actions, and
-  // only POST /api/warden/:id/actions/:actionId/confirm reaches a real
+  // only POST /api/overseer/:id/actions/:actionId/confirm reaches a real
   // orchestrator/merge-queue mutation. `defaultExecutor` is left unset — the
   // registry's own fallback is the same 'claude' api.ts defaults to.
-  const wardenManager = new WardenManager({
+  const overseerManager = new OverseerManager({
     rootDir,
-    registry: new WardenToolRegistry({
+    registry: new OverseerToolRegistry({
       store,
       cache,
       orchestrator,
@@ -1042,10 +1042,10 @@ async function bootServer(
     }),
     events,
   });
-  if (opts.registerWardens !== undefined) {
-    opts.registerWardens(wardenManager);
+  if (opts.registerOverseers !== undefined) {
+    opts.registerOverseers(overseerManager);
   } else {
-    wardenManager.registerBackend('claude', new ClaudeWarden(rootDir));
+    overseerManager.registerBackend('claude', new ClaudeOverseer(rootDir));
   }
 
   // The brain-dump inbox, scoped to this daemon's own actor, plus the one-time folds of older
@@ -1200,7 +1200,7 @@ async function bootServer(
     orchestrator,
     version: packageJson.version,
     planManager,
-    wardenManager,
+    overseerManager,
     epicEngine,
     prManager,
     prWorktrees,

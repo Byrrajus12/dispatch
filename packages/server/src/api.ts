@@ -99,6 +99,7 @@ import type { EpicEngine } from './orchestrator/epic.js';
 import type { FixLoop } from './orchestrator/fixLoop.js';
 import type { MergeQueue } from './orchestrator/mergeQueue.js';
 import type { Orchestrator } from './orchestrator/orchestrator.js';
+import type { OverseerManager } from './orchestrator/overseer.js';
 import type { PlanManager } from './orchestrator/plan.js';
 import type { PrManager, PrReviewEvent, RepoPr } from './orchestrator/pr.js';
 import {
@@ -127,7 +128,6 @@ import {
 } from './orchestrator/types.js';
 import type { RunMeta } from './orchestrator/types.js';
 import type { VerificationRunner } from './orchestrator/verify.js';
-import type { WardenManager } from './orchestrator/warden.js';
 import type { ReceiptsScheduler } from './receipts/scheduler.js';
 import {
   formatCommentsForAgent,
@@ -160,9 +160,9 @@ export interface ApiContext {
   version: string;
   // Phase 5 P1.
   planManager: PlanManager;
-  // The project-assistant chat (see orchestrator/warden.ts) — assembled
+  // The project-assistant chat (see orchestrator/overseer.ts) — assembled
   // alongside PlanManager in index.ts against the same shared peers.
-  wardenManager: WardenManager;
+  overseerManager: OverseerManager;
   epicEngine: EpicEngine;
   prManager: PrManager;
   // Task 7: PR review worktrees — cut on demand, kept in sync by
@@ -3072,18 +3072,45 @@ function withdrawQuestion(
   return new Response(null, { status: 204 });
 }
 
+// Validates an optional `model` body field the way createRun does: absent
+// means "the configured role's model"; present must be a non-empty string.
+// Returns the 400 to send, or the model (possibly undefined) to pass on.
+function readOptionalModel(
+  value: unknown
+): { ok: true; model: string | undefined } | { ok: false; response: Response } {
+  if (value === undefined) return { ok: true, model: undefined };
+  if (typeof value !== 'string' || value.trim() === '') {
+    return {
+      ok: false,
+      response: errorResponse(
+        400,
+        'invalid model: expected a non-empty string'
+      ),
+    };
+  }
+  return { ok: true, model: value.trim() };
+}
+
 // POST /api/plan. `planner` is optional (defaults to 'claude'), same
 // contract as createRun's `executor` field above: a name outside what's
 // actually registered on this PlanManager instance (Phase 7's
 // registerPlanner/registeredPlannerNames, mirroring the orchestrator's own
-// executor registry) is a 400 naming every valid option.
+// executor registry) is a 400 naming every valid option. `model` is optional
+// too: the Plans composer's pick for this plan, over the configured `plan`
+// role's model.
 async function startPlan(req: Request, ctx: ApiContext): Promise<Response> {
   const parsed = await readJsonBody(req);
   if (!parsed.ok) return parsed.response;
-  const body = parsed.value as { prompt?: unknown; planner?: unknown };
+  const body = parsed.value as {
+    prompt?: unknown;
+    planner?: unknown;
+    model?: unknown;
+  };
   if (typeof body.prompt !== 'string' || body.prompt.trim() === '') {
     return errorResponse(400, 'invalid prompt: prompt is required');
   }
+  const model = readOptionalModel(body.model);
+  if (!model.ok) return model.response;
   const knownPlannerNames = ctx.planManager.registeredPlannerNames();
   if (
     body.planner !== undefined &&
@@ -3097,7 +3124,14 @@ async function startPlan(req: Request, ctx: ApiContext): Promise<Response> {
   }
   const plannerName =
     typeof body.planner === 'string' ? body.planner : 'claude';
-  const record = ctx.planManager.startPlan(body.prompt, plannerName);
+  const record = ctx.planManager.startPlan(
+    body.prompt,
+    plannerName,
+    undefined,
+    'plan',
+    undefined,
+    model.model
+  );
   return jsonResponse({ planId: record.id }, 202);
 }
 
@@ -3142,21 +3176,29 @@ async function confirmPlan(
   return jsonResponse(result);
 }
 
-// POST /api/warden — opens a warden conversation and returns the full
-// WardenRecord immediately (202, state `running`), mirroring draftTask's
+// POST /api/overseer — opens a overseer conversation and returns the full
+// OverseerRecord immediately (202, state `running`), mirroring draftTask's
 // return-the-record shape rather than startPlan's id-only body: the chat UI
 // renders the opening user message straight from the response. The assistant's
-// reply lands asynchronously via the `warden.changed` broadcast. `backend`
+// reply lands asynchronously via the `overseer.changed` broadcast. `backend`
 // follows createRun's `executor` contract: optional, defaults to 'claude', and
 // a name outside what's registered is a 400 naming every valid option.
-async function startWarden(req: Request, ctx: ApiContext): Promise<Response> {
+// `model` is optional the same way: the composer's pick for this
+// conversation, over the configured `overseer` role's model.
+async function startOverseer(req: Request, ctx: ApiContext): Promise<Response> {
   const parsed = await readJsonBody(req);
   if (!parsed.ok) return parsed.response;
-  const body = parsed.value as { prompt?: unknown; backend?: unknown };
+  const body = parsed.value as {
+    prompt?: unknown;
+    backend?: unknown;
+    model?: unknown;
+  };
   if (typeof body.prompt !== 'string' || body.prompt.trim() === '') {
     return errorResponse(400, 'invalid prompt: prompt is required');
   }
-  const knownBackendNames = ctx.wardenManager.registeredBackendNames();
+  const model = readOptionalModel(body.model);
+  if (!model.ok) return model.response;
+  const knownBackendNames = ctx.overseerManager.registeredBackendNames();
   if (
     body.backend !== undefined &&
     (typeof body.backend !== 'string' ||
@@ -3169,15 +3211,19 @@ async function startWarden(req: Request, ctx: ApiContext): Promise<Response> {
   }
   const backendName =
     typeof body.backend === 'string' ? body.backend : 'claude';
-  const record = ctx.wardenManager.start(body.prompt, backendName);
+  const record = ctx.overseerManager.start(
+    body.prompt,
+    backendName,
+    model.model
+  );
   return jsonResponse(record, 202);
 }
 
-// POST /api/warden/:id/message — mirrors sendPlanMessage: 202 with the record
-// already flipped back to `running`; the reply lands via `warden.changed`.
+// POST /api/overseer/:id/message — mirrors sendPlanMessage: 202 with the record
+// already flipped back to `running`; the reply lands via `overseer.changed`.
 // 404s an unknown conversation and 409s one mid-turn (both raised by
 // sendMessage and mapped by handleApi's outer catch).
-async function sendWardenMessage(
+async function sendOverseerMessage(
   req: Request,
   ctx: ApiContext,
   conversationId: string
@@ -3188,17 +3234,17 @@ async function sendWardenMessage(
   if (typeof body.text !== 'string' || body.text.trim() === '') {
     return errorResponse(400, 'invalid text: text is required');
   }
-  const record = ctx.wardenManager.sendMessage(conversationId, body.text);
+  const record = ctx.overseerManager.sendMessage(conversationId, body.text);
   return jsonResponse(record, 202);
 }
 
-// POST /api/warden/:id/actions/:actionId/confirm { approve } — decides one
+// POST /api/overseer/:id/actions/:actionId/confirm { approve } — decides one
 // queued mutating action. Approving runs the real effect before responding,
 // so the returned record already reflects the outcome; denying never runs it
 // at all. 404s an unknown conversation or an action that isn't pending on
 // that conversation, and a failed effect surfaces through the same typed
 // orchestrator errors as acting on the target directly would.
-async function confirmWardenAction(
+async function confirmOverseerAction(
   req: Request,
   ctx: ApiContext,
   conversationId: string,
@@ -3210,11 +3256,51 @@ async function confirmWardenAction(
   if (typeof body.approve !== 'boolean') {
     return errorResponse(400, 'invalid approve: expected a boolean');
   }
-  const record = await ctx.wardenManager.confirmAction(
+  const record = await ctx.overseerManager.confirmAction(
     conversationId,
     actionId,
     body.approve
   );
+  return jsonResponse(record);
+}
+
+// POST /api/overseer/:id/approvals/:requestId { allow, scope?, reason? } —
+// decides one built-in tool call the overseer's running turn is parked on.
+// Same body as a run's POST /api/runs/:id/approval: allowing runs the call
+// at once (`scope: 'session'` also pre-approves the tool for the rest of the
+// conversation), denying hands `reason` to the model. 404s an unknown
+// conversation or a request that isn't parked on it.
+async function decideOverseerApproval(
+  req: Request,
+  ctx: ApiContext,
+  conversationId: string,
+  requestId: string
+): Promise<Response> {
+  const parsed = await readJsonBody(req);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.value as {
+    allow?: unknown;
+    scope?: unknown;
+    reason?: unknown;
+  };
+  if (typeof body.allow !== 'boolean') {
+    return errorResponse(400, 'invalid allow: expected a boolean');
+  }
+  if (
+    body.scope !== undefined &&
+    body.scope !== 'once' &&
+    body.scope !== 'session'
+  ) {
+    return errorResponse(400, "invalid scope: expected 'once' or 'session'");
+  }
+  if (body.reason !== undefined && typeof body.reason !== 'string') {
+    return errorResponse(400, 'invalid reason: expected a string');
+  }
+  const record = ctx.overseerManager.decideApproval(conversationId, requestId, {
+    allow: body.allow,
+    ...(body.scope !== undefined ? { scope: body.scope } : {}),
+    ...(body.reason !== undefined ? { reason: body.reason } : {}),
+  });
   return jsonResponse(record);
 }
 
@@ -3775,10 +3861,14 @@ const DECIDE_TIER_ROUTES: ReadonlyArray<{
   segments: readonly string[];
 }> = [
   { method: 'POST', segments: ['runs', '*', 'scope-requests', '*', 'decide'] },
-  // Confirming a warden's queued mutating action is the human gate the whole
-  // warden design hangs on — an agent token approving it would let the model
+  // Confirming a overseer's queued mutating action is the human gate the whole
+  // overseer design hangs on — an agent token approving it would let the model
   // approve its own mutations.
-  { method: 'POST', segments: ['warden', '*', 'actions', '*', 'confirm'] },
+  { method: 'POST', segments: ['overseer', '*', 'actions', '*', 'confirm'] },
+  // Allowing a built-in tool call the overseer is parked on is the same gate
+  // for the same reason: the model must not be able to wave its own Bash
+  // call through with the agent token.
+  { method: 'POST', segments: ['overseer', '*', 'approvals', '*'] },
   // A run's tool-approval gate is an adjudication like the two above: with
   // it on the request tier, any agent holding the on-disk agent token could
   // wave its own parked tool call through.
@@ -4947,7 +5037,7 @@ export async function handleApi(
     }
 
     // GET /api/agents — every in-memory conversation agent (planner chats,
-    // enrich/"add detail" agents, task drafts, warden chats), normalized for
+    // enrich/"add detail" agents, task drafts, overseer chats), normalized for
     // the All agents page. Task runs are not repeated here: GET /api/runs
     // already lists them, and the client merges the two.
     if (segments[0] === 'agents' && segments.length === 1 && method === 'GET') {
@@ -4955,7 +5045,7 @@ export async function handleApi(
         buildAgentSessions(
           ctx.planManager.listPlans(),
           ctx.planManager.listDrafts(),
-          ctx.wardenManager.list()
+          ctx.overseerManager.list()
         )
       );
     }
@@ -4983,19 +5073,19 @@ export async function handleApi(
       }
     }
 
-    if (segments[0] === 'warden') {
+    if (segments[0] === 'overseer') {
       if (segments.length === 1 && method === 'POST') {
-        return await startWarden(req, ctx);
+        return await startOverseer(req, ctx);
       }
       if (segments.length === 2 && method === 'GET') {
-        return jsonResponse(ctx.wardenManager.get(segments[1]));
+        return jsonResponse(ctx.overseerManager.get(segments[1]));
       }
       if (
         segments.length === 3 &&
         segments[2] === 'message' &&
         method === 'POST'
       ) {
-        return await sendWardenMessage(req, ctx, segments[1]);
+        return await sendOverseerMessage(req, ctx, segments[1]);
       }
       if (
         segments.length === 5 &&
@@ -5003,7 +5093,14 @@ export async function handleApi(
         segments[4] === 'confirm' &&
         method === 'POST'
       ) {
-        return await confirmWardenAction(req, ctx, segments[1], segments[3]);
+        return await confirmOverseerAction(req, ctx, segments[1], segments[3]);
+      }
+      if (
+        segments.length === 4 &&
+        segments[2] === 'approvals' &&
+        method === 'POST'
+      ) {
+        return await decideOverseerApproval(req, ctx, segments[1], segments[3]);
       }
     }
 
