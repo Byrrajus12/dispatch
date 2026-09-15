@@ -841,6 +841,7 @@ function App() {
             projectView={navState.projectView}
             globalView={navState.globalView}
             liveAgentCount={liveRuns.length}
+            overseerPendingCount={overseer.record?.pendingActions.length ?? 0}
             spendToday={todaySpend}
             badges={{
               board: data.readyIds.size,

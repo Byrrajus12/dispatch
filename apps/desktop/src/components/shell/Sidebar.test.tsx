@@ -55,6 +55,18 @@ test('the exported view order is the cmd+N order App.tsx indexes into', () => {
   ]);
 });
 
+test('the Overseer is the first row of the rail and carries its pending count', () => {
+  mount(true, { overseerPendingCount: 2 });
+  const rows = screen.getAllByRole('button');
+  // Above Control room, above the Workspace heading: it is the page everything
+  // else can be driven from, not one more global destination at the bottom.
+  expect(rows[0].textContent).toContain('Overseer');
+  expect(rows[0].textContent).toContain('2');
+  // No shortcut number: cmd+N counts project views only, and the Overseer is
+  // not one of them.
+  expect(rows[0].textContent).not.toContain('⌘');
+});
+
 test('expanded rail shows every row with its shortcut number', () => {
   mount(true);
   // The number counts across stages, not within one — cutting the rail into groups must not
