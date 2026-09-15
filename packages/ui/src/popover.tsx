@@ -1,40 +1,57 @@
-import { Popover as PopoverPrimitive } from 'radix-ui';
-import * as React from 'react';
+'use client';
+
+import { Popover as PopoverPrimitive } from '@base-ui/react/popover';
 
 import { cn } from './lib/utils';
 
-function Popover({
-  ...props
-}: React.ComponentProps<typeof PopoverPrimitive.Root>) {
+function Popover({ ...props }: PopoverPrimitive.Root.Props) {
   return <PopoverPrimitive.Root data-slot="popover" {...props} />;
 }
 
-function PopoverTrigger({
-  ...props
-}: React.ComponentProps<typeof PopoverPrimitive.Trigger>) {
+// Renders a `<button>` unless `render` names the element to become
+// (`<PopoverTrigger render={<Button … />}>…</PopoverTrigger>`).
+function PopoverTrigger({ ...props }: PopoverPrimitive.Trigger.Props) {
   return <PopoverPrimitive.Trigger data-slot="popover-trigger" {...props} />;
 }
 
+// `anchor` lets a popover open against an element that is not its trigger
+// (the prompt bar's slash-command list anchors to the textarea) — Base UI's
+// replacement for radix's `Popover.Anchor` part. Focus movement is the
+// Popup's own `initialFocus`/`finalFocus`, passed straight through.
 function PopoverContent({
   className,
   align = 'center',
+  alignOffset = 0,
+  side = 'bottom',
   sideOffset = 6,
+  anchor,
   ...props
-}: React.ComponentProps<typeof PopoverPrimitive.Content>) {
+}: PopoverPrimitive.Popup.Props &
+  Pick<
+    PopoverPrimitive.Positioner.Props,
+    'align' | 'alignOffset' | 'side' | 'sideOffset' | 'anchor'
+  >) {
   return (
     <PopoverPrimitive.Portal>
-      <PopoverPrimitive.Content
-        data-slot="popover-content"
+      <PopoverPrimitive.Positioner
         align={align}
+        alignOffset={alignOffset}
+        side={side}
         sideOffset={sideOffset}
-        className={cn(
-          'shadow-overlay z-50 w-72 origin-(--radix-popover-content-transform-origin) rounded-card bg-popover p-3.5 text-popover-foreground outline-hidden animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2',
-          className
-        )}
-        {...props}
-      />
+        anchor={anchor}
+        className="isolate z-50"
+      >
+        <PopoverPrimitive.Popup
+          data-slot="popover-content"
+          className={cn(
+            'z-50 w-72 origin-(--transform-origin) rounded-card bg-popover p-3.5 text-popover-foreground shadow-overlay transition-[opacity,scale] duration-150 outline-hidden data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0',
+            className
+          )}
+          {...props}
+        />
+      </PopoverPrimitive.Positioner>
     </PopoverPrimitive.Portal>
   );
 }
 
-export { Popover, PopoverTrigger, PopoverContent };
+export { Popover, PopoverContent, PopoverTrigger };

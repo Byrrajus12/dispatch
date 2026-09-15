@@ -385,23 +385,25 @@ export function Sidebar({
           </span>
         )}
         <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              aria-expanded={!collapsed}
-              aria-controls="dispatch-sidebar"
-              onClick={() => toggleSidebar()}
-              className="text-muted-foreground hover:text-foreground shrink-0 transition-colors duration-150"
-            >
-              {collapsed ? (
-                <ChevronRight className="size-4" />
-              ) : (
-                <ChevronLeft className="size-4" />
-              )}
-            </Button>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                aria-expanded={!collapsed}
+                aria-controls="dispatch-sidebar"
+                onClick={() => toggleSidebar()}
+                className="text-muted-foreground hover:text-foreground shrink-0 transition-colors duration-150"
+              />
+            }
+          >
+            {collapsed ? (
+              <ChevronRight className="size-4" />
+            ) : (
+              <ChevronLeft className="size-4" />
+            )}
           </TooltipTrigger>
           <TooltipContent side="right">
             {collapsed ? 'Expand sidebar' : 'Collapse sidebar'}

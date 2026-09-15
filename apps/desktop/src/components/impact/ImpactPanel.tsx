@@ -174,7 +174,7 @@ function ImpactBadges({
     <>
       {hasCaveat ? (
         <Tooltip>
-          <TooltipTrigger asChild>{badge}</TooltipTrigger>
+          <TooltipTrigger render={badge} />
           <TooltipContent>{SCANNER_CAVEAT}</TooltipContent>
         </Tooltip>
       ) : (

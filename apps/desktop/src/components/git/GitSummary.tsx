@@ -47,12 +47,7 @@ export function GitSummary({
           since `className="contents"` makes the group itself invisible to layout (this row's
           own `gap-x-1 gap-y-0.5` already spaces the chips) so the numeric value has no visual
           effect of its own here. */}
-      <ToggleGroup
-        type="multiple"
-        value={[active]}
-        spacing={1}
-        className="contents"
-      >
+      <ToggleGroup multiple value={[active]} spacing={1} className="contents">
         <Stat
           label="Branches"
           value={String(health.branches)}
@@ -173,8 +168,8 @@ function Stat({
       title={hint}
       // `ToggleGroupItem`'s own size/weight/hover classes are for a taller, bolder toggle
       // button — every one that would change this chip's look is neutralized so pressed
-      // state (now real radix `data-state`/`aria-pressed`) is the only thing that moved.
-      className="hover:bg-surface-hover ease-out-expo rounded-chip h-auto min-w-0 justify-normal gap-1 px-1 py-0.5 text-left text-xs font-normal whitespace-normal normal-case transition-colors duration-100 hover:text-inherit data-[state=on]:text-inherit"
+      // state (real `data-pressed`/`aria-pressed`) is the only thing that moved.
+      className="hover:bg-surface-hover ease-out-expo rounded-chip h-auto min-w-0 justify-normal gap-1 px-1 py-0.5 text-left text-xs font-normal whitespace-normal normal-case transition-colors duration-100 hover:text-inherit data-pressed:text-inherit"
     >
       {body}
     </ToggleGroupItem>

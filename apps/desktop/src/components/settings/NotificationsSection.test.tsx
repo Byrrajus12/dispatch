@@ -5,6 +5,17 @@ import { expect, test } from 'bun:test';
 import { testConfig as config } from './fixtures.test-helper';
 import { NotificationsSection } from './NotificationsSection';
 
+// Toggles a checkbox through its native input rather than the visible
+// control. Base UI toggles the input and cancels the wrapping label's own
+// activation, which a browser honours; happy-dom runs the label's activation
+// before React's delegated handler can cancel it, so a click on the control
+// would toggle twice there.
+function toggle(name: string) {
+  const control = screen.getByRole('checkbox', { name });
+  const input = control.parentElement?.querySelector('input[type=checkbox]');
+  fireEvent.click(input ?? control);
+}
+
 test('unchecking a kind saves just that toggle', () => {
   const saved: unknown[] = [];
   render(
@@ -13,7 +24,7 @@ test('unchecking a kind saves just that toggle', () => {
       onSave={(p) => Promise.resolve(void saved.push(p))}
     />
   );
-  fireEvent.click(screen.getByLabelText('A fix loop stops and needs a ruling'));
+  toggle('A fix loop stops and needs a ruling');
   expect(saved).toEqual([
     { notifications: { kinds: { 'fix-loop-capped': false } } },
   ]);
@@ -32,11 +43,13 @@ test('renders the saved toggle state', () => {
     />
   );
   expect(
-    screen.getByLabelText('A run fails or stalls').getAttribute('aria-checked')
+    screen
+      .getByRole('checkbox', { name: 'A run fails or stalls' })
+      .getAttribute('aria-checked')
   ).toBe('false');
   expect(
     screen
-      .getByLabelText('An agent asks you a question')
+      .getByRole('checkbox', { name: 'An agent asks you a question' })
       .getAttribute('aria-checked')
   ).toBe('true');
 });

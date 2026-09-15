@@ -75,7 +75,7 @@ export interface OverseerMessage {
  * conversation cannot continue past it — and allowing it runs the call at
  * once rather than queueing anything.
  */
-export interface OverseerApproval {
+interface OverseerApproval {
   /** The backend's handle for the call; what the decision endpoint names. */
   requestId: string;
   toolName: string;
@@ -171,7 +171,7 @@ const TURN_ENDED_DENIAL = 'the turn ended before this call was decided';
 // the approval card. Input is model-authored and rendered straight into the
 // chat UI, so it gets the same line-break flattening every other untrusted
 // string does, and a cap so a whole file body is not the card.
-export function describeToolCall(toolName: string, input: unknown): string {
+function describeToolCall(toolName: string, input: unknown): string {
   const fields =
     typeof input === 'object' && input !== null
       ? (input as Record<string, unknown>)

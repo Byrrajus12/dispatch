@@ -246,15 +246,17 @@ export function OverviewView({
                 }
                 className="mb-1"
               >
-                <CollapsibleTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    className="group text-muted-foreground hover:text-foreground h-auto w-full min-w-0 justify-start gap-2 px-1 pt-3 pb-1.5 text-left text-[length:inherit] font-normal hover:bg-transparent has-[>svg]:px-1"
-                  >
-                    <ChevronRight className="size-3 shrink-0 transition-transform group-data-[state=open]:rotate-90" />
-                    {headerInner}
-                  </Button>
+                <CollapsibleTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="group text-muted-foreground hover:text-foreground h-auto w-full min-w-0 justify-start gap-2 px-1 pt-3 pb-1.5 text-left text-[length:inherit] font-normal hover:bg-transparent has-[>svg]:px-1"
+                    />
+                  }
+                >
+                  <ChevronRight className="size-3 shrink-0 transition-transform group-data-panel-open:rotate-90" />
+                  {headerInner}
                 </CollapsibleTrigger>
 
                 <CollapsibleContent>{rows}</CollapsibleContent>

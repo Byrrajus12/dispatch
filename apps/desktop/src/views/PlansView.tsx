@@ -783,13 +783,13 @@ export function PlansView({
           {draft.proposal.tasks.length > 1 && (
             <div className="flex justify-end">
               <ToggleGroup
-                type="single"
                 variant="outline"
                 size="sm"
-                value={proposalView}
-                onValueChange={(value) => {
-                  // Radix clears to '' when the active item is re-clicked; a proposal is
-                  // always one of the two views, so ignore the deselect.
+                value={[proposalView]}
+                onValueChange={([value]) => {
+                  // The group hands back an empty list when the active item is
+                  // re-clicked; a proposal is always one of the two views, so
+                  // ignore the deselect.
                   if (value === 'list' || value === 'graph')
                     setProposalView(value);
                 }}

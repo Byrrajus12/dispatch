@@ -1,9 +1,8 @@
 import { ArrowUpIcon, MicIcon, XIcon } from 'lucide-react';
-import { Popover as PopoverPrimitive } from 'radix-ui';
 import { type KeyboardEvent, type ReactNode, useEffect, useRef } from 'react';
 
 import { cn } from '../lib/utils';
-import { PopoverContent } from '../popover';
+import { Popover, PopoverContent } from '../popover';
 import {
   Select,
   SelectContent,
@@ -146,23 +145,26 @@ export function PromptBar({
         </div>
       )}
 
-      <PopoverPrimitive.Root open={commandPopoverOpen}>
-        <PopoverPrimitive.Anchor asChild>
-          <textarea
-            ref={textareaRef}
-            rows={MIN_ROWS}
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={placeholder}
-            disabled={disabled}
-            aria-label={ariaLabel}
-            className="text-foreground placeholder:text-muted-foreground min-h-7 w-full resize-none bg-transparent px-1 py-[5px] text-[13px] leading-[18px] [overflow-wrap:anywhere] outline-none"
-          />
-        </PopoverPrimitive.Anchor>
+      <textarea
+        ref={textareaRef}
+        rows={MIN_ROWS}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={handleKeyDown}
+        placeholder={placeholder}
+        disabled={disabled}
+        aria-label={ariaLabel}
+        className="text-foreground placeholder:text-muted-foreground min-h-7 w-full resize-none bg-transparent px-1 py-[5px] text-[13px] leading-[18px] [overflow-wrap:anywhere] outline-none"
+      />
+      {/* Anchored to the textarea rather than opened by a trigger of its own,
+          and never taking focus: the human keeps typing while the command
+          list follows what they type. */}
+      <Popover open={commandPopoverOpen}>
         <PopoverContent
+          anchor={textareaRef}
           align="start"
-          onOpenAutoFocus={(event) => event.preventDefault()}
+          initialFocus={false}
+          finalFocus={false}
           className="w-64 p-1"
         >
           {matches.length > 0 ? (
@@ -192,7 +194,7 @@ export function PromptBar({
             </p>
           )}
         </PopoverContent>
-      </PopoverPrimitive.Root>
+      </Popover>
 
       <div className="flex items-center justify-between gap-1 px-0.5 pb-0.5">
         {models.length > 0 ? (

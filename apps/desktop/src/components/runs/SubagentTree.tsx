@@ -96,30 +96,32 @@ export function SubagentTree({
       )}
       data-testid="subagent-tree"
     >
-      <CollapsibleTrigger asChild>
-        <button
-          type="button"
-          className="hover:bg-muted/50 flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left"
-          aria-label={`Sub-agents: ${subagentHeadline(nodes)}`}
-        >
-          {open ? (
-            <ChevronDown className="text-muted-foreground size-3.5 shrink-0" />
-          ) : (
-            <ChevronRight className="text-muted-foreground size-3.5 shrink-0" />
+      <CollapsibleTrigger
+        render={
+          <button
+            type="button"
+            className="hover:bg-muted/50 flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left"
+            aria-label={`Sub-agents: ${subagentHeadline(nodes)}`}
+          />
+        }
+      >
+        {open ? (
+          <ChevronDown className="text-muted-foreground size-3.5 shrink-0" />
+        ) : (
+          <ChevronRight className="text-muted-foreground size-3.5 shrink-0" />
+        )}
+        <Bot className="text-muted-foreground size-3.5 shrink-0" />
+        <span className="text-[12px] font-medium">
+          Sub-agents · {nodes.length}
+        </span>
+        <span
+          className={cn(
+            'dense-meta ml-auto shrink-0',
+            anyRunning && 'text-foreground'
           )}
-          <Bot className="text-muted-foreground size-3.5 shrink-0" />
-          <span className="text-[12px] font-medium">
-            Sub-agents · {nodes.length}
-          </span>
-          <span
-            className={cn(
-              'dense-meta ml-auto shrink-0',
-              anyRunning && 'text-foreground'
-            )}
-          >
-            {subagentHeadline(nodes)}
-          </span>
-        </button>
+        >
+          {subagentHeadline(nodes)}
+        </span>
       </CollapsibleTrigger>
       <CollapsibleContent>
         <ul

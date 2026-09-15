@@ -138,7 +138,7 @@ export function SidebarNav({
                 // rather than left to the browser's native title tooltip alone.
                 return collapsed ? (
                   <Tooltip key={item.id}>
-                    <TooltipTrigger asChild>{row}</TooltipTrigger>
+                    <TooltipTrigger render={row} />
                     <TooltipContent side="right">
                       {accessibleLabel}
                     </TooltipContent>

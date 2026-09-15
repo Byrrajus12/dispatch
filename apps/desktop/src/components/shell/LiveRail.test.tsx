@@ -92,7 +92,7 @@ function railProps(over: Partial<Parameters<typeof LiveRail>[0]> = {}) {
 // Radix Tabs activates a trigger on mousedown, not click — one helper so every
 // test switches tabs the way the widget actually listens.
 function selectTab(name: string | RegExp) {
-  fireEvent.mouseDown(screen.getByRole('tab', { name }));
+  fireEvent.click(screen.getByRole('tab', { name }));
 }
 
 // The section unmounts the overseer chat whenever its tab is not showing, so the

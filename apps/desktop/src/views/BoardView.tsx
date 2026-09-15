@@ -411,16 +411,14 @@ export function BoardView({
         <div className="flex flex-wrap items-center justify-end gap-2">
           {mode !== 'milestones' && data.config !== null && (
             <Popover>
-              <PopoverTrigger asChild>
-                <Button variant="secondary" size="sm">
-                  <ListFilter className="size-3.5" />
-                  Filter
-                  {activeFilterCount > 0 && (
-                    <span className="bg-accent-tint text-primary rounded px-1 font-mono text-[10.5px] tabular-nums">
-                      {activeFilterCount}
-                    </span>
-                  )}
-                </Button>
+              <PopoverTrigger render={<Button variant="secondary" size="sm" />}>
+                <ListFilter className="size-3.5" />
+                Filter
+                {activeFilterCount > 0 && (
+                  <span className="bg-accent-tint text-primary rounded px-1 font-mono text-[10.5px] tabular-nums">
+                    {activeFilterCount}
+                  </span>
+                )}
               </PopoverTrigger>
               <PopoverContent align="end" className="w-80 p-3">
                 {/* The gallery's Filter Table chips, one labeled group per facet — a
@@ -471,11 +469,9 @@ export function BoardView({
           )}
           {mode !== 'milestones' && (
             <Popover>
-              <PopoverTrigger asChild>
-                <Button variant="secondary" size="sm">
-                  <SlidersHorizontal className="size-3.5" />
-                  Display
-                </Button>
+              <PopoverTrigger render={<Button variant="secondary" size="sm" />}>
+                <SlidersHorizontal className="size-3.5" />
+                Display
               </PopoverTrigger>
               <PopoverContent align="end" className="w-60 p-2">
                 {mode === 'board' ? (
@@ -560,7 +556,7 @@ export function BoardView({
               size="sm"
               pressed={data.showArchived}
               onPressedChange={data.setShowArchived}
-              className="data-[state=on]:bg-secondary data-[state=on]:text-secondary-foreground data-[state=on]:hover:bg-secondary/80 gap-1.5 px-3 has-[>svg]:px-2.5"
+              className="data-pressed:bg-secondary data-pressed:text-secondary-foreground data-pressed:hover:bg-secondary/80 gap-1.5 px-3 has-[>svg]:px-2.5"
             >
               <Archive className="size-3.5" />
               Archived ({data.archivedTasks.length})

@@ -23,7 +23,7 @@ const data = dataWith();
 // Radix's TabsTrigger switches tabs on mousedown, not click, so a plain
 // fireEvent.click would silently no-op.
 function selectTab(name: string) {
-  fireEvent.mouseDown(screen.getByRole('tab', { name }), { button: 0 });
+  fireEvent.click(screen.getByRole('tab', { name }));
 }
 
 test('with no project selected it explains what to do', () => {

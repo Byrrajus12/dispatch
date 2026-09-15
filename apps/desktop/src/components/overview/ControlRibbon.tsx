@@ -40,13 +40,13 @@ export function ControlRibbon({
 }: ControlRibbonProps) {
   return (
     <ToggleGroup
-      type="multiple"
+      multiple
       value={FEED_STATE_ORDER.filter((state) => activeStates.has(state))}
       // `spacing={1}` opts out of ToggleGroupItem's corner-trimming (GitSummary).
       spacing={1}
       className="flex flex-wrap items-center justify-start gap-1.5"
       onValueChange={(next) => {
-        // Radix hands back the whole next selection; exactly one chip differs per
+        // The group hands back the whole next selection; exactly one chip differs per
         // click, so find it and hand it to the caller's per-state toggle.
         const nextSet = new Set(next as FeedState[]);
         const changed = FEED_STATE_ORDER.find(
@@ -75,7 +75,7 @@ export function ControlRibbon({
               // are built for a pill button; all neutralized back to the chip.
               'text-[length:inherit] font-[weight:inherit]',
               'shadow-hairline hover:bg-surface-hover hover:text-inherit',
-              'data-[state=on]:bg-transparent data-[state=on]:text-inherit',
+              'data-pressed:bg-transparent data-pressed:text-inherit',
               alarmed ? URGENT_SKIN[feedTier(state)] : 'text-muted-foreground',
               active && 'bg-surface-hover-strong ring-ring/40 ring-1'
             )}

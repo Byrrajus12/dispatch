@@ -569,16 +569,18 @@ export function TasksListView({
                   HTML). */}
               {group.epicId !== null && epicTitleById.has(group.epicId) && (
                 <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      onClick={() => setDagEpicId(group.epicId)}
-                      aria-label={`View dependency graph for ${group.title}`}
-                      className="text-muted-foreground hover:text-foreground size-auto shrink-0 p-1"
-                    >
-                      <Waypoints className="size-3.5" />
-                    </Button>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        onClick={() => setDagEpicId(group.epicId)}
+                        aria-label={`View dependency graph for ${group.title}`}
+                        className="text-muted-foreground hover:text-foreground size-auto shrink-0 p-1"
+                      />
+                    }
+                  >
+                    <Waypoints className="size-3.5" />
                   </TooltipTrigger>
                   <TooltipContent>View dependency graph</TooltipContent>
                 </Tooltip>

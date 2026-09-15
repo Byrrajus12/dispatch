@@ -32,23 +32,25 @@ export function ModelPicker({
 }: ModelPickerProps) {
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          disabled={disabled}
-          aria-label={label}
-          className="text-muted-foreground hover:bg-muted/60 hover:text-foreground h-auto gap-1 rounded-md border border-transparent px-2 py-1 text-[12px] has-[>svg]:px-2"
-        >
-          {modelLabel(value)}
-          <ChevronDown className="size-3" />
-        </Button>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={disabled}
+            aria-label={label}
+            className="text-muted-foreground hover:bg-muted/60 hover:text-foreground h-auto gap-1 rounded-md border border-transparent px-2 py-1 text-[12px] has-[>svg]:px-2"
+          />
+        }
+      >
+        {modelLabel(value)}
+        <ChevronDown className="size-3" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         {MODELS.map((m) => (
           <DropdownMenuItem
             key={m.id}
-            onSelect={() => onChange(m.id)}
+            onClick={() => onChange(m.id)}
             className="gap-2 pr-8 text-[13px]"
           >
             <span className="flex flex-1 flex-col">

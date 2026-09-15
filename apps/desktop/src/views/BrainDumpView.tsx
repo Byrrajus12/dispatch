@@ -565,32 +565,34 @@ function ExplainerPopover() {
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          ref={triggerRef}
-          variant="ghost"
-          size="xs"
-          onMouseEnter={() => setOpen(true)}
-          onMouseLeave={closeUnlessTriggerFocused}
-          onFocus={() => setOpen(true)}
-          onBlur={() => setOpen(false)}
-          // Suppresses Radix's own click-to-toggle, which would close a popover that
-          // hovering or focusing the button has already opened.
-          onClick={(e) => e.preventDefault()}
-          // `has-[>svg]:px-2` too — the icon makes the size's own `has-[>svg]:px-1.5` match.
-          className="text-muted-foreground hover:text-foreground h-auto gap-1.5 px-2 py-1 text-[11px] font-normal hover:bg-transparent has-[>svg]:px-2"
-        >
-          <CircleHelp className="size-3.5" />
-          What is this?
-        </Button>
+      <PopoverTrigger
+        render={
+          <Button
+            ref={triggerRef}
+            variant="ghost"
+            size="xs"
+            onMouseEnter={() => setOpen(true)}
+            onMouseLeave={closeUnlessTriggerFocused}
+            onFocus={() => setOpen(true)}
+            onBlur={() => setOpen(false)}
+            // Suppresses Radix's own click-to-toggle, which would close a popover that
+            // hovering or focusing the button has already opened.
+            onClick={(e) => e.preventDefault()}
+            // `has-[>svg]:px-2` too — the icon makes the size's own `has-[>svg]:px-1.5` match.
+            className="text-muted-foreground hover:text-foreground h-auto gap-1.5 px-2 py-1 text-[11px] font-normal hover:bg-transparent has-[>svg]:px-2"
+          />
+        }
+      >
+        <CircleHelp className="size-3.5" />
+        What is this?
       </PopoverTrigger>
       <PopoverContent
         side="bottom"
         align="end"
-        // Radix would focus the content on open, blurring the trigger and closing this
-        // straight back up; keeping focus on the trigger is what makes Tab reveal it.
-        onOpenAutoFocus={(e) => e.preventDefault()}
-        onCloseAutoFocus={(e) => e.preventDefault()}
+        // The popover would focus its content on open, blurring the trigger and closing
+        // this straight back up; keeping focus on the trigger is what makes Tab reveal it.
+        initialFocus={false}
+        finalFocus={false}
         onMouseEnter={() => setOpen(true)}
         onMouseLeave={closeUnlessTriggerFocused}
         className="flex flex-col gap-3.5"
