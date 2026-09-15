@@ -38,6 +38,10 @@ interface AgentsSectionProps {
 // packages/core/src/config.ts so the schema doesn't have to be read.
 const ROLE_INFO: Record<keyof ModelConfig, { label: string; hint: string }> = {
   execute: { label: 'Coding runs', hint: 'The agent that edits the repo.' },
+  overseer: {
+    label: 'Overseer',
+    hint: 'The overseer chat: a full agent session in the checkout that also holds the project controls.',
+  },
   plan: { label: 'Planning', hint: 'Multi-turn planning conversations.' },
   draft: {
     label: 'Task drafting',

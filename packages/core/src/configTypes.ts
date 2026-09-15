@@ -299,6 +299,9 @@ export const DEFAULT_LINEAR: LinearConfig = {
 export interface ModelConfig {
   /** Coding runs — the agent that edits the repo. */
   execute: string;
+  /** The overseer chat: a full agent session in the checkout that also holds
+   *  the daemon's own controls (dispatch, approve, cancel). */
+  overseer: string;
   /** Multi-turn planning conversations. */
   plan: string;
   /** One-shot natural-language task drafting. */
@@ -313,6 +316,7 @@ export interface ModelConfig {
 
 export const DEFAULT_MODELS: ModelConfig = {
   execute: 'claude-opus-5',
+  overseer: 'claude-opus-5',
   plan: 'claude-sonnet-5',
   draft: 'claude-haiku-4-5-20251001',
   enrich: 'claude-haiku-4-5-20251001',
@@ -323,6 +327,7 @@ export const DEFAULT_MODELS: ModelConfig = {
 /** Every valid key of `ModelConfig`, in the order the Settings UI renders them. */
 export const MODEL_ROLES: readonly (keyof ModelConfig)[] = [
   'execute',
+  'overseer',
   'plan',
   'draft',
   'enrich',

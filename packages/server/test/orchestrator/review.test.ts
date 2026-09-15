@@ -434,6 +434,7 @@ describe('buildReviewPrompt verification evidence', () => {
 describe('reviewModelForRisk', () => {
   const models = {
     execute: 'opus',
+    overseer: 'opus',
     plan: 'sonnet',
     draft: 'haiku',
     enrich: 'haiku',
