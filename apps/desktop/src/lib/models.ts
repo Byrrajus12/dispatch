@@ -16,14 +16,9 @@ export const MODELS: ModelOption[] = [
     hint: 'The default for real work',
   },
   {
-    id: 'claude-fable-5',
-    label: 'Fable 5',
+    id: 'claude-fable-5-1',
+    label: 'Fable 5.1',
     hint: 'Hardest work. Premium pricing.',
-  },
-  {
-    id: 'claude-opus-4-8',
-    label: 'Opus 4.8',
-    hint: 'Previous-generation Opus',
   },
   {
     id: 'claude-sonnet-5',
@@ -77,6 +72,8 @@ export function modelLabel(id: string | undefined): string | undefined {
 // non-billable `<synthetic>` sentinel. Kept beside `MODELS` so all id→label mapping lives in
 // one file, per the parser's "map raw ids to display names in one place" note.
 const HISTORICAL_MODEL_LABELS: Record<string, string> = {
+  'claude-fable-5': 'Fable 5',
+  'claude-opus-4-8': 'Opus 4.8',
   'claude-opus-4-7': 'Opus 4.7',
   'claude-sonnet-4-6': 'Sonnet 4.6',
   '<synthetic>': 'Synthetic',
