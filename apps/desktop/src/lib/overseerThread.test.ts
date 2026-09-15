@@ -1,13 +1,13 @@
 import type {
-  WardenAction,
-  WardenMessage,
-  WardenRecord,
+  OverseerAction,
+  OverseerMessage,
+  OverseerRecord,
 } from '@dispatch/client';
 import { describe, expect, test } from 'bun:test';
 
-import { buildWardenThread } from './wardenThread';
+import { buildOverseerThread } from './overseerThread';
 
-function makeAction(overrides: Partial<WardenAction> = {}): WardenAction {
+function makeAction(overrides: Partial<OverseerAction> = {}): OverseerAction {
   return {
     id: 'act-1',
     tool: 'cancel_run',
@@ -20,9 +20,9 @@ function makeAction(overrides: Partial<WardenAction> = {}): WardenAction {
 }
 
 function makeRecord(
-  messages: WardenMessage[],
-  overrides: Partial<WardenRecord> = {}
-): WardenRecord {
+  messages: OverseerMessage[],
+  overrides: Partial<OverseerRecord> = {}
+): OverseerRecord {
   return {
     id: 'w-1',
     prompt: 'what is going on?',
@@ -39,13 +39,13 @@ function makeRecord(
 
 const at = '2026-08-10T00:00:01Z';
 
-describe('buildWardenThread', () => {
+describe('buildOverseerThread', () => {
   test('an undefined record renders nothing', () => {
-    expect(buildWardenThread(undefined)).toEqual([]);
+    expect(buildOverseerThread(undefined)).toEqual([]);
   });
 
   test('user and assistant turns become message rows in order', () => {
-    const items = buildWardenThread(
+    const items = buildOverseerThread(
       makeRecord([
         { role: 'user', text: 'status?', at },
         { role: 'assistant', text: 'All quiet.', at },
@@ -64,7 +64,7 @@ describe('buildWardenThread', () => {
   });
 
   test('read-only tool calls become muted tool rows', () => {
-    const items = buildWardenThread(
+    const items = buildOverseerThread(
       makeRecord([{ role: 'tool', tool: 'list_runs', text: '3 runs', at }])
     );
     expect(items).toEqual([
@@ -74,7 +74,7 @@ describe('buildWardenThread', () => {
 
   test('a still-pending action renders as one confirm card, not a transcript row', () => {
     const action = makeAction();
-    const items = buildWardenThread(
+    const items = buildOverseerThread(
       makeRecord(
         [
           { role: 'user', text: 'cancel r-1', at },
@@ -103,7 +103,7 @@ describe('buildWardenThread', () => {
   });
 
   test('a decided action keeps its outcome row and drops the stale queued row', () => {
-    const items = buildWardenThread(
+    const items = buildOverseerThread(
       makeRecord([
         {
           role: 'action',
@@ -135,7 +135,7 @@ describe('buildWardenThread', () => {
   });
 
   test('a denied action renders only its denial row', () => {
-    const items = buildWardenThread(
+    const items = buildOverseerThread(
       makeRecord([
         {
           role: 'action',
@@ -171,7 +171,7 @@ describe('buildWardenThread', () => {
     // `failed` lifecycle row — the card should sit at that newest row, once,
     // with the failure surfaced for the retry.
     const action = makeAction();
-    const items = buildWardenThread(
+    const items = buildOverseerThread(
       makeRecord(
         [
           {
@@ -214,7 +214,7 @@ describe('buildWardenThread', () => {
 
   test('a pending action missing its transcript row still gets a card', () => {
     const action = makeAction();
-    const items = buildWardenThread(
+    const items = buildOverseerThread(
       makeRecord([{ role: 'user', text: 'cancel it', at }], {
         pendingActions: [action],
       })
@@ -232,7 +232,7 @@ describe('buildWardenThread', () => {
   });
 
   test('a running record appends a trailing pending row', () => {
-    const items = buildWardenThread(
+    const items = buildOverseerThread(
       makeRecord([{ role: 'user', text: 'status?', at }], { state: 'running' })
     );
     expect(items[items.length - 1]).toEqual({
@@ -242,14 +242,16 @@ describe('buildWardenThread', () => {
   });
 
   test('a failed record appends its error, with a fallback when the server sent none', () => {
-    const withError = buildWardenThread(
+    const withError = buildOverseerThread(
       makeRecord([], { state: 'failed', error: 'model unavailable' })
     );
     expect(withError).toEqual([
       { kind: 'failed', key: 'w-1-failed', error: 'model unavailable' },
     ]);
 
-    const withoutError = buildWardenThread(makeRecord([], { state: 'failed' }));
+    const withoutError = buildOverseerThread(
+      makeRecord([], { state: 'failed' })
+    );
     expect(withoutError[0]?.kind).toBe('failed');
     expect(
       withoutError[0]?.kind === 'failed' ? withoutError[0].error : ''
@@ -259,7 +261,7 @@ describe('buildWardenThread', () => {
   test('two pending actions each get their own card', () => {
     const first = makeAction();
     const second = makeAction({ id: 'act-2', summary: 'Dequeue run r-2' });
-    const items = buildWardenThread(
+    const items = buildOverseerThread(
       makeRecord(
         [
           {

@@ -10,15 +10,15 @@ import { LedgerStore } from '../../src/ledger.js';
 import { FakeExecutor } from '../../src/orchestrator/executors/fake.js';
 import { MergeQueue } from '../../src/orchestrator/mergeQueue.js';
 import { Orchestrator } from '../../src/orchestrator/orchestrator.js';
+import type { OverseerToolContext } from '../../src/orchestrator/overseerTools.js';
+import {
+  OVERSEER_MUTATING_TOOLS,
+  OVERSEER_STATUS_TOOLS,
+  OverseerToolError,
+  OverseerToolRegistry,
+} from '../../src/orchestrator/overseerTools.js';
 import type { CommandResult } from '../../src/orchestrator/pr.js';
 import { QuestionRegistry } from '../../src/orchestrator/questions.js';
-import type { WardenToolContext } from '../../src/orchestrator/wardenTools.js';
-import {
-  WARDEN_MUTATING_TOOLS,
-  WARDEN_STATUS_TOOLS,
-  WardenToolError,
-  WardenToolRegistry,
-} from '../../src/orchestrator/wardenTools.js';
 import { initGitRepo } from './helpers.js';
 
 let fakeHome: string;
@@ -38,7 +38,7 @@ const liveOrchestrators: Orchestrator[] = [];
 beforeEach(() => {
   fakeHome = mkdtempSync(join(tmpdir(), 'dispatch-home-'));
   process.env.DISPATCH_HOME = fakeHome;
-  repo = initGitRepo('dispatch-warden-');
+  repo = initGitRepo('dispatch-overseer-');
 });
 
 afterEach(async () => {
@@ -94,8 +94,8 @@ const stubRunner = async (
   return { ok: false, stdout: '', stderr: 'unhandled stub command' };
 };
 
-interface Harness extends WardenToolContext {
-  registry: WardenToolRegistry;
+interface Harness extends OverseerToolContext {
+  registry: OverseerToolRegistry;
 }
 
 /**
@@ -152,7 +152,7 @@ function makeHarness(): Harness {
   liveQueues.push(mergeQueue);
   const questions = new QuestionRegistry();
   const ledgerStore = new LedgerStore(repo);
-  const ctx: WardenToolContext = {
+  const ctx: OverseerToolContext = {
     store,
     cache,
     orchestrator,
@@ -161,7 +161,7 @@ function makeHarness(): Harness {
     ledgerStore,
     defaultExecutor: 'fake',
   };
-  return { ...ctx, registry: new WardenToolRegistry(ctx) };
+  return { ...ctx, registry: new OverseerToolRegistry(ctx) };
 }
 
 /** Dispatches `title` on `executor` and returns once the run has settled into `state`. */
@@ -182,7 +182,7 @@ async function dispatchUntil(
 // Tool set shape
 // ---------------------------------------------------------------------------
 
-describe('warden tool sets', () => {
+describe('overseer tool sets', () => {
   it('exposes both sets with unique names and no overlap between them', () => {
     const h = makeHarness();
     const statusNames = h.registry.statusTools().map((t) => t.name);
@@ -195,8 +195,8 @@ describe('warden tool sets', () => {
     for (const name of mutatingNames) expect(statusNames).not.toContain(name);
   });
 
-  it('covers every status and mutating tool the warden is specified to have', () => {
-    expect(WARDEN_STATUS_TOOLS.map((t) => t.name).sort()).toEqual([
+  it('covers every status and mutating tool the overseer is specified to have', () => {
+    expect(OVERSEER_STATUS_TOOLS.map((t) => t.name).sort()).toEqual([
       'ledger_entries',
       'list_blocked_tasks',
       'list_ready_tasks',
@@ -205,7 +205,7 @@ describe('warden tool sets', () => {
       'open_questions',
       'pending_approvals',
     ]);
-    expect(WARDEN_MUTATING_TOOLS.map((t) => t.name).sort()).toEqual([
+    expect(OVERSEER_MUTATING_TOOLS.map((t) => t.name).sort()).toEqual([
       'approve_run',
       'cancel_run',
       'deny_run',
@@ -218,10 +218,10 @@ describe('warden tool sets', () => {
   it('rejects an unknown tool name on both call paths', () => {
     const h = makeHarness();
     expect(() => h.registry.callStatusTool('list_everything')).toThrow(
-      WardenToolError
+      OverseerToolError
     );
     expect(() => h.registry.callMutatingTool('delete_everything')).toThrow(
-      WardenToolError
+      OverseerToolError
     );
   });
 
@@ -241,7 +241,7 @@ describe('warden tool sets', () => {
 // Status tools
 // ---------------------------------------------------------------------------
 
-describe('warden status tools', () => {
+describe('overseer status tools', () => {
   it('list_runs shows live runs, and terminal ones only when asked', async () => {
     const h = makeHarness();
     const { runId, taskId } = await dispatchUntil(
@@ -451,7 +451,7 @@ describe('warden status tools', () => {
     const h = makeHarness();
     expect(() =>
       h.registry.callStatusTool('list_ready_tasks', { runId: 'r-abc123' })
-    ).toThrow(WardenToolError);
+    ).toThrow(OverseerToolError);
   });
 });
 
@@ -459,7 +459,7 @@ describe('warden status tools', () => {
 // Mutating tools — the pending-descriptor half
 // ---------------------------------------------------------------------------
 
-describe('warden mutating tools produce a pending action, never an effect', () => {
+describe('overseer mutating tools produce a pending action, never an effect', () => {
   it('dispatch_task describes the run without starting it', async () => {
     const h = makeHarness();
     const task = h.store.create({ title: 'Add feature' });

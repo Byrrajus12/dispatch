@@ -83,7 +83,7 @@ test('collapsed rail hides labels but keeps every accessible name', () => {
     ...RAIL_LABELS,
     'All Agents',
     'Sessions',
-    'Warden',
+    'Overseer',
     'Settings',
   ]) {
     expect(

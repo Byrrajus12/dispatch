@@ -68,7 +68,7 @@ describe('client types mirror dispatchd', () => {
   });
 });
 
-// The client's own source, read as text like the server's: the warden mirrors
+// The client's own source, read as text like the server's: the overseer mirrors
 // are inline literal unions on both sides (no exported const arrays), so
 // parity is checked source-to-source.
 function clientSource(): string {
@@ -85,40 +85,43 @@ function fields(source: string, name: string): string[] | null {
   return [...body.matchAll(/\n {2}(\w+\??):/g)].map((m) => m[1]);
 }
 
-describe('warden types mirror dispatchd', () => {
-  it('WardenRecord declares the same fields with the same optionality', () => {
+describe('overseer types mirror dispatchd', () => {
+  it('OverseerRecord declares the same fields with the same optionality', () => {
     const server = fields(
-      serverSource('orchestrator', 'warden.ts'),
-      'WardenRecord'
+      serverSource('orchestrator', 'overseer.ts'),
+      'OverseerRecord'
     );
-    const client = fields(clientSource(), 'WardenRecord');
+    const client = fields(clientSource(), 'OverseerRecord');
     expect(server).not.toBeNull();
     expect(client).toEqual(server);
   });
 
-  it('WardenMessage declares the same fields with the same optionality', () => {
+  it('OverseerMessage declares the same fields with the same optionality', () => {
     const server = fields(
-      serverSource('orchestrator', 'warden.ts'),
-      'WardenMessage'
+      serverSource('orchestrator', 'overseer.ts'),
+      'OverseerMessage'
     );
-    const client = fields(clientSource(), 'WardenMessage');
+    const client = fields(clientSource(), 'OverseerMessage');
     expect(server).not.toBeNull();
     expect(client).toEqual(server);
   });
 
-  it('WardenAction declares the same fields with the same optionality', () => {
+  it('OverseerAction declares the same fields with the same optionality', () => {
     const server = fields(
-      serverSource('orchestrator', 'wardenTools.ts'),
-      'WardenAction'
+      serverSource('orchestrator', 'overseerTools.ts'),
+      'OverseerAction'
     );
-    const client = fields(clientSource(), 'WardenAction');
+    const client = fields(clientSource(), 'OverseerAction');
     expect(server).not.toBeNull();
     expect(client).toEqual(server);
   });
 
-  it('WardenState carries the same states the server stores', () => {
-    const pattern = /type WardenState = ([^;]+);/;
-    const server = literals(serverSource('orchestrator', 'warden.ts'), pattern);
+  it('OverseerState carries the same states the server stores', () => {
+    const pattern = /type OverseerState = ([^;]+);/;
+    const server = literals(
+      serverSource('orchestrator', 'overseer.ts'),
+      pattern
+    );
     const client = literals(clientSource(), pattern);
     expect(server).not.toBeNull();
     expect(client).toEqual(server);
@@ -128,12 +131,13 @@ describe('warden types mirror dispatchd', () => {
   // action lifecycle outcome, action status) — field-name parity above says
   // nothing about their members.
   for (const [iface, field] of [
-    ['WardenMessage', 'role'],
-    ['WardenMessage', 'outcome?'],
-    ['WardenAction', 'status'],
+    ['OverseerMessage', 'role'],
+    ['OverseerMessage', 'outcome?'],
+    ['OverseerAction', 'status'],
   ] as const) {
     it(`${iface}.${field} carries the same literals as the server`, () => {
-      const file = iface === 'WardenAction' ? 'wardenTools.ts' : 'warden.ts';
+      const file =
+        iface === 'OverseerAction' ? 'overseerTools.ts' : 'overseer.ts';
       const bodyOf = (source: string): string | undefined =>
         new RegExp(`export interface ${iface} \\{([\\s\\S]*?)\\n\\}`).exec(
           source

@@ -36,8 +36,8 @@ const SEARCH_GROUPS: SearchGroup[] = [
     label: 'Agents',
     items: [
       {
-        id: 'a-warden',
-        label: 'Warden',
+        id: 'a-overseer',
+        label: 'Overseer',
         icon: <BotIcon aria-hidden className="size-3.5" />,
         hint: 'Working',
       },

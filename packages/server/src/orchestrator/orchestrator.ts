@@ -465,7 +465,7 @@ export class Orchestrator {
 
   // Every approval request currently waiting on a human, flattened into one
   // row per run. The registry holds these per-run for approve()'s benefit;
-  // read surfaces (the warden's status tools) need the whole list, and
+  // read surfaces (the overseer's status tools) need the whole list, and
   // deriving it from `list()` alone is impossible — RunState only says
   // `awaiting-approval`, never which tool call is being asked about.
   //
@@ -1909,7 +1909,7 @@ export class Orchestrator {
 
   /**
    * The one entry point for "start work on this task": the HTTP API, the epic
-   * auto-fill and the warden's dispatch_task all come through here, so a task
+   * auto-fill and the overseer's dispatch_task all come through here, so a task
    * whose most recent run is resumable is PICKED UP rather than started over.
    * A dispatcher calling dispatch() directly strands that run's worktree and
    * permanently cancels the recovery sweep watching it (resumeBlockReason then
@@ -1949,7 +1949,7 @@ export class Orchestrator {
       // is untouched (resumeHonoursRequest has already run, on the raw
       // request). Resolving this per caller instead is what silently ran a
       // whole 2026-09-08 fleet on the CLI's default model: only the HTTP
-      // route passed `defaults`, while the epic auto-fill and the warden's
+      // route passed `defaults`, while the epic auto-fill and the overseer's
       // dispatch tool passed none, and the config key looked ignored.
       model:
         request.model ??

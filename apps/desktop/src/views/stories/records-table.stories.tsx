@@ -64,9 +64,9 @@ const RECORDS_ROWS: RecordsRow[] = [
     },
   },
   {
-    id: 't-warden',
+    id: 't-overseer',
     cells: {
-      title: 'Warden front and center',
+      title: 'Overseer front and center',
       tags: [],
       lastRun: undefined,
       confidence: 2,

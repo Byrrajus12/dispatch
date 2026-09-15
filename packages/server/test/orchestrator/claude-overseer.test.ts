@@ -4,15 +4,15 @@ import { z } from 'zod';
 
 import { CLAUDE_INSTALL_HINT } from '../../src/orchestrator/claudeCli.js';
 import type {
-  WardenToolResult,
-  WardenToolset,
-} from '../../src/orchestrator/wardenBackend.js';
+  OverseerToolResult,
+  OverseerToolset,
+} from '../../src/orchestrator/overseerBackend.js';
 import {
-  ClaudeWarden,
+  ClaudeOverseer,
   EMPTY_REPLY_MESSAGE,
-  WARDEN_TOOL_PREFIX,
-  wardenSdkTools,
-} from '../../src/orchestrator/wardens/claude.js';
+  OVERSEER_TOOL_PREFIX,
+  overseerSdkTools,
+} from '../../src/orchestrator/overseers/claude.js';
 
 // The exact text the Agent SDK throws when it can't resolve its own bundled
 // native CLI binary — mirrors claude-planner.test.ts's fixture for the same
@@ -28,14 +28,14 @@ interface Recorded {
 }
 
 // A toolset with one tool of each kind, standing in for the real registry: this
-// suite is about what ClaudeWarden sends to the SDK and how it routes a call
+// suite is about what ClaudeOverseer sends to the SDK and how it routes a call
 // back, not about what the tools themselves do.
-function stubToolset(result?: WardenToolResult): {
-  toolset: WardenToolset;
+function stubToolset(result?: OverseerToolResult): {
+  toolset: OverseerToolset;
   calls: Recorded[];
 } {
   const calls: Recorded[] = [];
-  const toolset: WardenToolset = {
+  const toolset: OverseerToolset = {
     tools: [
       {
         name: 'list_runs',
@@ -78,49 +78,52 @@ function successStream(
 // the Options the backend handed to `query()`.
 async function runTurn(
   stream: () => AsyncGenerator<unknown>,
-  toolset: WardenToolset,
-  send?: (warden: ClaudeWarden, toolset: WardenToolset) => Promise<unknown>
+  toolset: OverseerToolset,
+  send?: (
+    overseer: ClaudeOverseer,
+    toolset: OverseerToolset
+  ) => Promise<unknown>
 ): Promise<{ captured?: Options; turn: unknown }> {
   let captured: Options | undefined;
   const queryFn = (args: { options?: Options }) => {
     captured = args.options;
     return stream() as unknown as Query;
   };
-  const warden = new ClaudeWarden(
+  const overseer = new ClaudeOverseer(
     '/tmp/does-not-matter',
     queryFn as unknown as typeof import('@anthropic-ai/claude-agent-sdk').query
   );
   const turn =
     send === undefined
-      ? await warden.start('what is going on?', toolset)
-      : await send(warden, toolset);
+      ? await overseer.start('what is going on?', toolset)
+      : await send(overseer, toolset);
   return { captured, turn };
 }
 
-describe('ClaudeWarden Bun compatibility', () => {
+describe('ClaudeOverseer Bun compatibility', () => {
   it('imports @anthropic-ai/claude-agent-sdk and constructs under Bun', () => {
-    const warden = new ClaudeWarden('/tmp/does-not-matter');
-    expect(warden).toBeInstanceOf(ClaudeWarden);
-    expect(typeof warden.start).toBe('function');
-    expect(typeof warden.sendMessage).toBe('function');
+    const overseer = new ClaudeOverseer('/tmp/does-not-matter');
+    expect(overseer).toBeInstanceOf(ClaudeOverseer);
+    expect(typeof overseer.start).toBe('function');
+    expect(typeof overseer.sendMessage).toBe('function');
   });
 });
 
-describe('ClaudeWarden session wiring', () => {
+describe('ClaudeOverseer session wiring', () => {
   it('runs with no built-in tools, no settings sources, and only its own MCP server', async () => {
     const { toolset } = stubToolset();
     const { captured } = await runTurn(successStream(), toolset);
 
-    // The warden holds operator authority, so it gets no Read/Bash/Edit at all.
+    // The overseer holds operator authority, so it gets no Read/Bash/Edit at all.
     expect(captured?.tools).toEqual([]);
     expect(captured?.allowedTools).toEqual([
-      `${WARDEN_TOOL_PREFIX}list_runs`,
-      `${WARDEN_TOOL_PREFIX}cancel_run`,
+      `${OVERSEER_TOOL_PREFIX}list_runs`,
+      `${OVERSEER_TOOL_PREFIX}cancel_run`,
     ]);
     expect(captured?.settingSources).toEqual([]);
     expect(captured?.skills).toEqual([]);
     expect(captured?.strictMcpConfig).toBe(true);
-    expect(Object.keys(captured?.mcpServers ?? {})).toEqual(['warden']);
+    expect(Object.keys(captured?.mcpServers ?? {})).toEqual(['overseer']);
     expect(captured?.maxTurns).toBeGreaterThan(0);
   });
 
@@ -145,7 +148,7 @@ describe('ClaudeWarden session wiring', () => {
     const callOpts = {} as Parameters<NonNullable<Options['canUseTool']>>[2];
 
     const allowed = await captured?.canUseTool?.(
-      `${WARDEN_TOOL_PREFIX}list_runs`,
+      `${OVERSEER_TOOL_PREFIX}list_runs`,
       { limit: 3 },
       callOpts
     );
@@ -169,7 +172,8 @@ describe('ClaudeWarden session wiring', () => {
     const followUp = await runTurn(
       successStream({ session_id: 'sess-2' }),
       toolset,
-      (warden, tools) => warden.sendMessage('sess-1', 'and now?', tools, 'm-1')
+      (overseer, tools) =>
+        overseer.sendMessage('sess-1', 'and now?', tools, 'm-1')
     );
     expect(followUp.captured?.resume).toBe('sess-1');
     expect(followUp.captured?.model).toBe('m-1');
@@ -188,14 +192,14 @@ describe('ClaudeWarden session wiring', () => {
       yield { type: 'result', subtype: 'error_max_turns', session_id: 's' };
     };
     await expect(runTurn(errored, toolset)).rejects.toThrow(
-      'warden turn failed: error_max_turns'
+      'overseer turn failed: error_max_turns'
     );
 
     const silent = async function* stream() {
       yield { type: 'system', subtype: 'init', session_id: 's' };
     };
     await expect(runTurn(silent, toolset)).rejects.toThrow(
-      'warden turn produced no result message'
+      'overseer turn produced no result message'
     );
   });
 
@@ -204,14 +208,14 @@ describe('ClaudeWarden session wiring', () => {
     const queryFn = () => {
       throw new Error(MISSING_CLI_MESSAGE);
     };
-    const warden = new ClaudeWarden(
+    const overseer = new ClaudeOverseer(
       '/tmp/does-not-matter',
       queryFn as unknown as typeof import('@anthropic-ai/claude-agent-sdk').query
     );
     // `Bun.which('claude')` may or may not find a CLI on the machine running
     // this, so only the no-CLI branch is asserted on when there is none.
     if (Bun.which('claude') === null) {
-      await expect(warden.start('hi', toolset)).rejects.toThrow(
+      await expect(overseer.start('hi', toolset)).rejects.toThrow(
         CLAUDE_INSTALL_HINT
       );
     }
@@ -223,7 +227,7 @@ describe('ClaudeWarden session wiring', () => {
 // directly has to hand its arguments over untyped. The model sends whatever it
 // sends anyway; the registry is what validates it.
 function invoke(
-  def: ReturnType<typeof wardenSdkTools>[number],
+  def: ReturnType<typeof overseerSdkTools>[number],
   args: unknown
 ): Promise<{ content: unknown; isError?: boolean }> {
   return (
@@ -234,10 +238,10 @@ function invoke(
   )(args, undefined);
 }
 
-describe('wardenSdkTools', () => {
+describe('overseerSdkTools', () => {
   it('routes a call through the toolset and hands the payload back as JSON', async () => {
     const { toolset, calls } = stubToolset();
-    const [listRuns] = wardenSdkTools(toolset);
+    const [listRuns] = overseerSdkTools(toolset);
 
     const result = await invoke(listRuns, { limit: 2 });
 
@@ -253,7 +257,7 @@ describe('wardenSdkTools', () => {
       content: { error: 'run not found: r-9' },
       isError: true,
     });
-    const [, cancelRun] = wardenSdkTools(toolset);
+    const [, cancelRun] = overseerSdkTools(toolset);
 
     const result = await invoke(cancelRun, { runId: 'r-9' });
 
@@ -263,7 +267,7 @@ describe('wardenSdkTools', () => {
 
   it('advertises the tool parameters and says which tools only queue', () => {
     const { toolset } = stubToolset();
-    const [listRuns, cancelRun] = wardenSdkTools(toolset);
+    const [listRuns, cancelRun] = overseerSdkTools(toolset);
 
     expect(Object.keys(listRuns.inputSchema)).toEqual(['limit']);
     expect(Object.keys(cancelRun.inputSchema)).toEqual(['runId']);

@@ -1,22 +1,22 @@
 import type { z } from 'zod';
 
-import type { WardenAction } from './wardenTools.js';
+import type { OverseerAction } from './overseerTools.js';
 
 /**
- * The seam between the warden's conversation bookkeeping (WardenManager) and
- * whatever actually talks to a model (ClaudeWarden in production, FakeWarden in
+ * The seam between the overseer's conversation bookkeeping (OverseerManager) and
+ * whatever actually talks to a model (ClaudeOverseer in production, FakeOverseer in
  * tests) — the tool-calling counterpart of planner.ts's `Planner`.
  *
  * The split that matters: a backend never touches the tool registry. It is
- * handed a `WardenToolset` for the turn, advertises those tools to the model,
- * and routes every call back through `toolset.call`. WardenManager is what
+ * handed a `OverseerToolset` for the turn, advertises those tools to the model,
+ * and routes every call back through `toolset.call`. OverseerManager is what
  * decides that a status call runs immediately and a mutating call only ever
- * queues a WardenAction — so a backend cannot bypass human confirmation even
- * by accident, and a test can drive the whole flow through FakeWarden.
+ * queues a OverseerAction — so a backend cannot bypass human confirmation even
+ * by accident, and a test can drive the whole flow through FakeOverseer.
  */
 
 /** One tool a backend advertises to the model for a turn. */
-export interface WardenToolDescriptor {
+export interface OverseerToolDescriptor {
   name: string;
   description: string;
   /**
@@ -29,7 +29,7 @@ export interface WardenToolDescriptor {
   inputSchema: z.ZodType<unknown>;
   /**
    * True for the mutating tools. Calling one NEVER performs its effect: it
-   * queues a WardenAction for a human to confirm. Exposed so a backend can say
+   * queues a OverseerAction for a human to confirm. Exposed so a backend can say
    * so in the tool's description rather than the model having to infer it from
    * the result it gets back.
    */
@@ -37,52 +37,52 @@ export interface WardenToolDescriptor {
 }
 
 /** The outcome of one tool call, as a backend hands it back to the model. */
-export interface WardenToolResult {
+export interface OverseerToolResult {
   /** JSON-serializable payload for the model to read. */
   content: unknown;
   /**
    * True when the call failed (unknown tool, input that failed its schema, a
    * target that doesn't exist). The turn continues — `content` carries a
    * one-line message the model is expected to read and self-correct from,
-   * exactly like WardenToolError's own contract.
+   * exactly like OverseerToolError's own contract.
    */
   isError: boolean;
   /** Set when the call queued a mutating action instead of doing anything. */
-  action?: WardenAction;
+  action?: OverseerAction;
 }
 
 /** Everything a backend needs to run one tool-calling turn. */
-export interface WardenToolset {
-  tools: readonly WardenToolDescriptor[];
+export interface OverseerToolset {
+  tools: readonly OverseerToolDescriptor[];
   /**
    * Runs one tool call. Resolves for tool-level failures rather than
-   * rejecting (see WardenToolResult.isError) — a mistyped argument should cost
+   * rejecting (see OverseerToolResult.isError) — a mistyped argument should cost
    * the model one turn of self-correction, not fail the whole conversation.
    */
-  call(name: string, input: unknown): Promise<WardenToolResult>;
+  call(name: string, input: unknown): Promise<OverseerToolResult>;
 }
 
 /** One settled assistant turn: the text reply, and the handle to resume from. */
-export interface WardenTurn {
+export interface OverseerTurn {
   reply: string;
   /**
    * The backend's opaque resume handle (the Agent SDK session id for
-   * ClaudeWarden), threaded into the next `sendMessage` so follow-ups keep the
+   * ClaudeOverseer), threaded into the next `sendMessage` so follow-ups keep the
    * prior turns — including the tool calls they made — in context.
    */
   sessionId?: string;
 }
 
-export interface WardenBackend {
+export interface OverseerBackend {
   start(
     prompt: string,
-    toolset: WardenToolset,
+    toolset: OverseerToolset,
     model?: string
-  ): Promise<WardenTurn>;
+  ): Promise<OverseerTurn>;
   sendMessage(
     sessionId: string | undefined,
     message: string,
-    toolset: WardenToolset,
+    toolset: OverseerToolset,
     model?: string
-  ): Promise<WardenTurn>;
+  ): Promise<OverseerTurn>;
 }

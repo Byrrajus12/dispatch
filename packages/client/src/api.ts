@@ -697,17 +697,17 @@ export type ServerEvent =
   | { type: 'linear.changed'; summary: LinearSyncSummary }
   // The brain-dump inbox changed — captured, retyped, dismissed or converted.
   | { type: 'inbox.changed' }
-  // A warden conversation's record changed (turn settled, action queued or
+  // A overseer conversation's record changed (turn settled, action queued or
   // confirmed). Mirrors packages/server/src/events.ts exactly.
-  | { type: 'warden.changed'; conversationId: string }
+  | { type: 'overseer.changed'; conversationId: string }
   | { type: 'review.changed'; runId: string }
   | { type: 'config.changed' }
   // A task draft changed state or was dismissed — no id, refetch the list.
   | { type: 'draft.changed' }
-  // A warden conversation advanced (turn settled, action queued or decided) —
+  // A overseer conversation advanced (turn settled, action queued or decided) —
   // same "go refetch, no payload beyond the id" contract as `plan.changed`.
   // Mirrors packages/server/src/events.ts exactly.
-  | { type: 'warden.changed'; conversationId: string }
+  | { type: 'overseer.changed'; conversationId: string }
   // A run agent's question was asked, answered, or withdrawn. Mirrors
   // packages/server/src/events.ts.
   | { type: 'question.asked'; runId: string; questionId: string }
@@ -931,24 +931,24 @@ export interface DraftRecord {
   updatedAt: string;
 }
 
-// Mirrors WardenState in packages/server/src/orchestrator/warden.ts:
+// Mirrors OverseerState in packages/server/src/orchestrator/overseer.ts:
 // `running` means a turn is in flight; `ready` means the last turn settled and
 // the conversation is idle (possibly with actions awaiting confirmation);
 // `failed` means the last turn errored.
-export type WardenState = 'running' | 'ready' | 'failed';
+export type OverseerState = 'running' | 'ready' | 'failed';
 
-// Mirrors WardenMessage in packages/server/src/orchestrator/warden.ts — one
+// Mirrors OverseerMessage in packages/server/src/orchestrator/overseer.ts — one
 // transcript entry. `user`/`assistant` are the conversation proper; `tool`
 // records a read-only tool call the assistant made mid-turn; `action` records
 // a mutating tool call's life: queued at `pending`, then
 // `applied`/`denied`/`failed` once a human decides.
-export interface WardenMessage {
+export interface OverseerMessage {
   role: 'user' | 'assistant' | 'tool' | 'action';
   text: string;
   at: string;
-  /** `tool` and `action` entries: which warden tool the entry is about. */
+  /** `tool` and `action` entries: which overseer tool the entry is about. */
   tool?: string;
-  /** `action` entries: the WardenAction this entry reports on. */
+  /** `action` entries: the OverseerAction this entry reports on. */
   actionId?: string;
   /**
    * `action` entries only. `failed` means the human approved but the effect
@@ -957,9 +957,9 @@ export interface WardenMessage {
   outcome?: 'pending' | 'applied' | 'denied' | 'failed';
 }
 
-// Mirrors WardenAction in packages/server/src/orchestrator/wardenTools.ts —
+// Mirrors OverseerAction in packages/server/src/orchestrator/overseerTools.ts —
 // one queued mutating tool call awaiting (or past) its human decision.
-export interface WardenAction {
+export interface OverseerAction {
   id: string;
   /** The mutating tool this action would invoke. */
   tool: string;
@@ -971,24 +971,24 @@ export interface WardenAction {
   status: 'pending' | 'applied' | 'denied';
 }
 
-// Mirrors WardenRecord in packages/server/src/orchestrator/warden.ts — the
-// body of `POST /api/warden` and `GET /api/warden/:id`.
-export interface WardenRecord {
+// Mirrors OverseerRecord in packages/server/src/orchestrator/overseer.ts — the
+// body of `POST /api/overseer` and `GET /api/overseer/:id`.
+export interface OverseerRecord {
   id: string;
   /** The opening prompt, kept alongside `messages[0]` for callers that only want the ask. */
   prompt: string;
   /** Which registered backend this conversation talks to; follow-ups re-resolve it. */
   backendName: string;
-  state: WardenState;
-  messages: WardenMessage[];
+  state: OverseerState;
+  messages: OverseerMessage[];
   /**
    * Mutating tool calls this conversation has queued that nobody has decided
    * on yet — the confirmation queue the chat UI renders.
    */
-  pendingActions: WardenAction[];
+  pendingActions: OverseerAction[];
   /**
    * Decisions the human has made since the last turn, not yet shown to the
-   * model; drained into the next `sendWardenMessage` turn server-side.
+   * model; drained into the next `sendOverseerMessage` turn server-side.
    */
   undeliveredDecisions: string[];
   /** The backend's resume handle from the most recent turn. */
@@ -1000,9 +1000,9 @@ export interface WardenRecord {
 
 // Mirrors AgentSessionKind in packages/server/src/orchestrator/agentSessions.ts:
 // which kind of conversation agent a session row is — planner chat, enrich
-// ("add detail") agent, single-task draft, or warden chat. Task runs are not
+// ("add detail") agent, single-task draft, or overseer chat. Task runs are not
 // part of this union; they are listed by `fetchRuns` and merged client-side.
-export type AgentSessionKind = 'plan' | 'enrich' | 'draft' | 'warden';
+export type AgentSessionKind = 'plan' | 'enrich' | 'draft' | 'overseer';
 
 // Mirrors AgentSessionMeta in packages/server/src/orchestrator/agentSessions.ts
 // — the body of `GET /api/agents`: every in-memory conversation agent the
@@ -1753,9 +1753,9 @@ export interface ApiClient {
   ): Promise<RunMeta>;
   fetchRuns(): Promise<RunMeta[]>;
   // Every in-memory conversation agent (planner chats, enrich agents, task
-  // drafts, warden chats), newest activity first — the non-run half of the
+  // drafts, overseer chats), newest activity first — the non-run half of the
   // All agents page; merge with `fetchRuns` for the full picture. Refetch on
-  // `plan.changed`, `draft.changed` and `warden.changed`.
+  // `plan.changed`, `draft.changed` and `overseer.changed`.
   fetchAgentSessions(): Promise<AgentSessionMeta[]>;
   fetchRun(id: string): Promise<RunDetail>;
   fetchRunClaims(): Promise<RunClaim[]>;
@@ -2098,32 +2098,32 @@ export interface ApiClient {
   // `plan.changed` for the assistant's reply + refined proposal to land.
   sendPlanMessage(planId: string, text: string): Promise<PlanRecord>;
   confirmPlan(planId: string, proposal: PlanProposal): Promise<ConfirmResult>;
-  // The warden chat — the project-assistant conversation with human-confirmed
-  // mutations. `startWarden` opens a conversation and resolves (202) with the
+  // The overseer chat — the project-assistant conversation with human-confirmed
+  // mutations. `startOverseer` opens a conversation and resolves (202) with the
   // full record already at `running`; the assistant's reply lands via
-  // `warden.changed`. `backend` follows createRun's `executor` contract:
+  // `overseer.changed`. `backend` follows createRun's `executor` contract:
   // optional, defaults to 'claude' server-side, 400s on an unknown name.
-  startWarden(
+  startOverseer(
     prompt: string,
     opts?: { backend?: string }
-  ): Promise<WardenRecord>;
-  getWarden(id: string): Promise<WardenRecord>;
+  ): Promise<OverseerRecord>;
+  getOverseer(id: string): Promise<OverseerRecord>;
   // Sends a follow-up on an existing conversation. Resolves (202) with the
-  // record already back in `running` — watch `warden.changed` for the reply.
+  // record already back in `running` — watch `overseer.changed` for the reply.
   // 404s an unknown conversation and 409s one mid-turn.
-  sendWardenMessage(
+  sendOverseerMessage(
     conversationId: string,
     text: string
-  ): Promise<WardenRecord>;
+  ): Promise<OverseerRecord>;
   // Decides one queued mutating action. Approving runs the real effect before
   // resolving, so the returned record already reflects the outcome; denying
   // never runs it at all. 404s an unknown conversation or an action that
   // isn't pending on it.
-  confirmWardenAction(
+  confirmOverseerAction(
     conversationId: string,
     actionId: string,
     approve: boolean
-  ): Promise<WardenRecord>;
+  ): Promise<OverseerRecord>;
   // Phase 5 P2: epic-level concurrent dispatch. `concurrency` defaults
   // server-side to the project's `orchestrator.epicConcurrency` config.
   startEpic(
@@ -2244,7 +2244,7 @@ export interface ApiClient {
 //
 // `token` is the daemon token every call presents. Pass the app token to reach
 // the decide-tier calls (`decideScopeRequest`, `approveRun`,
-// `confirmWardenAction`); the agent token reaches everything else. Omitting it
+// `confirmOverseerAction`); the agent token reaches everything else. Omitting it
 // falls back to the token the daemon injected into the page it served, which
 // is how the browser UI gets one at all.
 export function createApiClient(baseUrl: string, token?: string): ApiClient {
@@ -2635,24 +2635,24 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
         method: 'POST',
         ...jsonBody({ proposal }),
       }),
-    startWarden: (prompt, opts = {}) =>
-      request(target, '/api/warden', {
+    startOverseer: (prompt, opts = {}) =>
+      request(target, '/api/overseer', {
         method: 'POST',
         ...jsonBody({
           prompt,
           ...(opts.backend !== undefined ? { backend: opts.backend } : {}),
         }),
       }),
-    getWarden: (id) => request(target, `/api/warden/${id}`),
-    sendWardenMessage: (conversationId, text) =>
-      request(target, `/api/warden/${conversationId}/message`, {
+    getOverseer: (id) => request(target, `/api/overseer/${id}`),
+    sendOverseerMessage: (conversationId, text) =>
+      request(target, `/api/overseer/${conversationId}/message`, {
         method: 'POST',
         ...jsonBody({ text }),
       }),
-    confirmWardenAction: (conversationId, actionId, approve) =>
+    confirmOverseerAction: (conversationId, actionId, approve) =>
       request(
         target,
-        `/api/warden/${conversationId}/actions/${actionId}/confirm`,
+        `/api/overseer/${conversationId}/actions/${actionId}/confirm`,
         {
           method: 'POST',
           ...jsonBody({ approve }),

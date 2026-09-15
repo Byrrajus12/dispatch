@@ -64,7 +64,7 @@ async function assertFixtureDataLoaded(page: Page): Promise<void> {
   ).toHaveCount(0);
 }
 
-// BASELINES, EXACTLY (branch: the rail's Runs | Warden tab toggle). The loop
+// BASELINES, EXACTLY (branch: the rail's Runs | Overseer tab toggle). The loop
 // below produces 14 screenshot tests — 7 views x 2 themes — but
 // views.spec.ts-snapshots/ holds 10 PNGs, and they fail in two different ways:
 //
@@ -96,7 +96,7 @@ for (const view of VIEWS) {
       fullPage: true,
       // The live rail is on every project screen but is not what any of these
       // baselines is about, and it is chrome that keeps moving — the Runs |
-      // Warden tab strip alone has changed shape three times. Unmasked, each
+      // Overseer tab strip alone has changed shape three times. Unmasked, each
       // of those edits silently invalidates all 14 PNGs here with no CI job to
       // catch it. Masked, the rail still occupies its 240px, so a view
       // squeezed beside it still regresses visibly.
@@ -118,11 +118,11 @@ for (const view of VIEWS) {
  * A rail that renders at the wrong width, overflows its column, or clips its
  * composer is invisible to both suites otherwise: the screenshots paint it
  * magenta, and LiveRail.test.tsx runs in happy-dom, which has no layout engine
- * (WardenChat.test.tsx has to hand-define scrollHeight/scrollTop for exactly
+ * (OverseerChat.test.tsx has to hand-define scrollHeight/scrollTop for exactly
  * that reason). Measured rather than captured, so it needs no baseline to
  * review and does not re-break every time the tab strip changes shape.
  *
- * NOT YET OBSERVED GREEN, the same as warden.spec.ts's rail case and for the
+ * NOT YET OBSERVED GREEN, the same as overseer.spec.ts's rail case and for the
  * same two reasons — `bun run e2e --list` discovers it, which proves only that
  * it parses and type-checks. Running it here dies in the webServer with
  * `ENOENT: posix_spawn 'git'` before a browser ever launches.
@@ -169,11 +169,11 @@ test('the live rail keeps its column on a project view', async ({
   const overflow = await rail.evaluate((el) => el.scrollWidth - el.clientWidth);
   expect(overflow).toBeLessThanOrEqual(0);
 
-  // The Warden tab's composer is the tallest thing the rail has to fit, and
+  // The Overseer tab's composer is the tallest thing the rail has to fit, and
   // the surface this branch added: it has to land inside the column, not be
   // clipped out of it by the transcript above.
-  await page.getByRole('tab', { name: 'Warden' }).click();
-  const composer = page.getByLabel('Warden opening question');
+  await page.getByRole('tab', { name: 'Overseer' }).click();
+  const composer = page.getByLabel('Overseer opening question');
   await expect(composer).toBeVisible();
   const composerBox = await composer.boundingBox();
   if (composerBox === null) throw new Error('the rail composer has no box');

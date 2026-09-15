@@ -17,17 +17,17 @@ export function isFakeExecutorDevToolEnabled(): boolean {
   }
 }
 
-// Same contract for the warden chat: with this set, new warden conversations
+// Same contract for the overseer chat: with this set, new overseer conversations
 // open against the daemon's 'fake' backend (registered only when dispatchd
 // runs with DISPATCH_ENABLE_FAKES=1) instead of the real Claude one — the
 // hook the desktop e2e suite uses to drive the confirm/deny flow without a
 // live LLM call. Toggle from a devtools console with:
-//   localStorage.setItem('dispatch.devFakeWarden', '1')
-const DEV_FAKE_WARDEN_KEY = 'dispatch.devFakeWarden';
+//   localStorage.setItem('dispatch.devFakeOverseer', '1')
+const DEV_FAKE_OVERSEER_KEY = 'dispatch.devFakeOverseer';
 
-export function isFakeWardenDevToolEnabled(): boolean {
+export function isFakeOverseerDevToolEnabled(): boolean {
   try {
-    return window.localStorage.getItem(DEV_FAKE_WARDEN_KEY) === '1';
+    return window.localStorage.getItem(DEV_FAKE_OVERSEER_KEY) === '1';
   } catch {
     return false;
   }

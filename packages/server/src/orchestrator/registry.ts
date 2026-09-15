@@ -53,7 +53,7 @@ export class RunRegistry {
   // Every run currently parked on an approval request, paired with its meta.
   // getPendingApproval above only answers "is THIS run waiting", which is all
   // the approve() path needs; a surface that has to show the human (or the
-  // warden) everything waiting on them has no way to enumerate without this.
+  // overseer) everything waiting on them has no way to enumerate without this.
   listPendingApprovals(): { meta: RunMeta; approval: PendingApproval }[] {
     const out: { meta: RunMeta; approval: PendingApproval }[] = [];
     for (const record of this.runs.values()) {

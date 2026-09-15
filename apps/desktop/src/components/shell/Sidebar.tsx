@@ -119,7 +119,7 @@ const GLOBAL_VIEWS: { id: GlobalView; label: string; icon: typeof Radar }[] = [
   { id: 'sessions', label: 'Sessions', icon: Play },
   // The active project's chat assistant. Global-section, not a project row:
   // it answers about whichever project is active, from any view.
-  { id: 'warden', label: 'Warden', icon: Shield },
+  { id: 'overseer', label: 'Overseer', icon: Shield },
   { id: 'settings', label: 'Settings', icon: Cog },
   // Dev-only primitive review surface — `DEV` is inlined at build time, so this
   // entry (and GalleryView itself) is dead code in a production build.

@@ -2,24 +2,24 @@ import { loadConfig } from '@dispatch/core';
 import { createHash, randomBytes } from 'node:crypto';
 
 import type { EventBus } from '../events.js';
+import type {
+  OverseerBackend,
+  OverseerToolDescriptor,
+  OverseerToolResult,
+  OverseerToolset,
+  OverseerTurn,
+} from './overseerBackend.js';
+import type { OverseerAction, OverseerToolRegistry } from './overseerTools.js';
 import {
   OrchestratorClientError,
   OrchestratorConflictError,
   OrchestratorNotFoundError,
 } from './types.js';
-import type {
-  WardenBackend,
-  WardenToolDescriptor,
-  WardenToolResult,
-  WardenToolset,
-  WardenTurn,
-} from './wardenBackend.js';
-import type { WardenAction, WardenToolRegistry } from './wardenTools.js';
 
 // Same short collision-resistant hex tag as plan.ts's generatePlanId, and
-// local to this package for the same reason: a warden conversation is a purely
+// local to this package for the same reason: a overseer conversation is a purely
 // server-side, in-memory concept that is never written to a task file.
-function generateWardenId(
+function generateOverseerId(
   now: string,
   nonce: string = randomBytes(4).toString('hex')
 ): string {
@@ -33,7 +33,7 @@ function generateWardenId(
 // `running` means a turn is in flight; `ready` means the last turn settled and
 // the conversation is idle (possibly with actions awaiting confirmation);
 // `failed` means the last turn errored. Mirrors PlanState.
-type WardenState = 'running' | 'ready' | 'failed';
+type OverseerState = 'running' | 'ready' | 'failed';
 
 /**
  * One transcript entry.
@@ -43,13 +43,13 @@ type WardenState = 'running' | 'ready' | 'failed';
  * was actually derived from. `action` records a mutating tool call's life:
  * queued at `pending`, then `applied`/`denied`/`failed` once a human decides.
  */
-export interface WardenMessage {
+export interface OverseerMessage {
   role: 'user' | 'assistant' | 'tool' | 'action';
   text: string;
   at: string;
-  /** `tool` and `action` entries: which warden tool the entry is about. */
+  /** `tool` and `action` entries: which overseer tool the entry is about. */
   tool?: string;
-  /** `action` entries: the WardenAction this entry reports on. */
+  /** `action` entries: the OverseerAction this entry reports on. */
   actionId?: string;
   /**
    * `action` entries only. `failed` means the human approved but the effect
@@ -58,21 +58,21 @@ export interface WardenMessage {
   outcome?: 'pending' | 'applied' | 'denied' | 'failed';
 }
 
-export interface WardenRecord {
+export interface OverseerRecord {
   id: string;
   /** The opening prompt, kept alongside `messages[0]` for callers that only want the ask. */
   prompt: string;
   /** Which registered backend this conversation talks to; follow-ups re-resolve it. */
   backendName: string;
-  state: WardenState;
-  messages: WardenMessage[];
+  state: OverseerState;
+  messages: OverseerMessage[];
   /**
    * Mutating tool calls this conversation has queued that nobody has decided
    * on yet — the confirmation queue the chat UI renders. Snapshots taken when
    * the call was made; the registry stays the source of truth for whether an
    * action has since been applied.
    */
-  pendingActions: WardenAction[];
+  pendingActions: OverseerAction[];
   /**
    * Decisions the human has made since the last turn, not yet shown to the
    * model. Drained into the next `sendMessage`'s prompt so the assistant never
@@ -88,9 +88,9 @@ export interface WardenRecord {
   updatedAt: string;
 }
 
-export interface WardenManagerContext {
+export interface OverseerManagerContext {
   rootDir: string;
-  registry: WardenToolRegistry;
+  registry: OverseerToolRegistry;
   events: EventBus;
 }
 
@@ -117,13 +117,13 @@ function describeToolResult(data: unknown): string {
 }
 
 /**
- * Owns the warden's chat conversations (epic: the project assistant tab):
- * drives a `WardenBackend` as a multi-turn, tool-calling conversation and
+ * Owns the overseer's chat conversations (epic: the project assistant tab):
+ * drives a `OverseerBackend` as a multi-turn, tool-calling conversation and
  * tracks each turn's running -> ready|failed state plus the transcript in a
  * small in-memory registry. Machine-local, exactly like PlanManager — a
  * conversation that was still `running` when dispatchd restarts is simply gone.
  *
- * The rule this class exists to enforce, on top of what WardenToolRegistry
+ * The rule this class exists to enforce, on top of what OverseerToolRegistry
  * already guarantees: a turn's mutating tool calls are *collected*, never
  * executed. They land on the record as `pendingActions`, and
  * `confirmAction(id, actionId, true)` is the only path in this class that
@@ -134,13 +134,13 @@ function describeToolResult(data: unknown): string {
  * `claude` or `fake` per conversation the same way `POST /api/plan` picks a
  * planner.
  */
-export class WardenManager {
-  private readonly conversations = new Map<string, WardenRecord>();
-  private readonly backends = new Map<string, WardenBackend>();
+export class OverseerManager {
+  private readonly conversations = new Map<string, OverseerRecord>();
+  private readonly backends = new Map<string, OverseerBackend>();
 
-  constructor(private readonly ctx: WardenManagerContext) {}
+  constructor(private readonly ctx: OverseerManagerContext) {}
 
-  registerBackend(name: string, backend: WardenBackend): void {
+  registerBackend(name: string, backend: OverseerBackend): void {
     this.backends.set(name, backend);
   }
 
@@ -149,7 +149,7 @@ export class WardenManager {
   }
 
   // Fresh per-call read of `config.models`, so a settings change takes effect
-  // on the very next turn with no daemon restart. The warden runs on the
+  // on the very next turn with no daemon restart. The overseer runs on the
   // `plan` role's model: it is the same kind of work (a multi-turn
   // conversation that reasons over project state) and adding a dedicated role
   // would mean a core config + Settings-screen change this seam doesn't need
@@ -158,10 +158,10 @@ export class WardenManager {
     return loadConfig(this.ctx.rootDir).models.plan;
   }
 
-  private requireBackend(name: string): WardenBackend {
+  private requireBackend(name: string): OverseerBackend {
     const backend = this.backends.get(name);
     if (backend === undefined) {
-      throw new OrchestratorClientError(`unknown warden backend: ${name}`);
+      throw new OrchestratorClientError(`unknown overseer backend: ${name}`);
     }
     return backend;
   }
@@ -171,11 +171,11 @@ export class WardenManager {
    * backend turn is fire-and-forget, landing via runTurn's broadcast — same
    * contract as PlanManager.startPlan.
    */
-  start(prompt: string, backendName = 'claude'): WardenRecord {
+  start(prompt: string, backendName = 'claude'): OverseerRecord {
     const backend = this.requireBackend(backendName);
     const now = new Date().toISOString();
-    const record: WardenRecord = {
-      id: generateWardenId(now),
+    const record: OverseerRecord = {
+      id: generateOverseerId(now),
       prompt,
       backendName,
       state: 'running',
@@ -198,16 +198,16 @@ export class WardenManager {
    * reply lands fire-and-forget. The conversation must be idle — a `running`
    * one has a turn in flight to finish first.
    */
-  sendMessage(conversationId: string, message: string): WardenRecord {
+  sendMessage(conversationId: string, message: string): OverseerRecord {
     const record = this.get(conversationId);
     if (record.state === 'running') {
       throw new OrchestratorConflictError(
-        `warden conversation is busy: a turn is already in progress: ${conversationId}`
+        `overseer conversation is busy: a turn is already in progress: ${conversationId}`
       );
     }
     const backend = this.requireBackend(record.backendName);
     const now = new Date().toISOString();
-    const updated: WardenRecord = {
+    const updated: OverseerRecord = {
       ...record,
       state: 'running',
       messages: [...record.messages, { role: 'user', text: message, at: now }],
@@ -218,7 +218,7 @@ export class WardenManager {
       updatedAt: now,
     };
     this.conversations.set(conversationId, updated);
-    this.ctx.events.broadcast({ type: 'warden.changed', conversationId });
+    this.ctx.events.broadcast({ type: 'overseer.changed', conversationId });
 
     // The transcript keeps what the human actually typed; the model gets that
     // plus the decisions it hasn't been told about yet.
@@ -242,7 +242,7 @@ export class WardenManager {
   // never contradicts what the human actually decided.
   private async runTurn(
     conversationId: string,
-    run: () => Promise<WardenTurn>,
+    run: () => Promise<OverseerTurn>,
     drained: string[] = []
   ): Promise<void> {
     try {
@@ -271,18 +271,18 @@ export class WardenManager {
     }
   }
 
-  get(conversationId: string): WardenRecord {
+  get(conversationId: string): OverseerRecord {
     const record = this.conversations.get(conversationId);
     if (record === undefined) {
       throw new OrchestratorNotFoundError(
-        `warden conversation not found: ${conversationId}`
+        `overseer conversation not found: ${conversationId}`
       );
     }
     return record;
   }
 
   /** Newest first, matching how a chat list wants to render them. */
-  list(): WardenRecord[] {
+  list(): OverseerRecord[] {
     return [...this.conversations.values()].sort((a, b) =>
       b.createdAt.localeCompare(a.createdAt)
     );
@@ -305,7 +305,7 @@ export class WardenManager {
     conversationId: string,
     actionId: string,
     approve: boolean
-  ): Promise<WardenRecord> {
+  ): Promise<OverseerRecord> {
     const record = this.get(conversationId);
     // Membership check, not just "is this action pending anywhere": one
     // registry is shared by every conversation, so without this, conversation
@@ -358,9 +358,9 @@ export class WardenManager {
   // so every call lands on the right transcript, and built per turn rather
   // than once per conversation so a tool added to the registry shows up on the
   // next turn rather than only for new conversations.
-  private toolsetFor(conversationId: string): WardenToolset {
+  private toolsetFor(conversationId: string): OverseerToolset {
     const { registry } = this.ctx;
-    const tools: WardenToolDescriptor[] = [
+    const tools: OverseerToolDescriptor[] = [
       ...registry.statusTools().map((tool) => ({
         name: tool.name,
         description: tool.description,
@@ -383,18 +383,18 @@ export class WardenManager {
 
   // Routes one tool call: a status tool runs now, a mutating tool only queues.
   // Never throws — a tool-level failure comes back as `isError` so the model
-  // can fix its call, exactly like the registry's own WardenToolError contract.
+  // can fix its call, exactly like the registry's own OverseerToolError contract.
   private callTool(
     conversationId: string,
     name: string,
     input: unknown
-  ): WardenToolResult {
+  ): OverseerToolResult {
     const { registry } = this.ctx;
     const mutating = registry.mutatingTools().some((t) => t.name === name);
     const known =
       mutating || registry.statusTools().some((t) => t.name === name);
     try {
-      if (!known) throw new Error(`unknown warden tool: ${name}`);
+      if (!known) throw new Error(`unknown overseer tool: ${name}`);
       if (mutating) {
         const action = registry.callMutatingTool(name, input);
         this.queueAction(conversationId, action);
@@ -432,7 +432,7 @@ export class WardenManager {
   // ---------------------------------------------------------------------
 
   // Records a queued action on both the confirmation list and the transcript.
-  private queueAction(conversationId: string, action: WardenAction): void {
+  private queueAction(conversationId: string, action: OverseerAction): void {
     const record = this.conversations.get(conversationId);
     if (record === undefined) return;
     this.updateRecord(conversationId, {
@@ -452,7 +452,7 @@ export class WardenManager {
   // model's next turn.
   private settleAction(
     conversationId: string,
-    action: WardenAction,
+    action: OverseerAction,
     outcome: 'applied' | 'denied'
   ): void {
     this.dropPendingAction(conversationId, action.id);
@@ -482,7 +482,7 @@ export class WardenManager {
 
   private restorePendingAction(
     conversationId: string,
-    action: WardenAction
+    action: OverseerAction
   ): void {
     const record = this.conversations.get(conversationId);
     if (record === undefined) return;
@@ -503,7 +503,7 @@ export class WardenManager {
   // Appends one transcript entry, stamped now.
   private appendMessage(
     conversationId: string,
-    message: Omit<WardenMessage, 'at'>
+    message: Omit<OverseerMessage, 'at'>
   ): void {
     const record = this.conversations.get(conversationId);
     if (record === undefined) return;
@@ -517,17 +517,17 @@ export class WardenManager {
 
   private updateRecord(
     conversationId: string,
-    patch: Partial<WardenRecord>
+    patch: Partial<OverseerRecord>
   ): void {
     const record = this.conversations.get(conversationId);
     if (record === undefined) return;
-    const updated: WardenRecord = {
+    const updated: OverseerRecord = {
       ...record,
       ...patch,
       updatedAt: new Date().toISOString(),
     };
     this.conversations.set(conversationId, updated);
-    this.ctx.events.broadcast({ type: 'warden.changed', conversationId });
+    this.ctx.events.broadcast({ type: 'overseer.changed', conversationId });
   }
 }
 

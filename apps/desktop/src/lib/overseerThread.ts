@@ -1,17 +1,17 @@
 import type {
-  WardenAction,
-  WardenMessage,
-  WardenRecord,
+  OverseerAction,
+  OverseerMessage,
+  OverseerRecord,
 } from '@dispatch/client';
 
-// One rendered row of a warden conversation, flattened from the record's
+// One rendered row of a overseer conversation, flattened from the record's
 // transcript the same way planThread.ts flattens a plan's. Beyond the plan
-// thread's message/pending/failed rows, the warden transcript carries two more
+// thread's message/pending/failed rows, the overseer transcript carries two more
 // kinds: `tool` (a read-only status call the assistant made mid-turn) and the
 // action lifecycle, which splits into `confirm` (a queued mutation still
 // awaiting the human — rendered as the approve/deny card) and `outcome` (a
 // decision that already happened, kept as the audit line it is).
-export type WardenThreadItem =
+export type OverseerThreadItem =
   | {
       kind: 'message';
       key: string;
@@ -30,7 +30,7 @@ export type WardenThreadItem =
   | {
       kind: 'confirm';
       key: string;
-      action: WardenAction;
+      action: OverseerAction;
       /** The server's failure text when the last approval attempt threw — the
        * action came back to `pending` for a retry, and the card should say why. */
       failure: string | null;
@@ -39,10 +39,10 @@ export type WardenThreadItem =
   | { kind: 'failed'; key: string; error: string };
 
 const TURN_FAILED_FALLBACK =
-  'The warden stopped before it answered. Send the message again to retry.';
+  'The overseer stopped before it answered. Send the message again to retry.';
 
 /**
- * Flattens a warden record into the rows the Warden view renders.
+ * Flattens a overseer record into the rows the Overseer view renders.
  *
  * The transcript is append-only server-side: queueing a mutating action pushes
  * an `action` message at `pending`, and the decision later pushes a *second*
@@ -54,9 +54,9 @@ const TURN_FAILED_FALLBACK =
  * card); an action already decided drops its stale `pending` rows and keeps
  * only its decided `outcome` rows.
  */
-export function buildWardenThread(
-  record: WardenRecord | undefined
-): WardenThreadItem[] {
+export function buildOverseerThread(
+  record: OverseerRecord | undefined
+): OverseerThreadItem[] {
   if (record === undefined) return [];
 
   const pendingById = new Map(record.pendingActions.map((a) => [a.id, a]));
@@ -71,7 +71,7 @@ export function buildWardenThread(
     }
   });
 
-  const items: WardenThreadItem[] = [];
+  const items: OverseerThreadItem[] = [];
   const confirmEmitted = new Set<string>();
   record.messages.forEach((message, i) => {
     const item = buildRow(record, message, i, pendingById, lastActionRow);
@@ -111,15 +111,15 @@ export function buildWardenThread(
 }
 
 // One transcript message to its rendered row (or `null` for rows the flatten
-// rule drops) — split out of buildWardenThread so the action-row logic reads
+// rule drops) — split out of buildOverseerThread so the action-row logic reads
 // as one decision instead of a nest inside the walk.
 function buildRow(
-  record: WardenRecord,
-  message: WardenMessage,
+  record: OverseerRecord,
+  message: OverseerMessage,
   index: number,
-  pendingById: Map<string, WardenAction>,
+  pendingById: Map<string, OverseerAction>,
   lastActionRow: Map<string, number>
-): WardenThreadItem | null {
+): OverseerThreadItem | null {
   const key = `${record.id}-msg-${index}`;
   if (message.role === 'user' || message.role === 'assistant') {
     return {

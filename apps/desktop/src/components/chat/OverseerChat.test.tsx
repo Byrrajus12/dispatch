@@ -1,15 +1,15 @@
-import type { WardenAction, WardenRecord } from '@dispatch/client';
+import type { OverseerAction, OverseerRecord } from '@dispatch/client';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { expect, test } from 'bun:test';
 import { useState } from 'react';
 
-import type { WardenSession } from '../../hooks/useWardenSession';
-import { WardenChat } from './WardenChat';
+import type { OverseerSession } from '../../hooks/useOverseerSession';
+import { OverseerChat } from './OverseerChat';
 
-// The same fixture shapes wardenThread.test.ts builds; the component's whole
-// backend is the WardenSession seam, so a fake session with a canned record
+// The same fixture shapes overseerThread.test.ts builds; the component's whole
+// backend is the OverseerSession seam, so a fake session with a canned record
 // exercises the real render and decide paths.
-function wardenRecord(over: Partial<WardenRecord> = {}): WardenRecord {
+function overseerRecord(over: Partial<OverseerRecord> = {}): OverseerRecord {
   return {
     id: 'w-1',
     prompt: 'what is going on?',
@@ -24,7 +24,7 @@ function wardenRecord(over: Partial<WardenRecord> = {}): WardenRecord {
   };
 }
 
-function wardenAction(over: Partial<WardenAction> = {}): WardenAction {
+function overseerAction(over: Partial<OverseerAction> = {}): OverseerAction {
   return {
     id: 'act-1',
     tool: 'cancel_run',
@@ -36,7 +36,7 @@ function wardenAction(over: Partial<WardenAction> = {}): WardenAction {
   };
 }
 
-function wardenSession(over: Partial<WardenSession> = {}): WardenSession {
+function overseerSession(over: Partial<OverseerSession> = {}): OverseerSession {
   return {
     conversationId: null,
     record: undefined,
@@ -58,15 +58,18 @@ function wardenSession(over: Partial<WardenSession> = {}): WardenSession {
 // tab flips and its collapse), so any test that types needs real state behind
 // the fake session — the shape App gives the component in production.
 function ChatWithDraft({
-  warden,
+  overseer,
   compact = false,
 }: {
-  warden: WardenSession;
+  overseer: OverseerSession;
   compact?: boolean;
 }) {
   const [draft, setDraft] = useState('');
   return (
-    <WardenChat warden={{ ...warden, draft, setDraft }} compact={compact} />
+    <OverseerChat
+      overseer={{ ...overseer, draft, setDraft }}
+      compact={compact}
+    />
   );
 }
 
@@ -85,17 +88,17 @@ async function clickAndSettle(button: HTMLElement): Promise<void> {
   });
 }
 
-// The full-page (non-compact) path — the branch WardenView renders after the
+// The full-page (non-compact) path — the branch OverseerView renders after the
 // extraction, previously covered by nothing.
-test('full mode: the start card takes an opening question through warden.submit', async () => {
+test('full mode: the start card takes an opening question through overseer.submit', async () => {
   const asked: string[] = [];
-  const warden = wardenSession({
+  const overseer = overseerSession({
     submit: (prompt: string) => {
       asked.push(prompt);
       return Promise.resolve();
     },
   });
-  render(<ChatWithDraft warden={warden} />);
+  render(<ChatWithDraft overseer={overseer} />);
 
   // Full-page copy, and no compact-only reset control.
   expect(
@@ -103,7 +106,7 @@ test('full mode: the start card takes an opening question through warden.submit'
   ).toBeDefined();
   expect(screen.queryByLabelText('Start a new conversation')).toBeNull();
 
-  fireEvent.change(screen.getByLabelText('Warden opening question'), {
+  fireEvent.change(screen.getByLabelText('Overseer opening question'), {
     target: { value: 'status?' },
   });
   await clickAndSettle(screen.getByRole('button', { name: 'Ask' }));
@@ -112,7 +115,7 @@ test('full mode: the start card takes an opening question through warden.submit'
 
 test('full mode: transcript renders bubbles and the confirm card decides through the session', async () => {
   const decisions: unknown[] = [];
-  const record = wardenRecord({
+  const record = overseerRecord({
     messages: [
       { role: 'user', text: 'cancel r-1', at: '2026-08-10T00:00:01Z' },
       { role: 'assistant', text: 'Queuing that.', at: '2026-08-10T00:00:02Z' },
@@ -124,9 +127,9 @@ test('full mode: transcript renders bubbles and the confirm card decides through
         at: '2026-08-10T00:00:03Z',
       },
     ],
-    pendingActions: [wardenAction()],
+    pendingActions: [overseerAction()],
   });
-  const warden = wardenSession({
+  const overseer = overseerSession({
     conversationId: 'w-1',
     record,
     confirmAction: (actionId: string, approve: boolean) => {
@@ -134,7 +137,7 @@ test('full mode: transcript renders bubbles and the confirm card decides through
       return Promise.resolve();
     },
   });
-  render(<WardenChat warden={warden} />);
+  render(<OverseerChat overseer={overseer} />);
 
   expect(screen.getByText('cancel r-1')).toBeDefined();
   expect(screen.getByText('Queuing that.')).toBeDefined();
@@ -145,17 +148,17 @@ test('full mode: transcript renders bubbles and the confirm card decides through
   expect(decisions).toEqual([['act-1', false]]);
 });
 
-test('full mode: a follow-up goes through warden.submit', async () => {
+test('full mode: a follow-up goes through overseer.submit', async () => {
   const sent: string[] = [];
-  const warden = wardenSession({
+  const overseer = overseerSession({
     conversationId: 'w-1',
-    record: wardenRecord(),
+    record: overseerRecord(),
     submit: (text: string) => {
       sent.push(text);
       return Promise.resolve();
     },
   });
-  render(<ChatWithDraft warden={warden} />);
+  render(<ChatWithDraft overseer={overseer} />);
 
   fireEvent.change(screen.getByLabelText('Follow-up message'), {
     target: { value: 'and the queue?' },
@@ -164,21 +167,21 @@ test('full mode: a follow-up goes through warden.submit', async () => {
   expect(sent).toEqual(['and the queue?']);
 });
 
-// The draft's clear-then-restore cycle belongs to `warden.submit` now — see
-// useWardenSession.test.tsx for both halves of it. What this component still
+// The draft's clear-then-restore cycle belongs to `overseer.submit` now — see
+// useOverseerSession.test.tsx for both halves of it. What this component still
 // owns is reporting the failure the session recorded, and it has to read it
 // from there rather than from state of its own: the rail unmounts this whole
 // panel on a tab flip, which is exactly when a slow send tends to fail. A
 // component-local error would be set on an unmounted tree and shown to nobody.
 test('a send failure recorded on the session is reported by a freshly mounted chat', () => {
-  const warden = wardenSession({
+  const overseer = overseerSession({
     conversationId: 'w-1',
-    record: wardenRecord(),
+    record: overseerRecord(),
     sendError: 'daemon unreachable',
   });
   // Mounting fresh is the point: this is the chat the user gets back after
-  // flipping to Runs while the send was in flight and returning to Warden.
-  render(<ChatWithDraft warden={warden} compact />);
+  // flipping to Runs while the send was in flight and returning to Overseer.
+  render(<ChatWithDraft overseer={overseer} compact />);
 
   expect(screen.getByText('daemon unreachable')).toBeDefined();
 });
@@ -186,8 +189,8 @@ test('a send failure recorded on the session is reported by a freshly mounted ch
 // The same for the opening composer, which is a different branch of the render
 // and used to carry a second, separate error flag.
 test('a start failure recorded on the session is reported by the opening composer', () => {
-  const warden = wardenSession({ sendError: 'dispatchd refused it' });
-  render(<ChatWithDraft warden={warden} />);
+  const overseer = overseerSession({ sendError: 'dispatchd refused it' });
+  render(<ChatWithDraft overseer={overseer} />);
 
   expect(screen.getByText('dispatchd refused it')).toBeDefined();
 });
@@ -196,13 +199,13 @@ test('a start failure recorded on the session is reported by the opening compose
 // back with Send still disabled, not briefly re-enabled against a turn the
 // server would 409.
 test('an in-flight send keeps Send disabled on a freshly mounted chat', () => {
-  const warden = wardenSession({
+  const overseer = overseerSession({
     conversationId: 'w-1',
-    record: wardenRecord(),
+    record: overseerRecord(),
     sending: true,
     draft: 'and the queue?',
   });
-  render(<WardenChat warden={warden} compact />);
+  render(<OverseerChat overseer={overseer} compact />);
 
   // Matched by its visible label rather than its accessible name: the button
   // swaps in a spinner alongside the text while it is in flight.
@@ -213,32 +216,32 @@ test('an in-flight send keeps Send disabled on a freshly mounted chat', () => {
 // A permanently failed record fetch (404 + retry: false) is a broken
 // conversation, not a turn in flight — the error banner and the 'answering…'
 // composer hint must never show together.
-test('a failed record fetch does not read as the warden answering', () => {
-  const warden = wardenSession({
+test('a failed record fetch does not read as the overseer answering', () => {
+  const overseer = overseerSession({
     conversationId: 'w-1',
     record: undefined,
-    recordError: 'warden conversation w-1 not found (404)',
+    recordError: 'overseer conversation w-1 not found (404)',
   });
-  render(<WardenChat warden={warden} />);
+  render(<OverseerChat overseer={overseer} />);
 
   expect(
-    screen.getByText('warden conversation w-1 not found (404)')
+    screen.getByText('overseer conversation w-1 not found (404)')
   ).toBeDefined();
-  expect(screen.queryByText('The warden is answering…')).toBeNull();
+  expect(screen.queryByText('The overseer is answering…')).toBeNull();
 });
 
 // The compact reset is the only control that can discard the UI's handle on a
 // conversation; with a mutation still awaiting a decision it must not.
 test('compact mode: New resets when idle but is disabled while an action awaits approval', () => {
   let resets = 0;
-  const idle = wardenSession({
+  const idle = overseerSession({
     conversationId: 'w-1',
-    record: wardenRecord(),
+    record: overseerRecord(),
     reset: () => {
       resets += 1;
     },
   });
-  const first = render(<WardenChat warden={idle} compact />);
+  const first = render(<OverseerChat overseer={idle} compact />);
   const newButton = screen.getByRole('button', {
     name: 'Start a new conversation',
   });
@@ -246,14 +249,14 @@ test('compact mode: New resets when idle but is disabled while an action awaits 
   expect(resets).toBe(1);
   first.unmount();
 
-  const pending = wardenSession({
+  const pending = overseerSession({
     conversationId: 'w-1',
-    record: wardenRecord({ pendingActions: [wardenAction()] }),
+    record: overseerRecord({ pendingActions: [overseerAction()] }),
     reset: () => {
       resets += 1;
     },
   });
-  render(<WardenChat warden={pending} compact />);
+  render(<OverseerChat overseer={pending} compact />);
   const gated = screen.getByRole<HTMLButtonElement>('button', {
     name: 'Start a new conversation',
   });
@@ -265,30 +268,30 @@ test('compact mode: New resets when idle but is disabled while an action awaits 
 // The busy veto only applies when no record ever loaded. With a running record
 // cached, one failed background refetch must not flip the composer open
 // against a turn dispatchd would still 409.
-test('a transient refetch error mid-turn still reads as the warden answering', () => {
-  const warden = wardenSession({
+test('a transient refetch error mid-turn still reads as the overseer answering', () => {
+  const overseer = overseerSession({
     conversationId: 'w-1',
-    record: wardenRecord({ state: 'running' }),
+    record: overseerRecord({ state: 'running' }),
     recordError: 'daemon busy (500)',
   });
-  render(<WardenChat warden={warden} />);
-  expect(screen.getByText('The warden is answering…')).toBeDefined();
+  render(<OverseerChat overseer={overseer} />);
+  expect(screen.getByText('The overseer is answering…')).toBeDefined();
 });
 
 // The reset gate must not guard a ghost. A conversation the daemon has lost
-// arrives here as `record: undefined` — useWardenSession does that veto on the
+// arrives here as `record: undefined` — useOverseerSession does that veto on the
 // 404 (see its own tests) — so nothing is pending and the reset is the escape.
 test('compact New is enabled again once the conversation is gone', () => {
   let resets = 0;
-  const warden = wardenSession({
+  const overseer = overseerSession({
     conversationId: 'w-1',
     record: undefined,
-    recordError: 'warden conversation w-1 not found (404)',
+    recordError: 'overseer conversation w-1 not found (404)',
     reset: () => {
       resets += 1;
     },
   });
-  render(<WardenChat warden={warden} compact />);
+  render(<OverseerChat overseer={overseer} compact />);
   const reset = screen.getByRole<HTMLButtonElement>('button', {
     name: 'Start a new conversation',
   });
@@ -302,15 +305,15 @@ test('compact New is enabled again once the conversation is gone', () => {
 // Unlocking the reset there would let one click strand it undecidable.
 test('a transient refetch error keeps the reset locked behind the pending action', () => {
   let resets = 0;
-  const warden = wardenSession({
+  const overseer = overseerSession({
     conversationId: 'w-1',
-    record: wardenRecord({ pendingActions: [wardenAction()] }),
+    record: overseerRecord({ pendingActions: [overseerAction()] }),
     recordError: 'daemon busy (500)',
     reset: () => {
       resets += 1;
     },
   });
-  render(<WardenChat warden={warden} compact />);
+  render(<OverseerChat overseer={overseer} compact />);
   expect(screen.getByText('Needs your approval')).toBeDefined();
   const reset = screen.getByRole<HTMLButtonElement>('button', {
     name: 'Start a new conversation',
@@ -325,7 +328,7 @@ test('a transient refetch error keeps the reset locked behind the pending action
 // silently swallow the click.
 test('a decision in flight disables every confirm card, not just its own', () => {
   const decisions: unknown[] = [];
-  const record = wardenRecord({
+  const record = overseerRecord({
     messages: [
       {
         role: 'action',
@@ -343,8 +346,8 @@ test('a decision in flight disables every confirm card, not just its own', () =>
       },
     ],
     pendingActions: [
-      wardenAction(),
-      wardenAction({
+      overseerAction(),
+      overseerAction({
         id: 'act-2',
         summary: 'Cancel run r-2',
         input: { runId: 'r-2' },
@@ -352,7 +355,7 @@ test('a decision in flight disables every confirm card, not just its own', () =>
     ],
   });
   // The lock lives on the session now, so the fake has to raise it the way
-  // useWardenSession does — otherwise the state under test is never entered.
+  // useOverseerSession does — otherwise the state under test is never entered.
   // The call never resolves: the point is what the UI looks like *during* a
   // decision.
   function ChatWithDecision() {
@@ -360,8 +363,8 @@ test('a decision in flight disables every confirm card, not just its own', () =>
       null
     );
     return (
-      <WardenChat
-        warden={wardenSession({
+      <OverseerChat
+        overseer={overseerSession({
           conversationId: 'w-1',
           record,
           decidingActionId,
@@ -396,11 +399,11 @@ test('a new transcript row re-pins to the bottom', () => {
   const messages = [
     { role: 'user' as const, text: 'status?', at: '2026-08-10T00:00:01Z' },
   ];
-  const warden = wardenSession({
+  const overseer = overseerSession({
     conversationId: 'w-1',
-    record: wardenRecord({ messages }),
+    record: overseerRecord({ messages }),
   });
-  const { rerender } = render(<WardenChat warden={warden} compact />);
+  const { rerender } = render(<OverseerChat overseer={overseer} compact />);
 
   const log = screen.getByRole('log');
   Object.defineProperty(log, 'scrollHeight', {
@@ -415,10 +418,10 @@ test('a new transcript row re-pins to the bottom', () => {
   expect(log.scrollTop).toBe(0);
 
   rerender(
-    <WardenChat
-      warden={wardenSession({
+    <OverseerChat
+      overseer={overseerSession({
         conversationId: 'w-1',
-        record: wardenRecord({
+        record: overseerRecord({
           messages: [
             ...messages,
             {
@@ -446,10 +449,10 @@ test('a turn settling in place re-pins to the bottom', () => {
     { role: 'user' as const, text: 'status?', at: '2026-08-10T00:00:01Z' },
   ];
   const { rerender } = render(
-    <WardenChat
-      warden={wardenSession({
+    <OverseerChat
+      overseer={overseerSession({
         conversationId: 'w-1',
-        record: wardenRecord({ messages, state: 'running' }),
+        record: overseerRecord({ messages, state: 'running' }),
       })}
       compact
     />
@@ -469,10 +472,10 @@ test('a turn settling in place re-pins to the bottom', () => {
   });
 
   rerender(
-    <WardenChat
-      warden={wardenSession({
+    <OverseerChat
+      overseer={overseerSession({
         conversationId: 'w-1',
-        record: wardenRecord({
+        record: overseerRecord({
           state: 'ready',
           messages: [
             ...messages,

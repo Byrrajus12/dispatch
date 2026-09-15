@@ -49,7 +49,7 @@ export interface ImpactSubjectRef {
 }
 
 /** Global, not-project-scoped views living below the primary nav in the sidebar.
- * `warden` is the chat assistant for the active project — it lives in this section
+ * `overseer` is the chat assistant for the active project — it lives in this section
  * (not `ProjectView`) so it stays reachable from any view, but its conversation is
  * still scoped to whichever project is active. `gallery` is dev-only — see the
  * `import.meta.env.DEV` gates in App.tsx/Sidebar.tsx — but stays in this union
@@ -57,7 +57,7 @@ export interface ImpactSubjectRef {
 export type GlobalView =
   | 'all-agents'
   | 'sessions'
-  | 'warden'
+  | 'overseer'
   | 'settings'
   | 'gallery';
 

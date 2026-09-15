@@ -1,36 +1,40 @@
-import { type ApiClient, ApiError, type WardenRecord } from '@dispatch/client';
+import {
+  type ApiClient,
+  ApiError,
+  type OverseerRecord,
+} from '@dispatch/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Dispatch, SetStateAction } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 
-import { isFakeWardenDevToolEnabled } from '../lib/devTools';
+import { isFakeOverseerDevToolEnabled } from '../lib/devTools';
 
 /**
- * Every warden record key for one daemon. useDispatchProject invalidates this
+ * Every overseer record key for one daemon. useDispatchProject invalidates this
  * prefix — rather than a single record's key — when the daemon's `hello`
  * greeting arrives, which the server sends on every websocket open and so on
  * every reconnect. A reconnect usually means dispatchd restarted, which drops
- * every in-memory warden record at once, and that handler has no conversation
+ * every in-memory overseer record at once, and that handler has no conversation
  * id to name: the session lives in this hook, not in it. Prefix invalidation
  * is the same idiom useDataChangedEvents applies to `['board']` and
  * `['session-detail']`.
  */
-export function wardenKeyPrefix(port: number | undefined) {
-  return ['dispatch-warden', port] as const;
+export function overseerKeyPrefix(port: number | undefined) {
+  return ['dispatch-overseer', port] as const;
 }
 
-/** The one warden record query key, exported so useDispatchProject's WS
- * handler can invalidate it on `warden.changed` — the same wiring
+/** The one overseer record query key, exported so useDispatchProject's WS
+ * handler can invalidate it on `overseer.changed` — the same wiring
  * `plan.changed` uses for `['dispatch-plan', port, planId]`. Built from the
  * prefix above so the `hello` invalidation cannot drift out of matching it. */
-export function wardenKey(
+export function overseerKey(
   port: number | undefined,
   conversationId: string | null
 ) {
-  return [...wardenKeyPrefix(port), conversationId] as const;
+  return [...overseerKeyPrefix(port), conversationId] as const;
 }
 
-export interface WardenSession {
+export interface OverseerSession {
   /** The open conversation, or `null` before one is started (the composer state). */
   conversationId: string | null;
   /**
@@ -39,7 +43,7 @@ export interface WardenSession {
    * gone). Consumers can trust it: whatever is readable here is a conversation
    * dispatchd still has.
    */
-  record: WardenRecord | undefined;
+  record: OverseerRecord | undefined;
   /** Why `record` is missing or stale when the fetch itself failed, not just pending. */
   recordError: string | null;
   /**
@@ -84,7 +88,7 @@ export interface WardenSession {
    * Which action `confirmAction` is currently deciding, or `null`. Lives on the
    * session for the same reason `draft` does: the surfaces that render a
    * confirm card are unmounted by ordinary navigation (the rail's tab toggle
-   * drops the inactive panel, so does its collapse chevron, and the Warden
+   * drops the inactive panel, so does its collapse chevron, and the Overseer
    * page replaces the rail entirely). Approving runs the real mutation
    * server-side before the call resolves, so that window is seconds wide — long
    * enough to flip a tab in. A component-local flag would come back `null` on
@@ -96,7 +100,7 @@ export interface WardenSession {
   /**
    * Why the last decision failed, or `null`. Cleared when the next one starts
    * and by `reset`. Session-held for exactly the reason `sendError` is: while
-   * an approval is queued the Runs tab shows a waiting warden row, so flipping
+   * an approval is queued the Runs tab shows a waiting overseer row, so flipping
    * there is the path this rail encourages, and the rail unmounts the chat on
    * that flip. A component-local `setState` from a transport-level failure
    * that lands after the flip reports to nobody, leaving a confirm card that
@@ -107,9 +111,9 @@ export interface WardenSession {
   reset: () => void;
   /**
    * What the human has typed into the composer but not sent yet. It lives on
-   * the session rather than inside WardenChat because every surface that
+   * the session rather than inside OverseerChat because every surface that
    * renders that composer is unmounted by something ordinary: the rail's tab
-   * toggle, the rail's collapse chevron, and navigating to the Warden page
+   * toggle, the rail's collapse chevron, and navigating to the Overseer page
    * (App mounts the rail only on project views). The session outlives all
    * three, so the draft does too.
    */
@@ -124,17 +128,17 @@ export interface WardenSession {
 }
 
 /**
- * Owns the active warden conversation: which one is open, its live record, and
+ * Owns the active overseer conversation: which one is open, its live record, and
  * the three mutations that advance it. A sibling of `useDispatchProject` (which
- * owns the WS connection and invalidates this hook's query on `warden.changed`)
- * rather than another field on it — the warden is one surface's data, and the
+ * owns the WS connection and invalidates this hook's query on `overseer.changed`)
+ * rather than another field on it — the overseer is one surface's data, and the
  * god-hook is already 2400 lines.
  *
  * Every mutation writes its returned record straight into the query cache: the
  * server responds with the full post-mutation record, so the transcript updates
  * the moment the call resolves rather than waiting a round-trip for the
- * `warden.changed` refetch. Each write is followed by an invalidation of the
- * same key: a turn can settle — and broadcast `warden.changed` — while the
+ * `overseer.changed` refetch. Each write is followed by an invalidation of the
+ * same key: a turn can settle — and broadcast `overseer.changed` — while the
  * mutation's own response is still in flight, in which case that event either
  * found no mounted query to invalidate (start) or its refetch result is about
  * to be overwritten by the staler mutation response (sendMessage). Marking the
@@ -142,11 +146,11 @@ export interface WardenSession {
  * with a real LLM backend the window is milliseconds wide, but the scripted
  * fake backend settles inside it every time.
  */
-export function useWardenSession(
+export function useOverseerSession(
   client: ApiClient | null,
   port: number | undefined,
   projectPath: string | null
-): WardenSession {
+): OverseerSession {
   const queryClient = useQueryClient();
   const [conversationId, setConversationId] = useState<string | null>(null);
 
@@ -172,12 +176,12 @@ export function useWardenSession(
   }, [projectPath]);
 
   const { data: record, error } = useQuery({
-    queryKey: wardenKey(port, conversationId),
+    queryKey: overseerKey(port, conversationId),
     queryFn: () => {
       if (client === null || conversationId === null) {
-        throw new Error('no warden conversation open');
+        throw new Error('no overseer conversation open');
       }
-      return client.getWarden(conversationId);
+      return client.getOverseer(conversationId);
     },
     enabled: client !== null && conversationId !== null,
     // A stale id mid project-switch should surface its 404, not retry against
@@ -192,18 +196,18 @@ export function useWardenSession(
       // conversations against the daemon's scripted 'fake' backend instead of
       // the real Claude one. Checked per start, not per hook mount, so
       // flipping the flag applies to the next conversation without a reload.
-      const rec = await client.startWarden(
+      const rec = await client.startOverseer(
         prompt,
-        isFakeWardenDevToolEnabled() ? { backend: 'fake' } : {}
+        isFakeOverseerDevToolEnabled() ? { backend: 'fake' } : {}
       );
-      queryClient.setQueryData(wardenKey(port, rec.id), rec);
+      queryClient.setQueryData(overseerKey(port, rec.id), rec);
       setConversationId(rec.id);
       // See the hook comment: the turn may have already settled while this
       // response was in flight, and that broadcast found no query to
       // invalidate. Stale-marking here makes the query's mount refetch pick
       // the settled record up.
       await queryClient.invalidateQueries({
-        queryKey: wardenKey(port, rec.id),
+        queryKey: overseerKey(port, rec.id),
       });
       return rec;
     },
@@ -213,15 +217,15 @@ export function useWardenSession(
   const sendMessage = useCallback(
     async (text: string) => {
       if (client === null || conversationId === null) {
-        throw new Error('no warden conversation open');
+        throw new Error('no overseer conversation open');
       }
-      const rec = await client.sendWardenMessage(conversationId, text);
-      queryClient.setQueryData(wardenKey(port, conversationId), rec);
+      const rec = await client.sendOverseerMessage(conversationId, text);
+      queryClient.setQueryData(overseerKey(port, conversationId), rec);
       // Reconciles a turn that settled mid-flight — without this, the stale
       // `running` record written above would overwrite the settled one the
       // broadcast's refetch already fetched, and nothing would refetch again.
       await queryClient.invalidateQueries({
-        queryKey: wardenKey(port, conversationId),
+        queryKey: overseerKey(port, conversationId),
       });
       return rec;
     },
@@ -271,7 +275,7 @@ export function useWardenSession(
       // click 404 against an action the server already claimed.
       if (decidingActionId !== null) return;
       if (client === null || conversationId === null) {
-        setDecideError('no warden conversation open');
+        setDecideError('no overseer conversation open');
         return;
       }
       // Held for the whole call, including the reconciling refetch below, so
@@ -280,16 +284,16 @@ export function useWardenSession(
       setDecidingActionId(actionId);
       setDecideError(null);
       try {
-        const rec = await client.confirmWardenAction(
+        const rec = await client.confirmOverseerAction(
           conversationId,
           actionId,
           approve
         );
-        queryClient.setQueryData(wardenKey(port, conversationId), rec);
+        queryClient.setQueryData(overseerKey(port, conversationId), rec);
         // Confirming is allowed mid-turn, so the same in-flight-settle race as
         // sendMessage applies here.
         await queryClient.invalidateQueries({
-          queryKey: wardenKey(port, conversationId),
+          queryKey: overseerKey(port, conversationId),
         });
       } catch (err) {
         // An approved-but-failed effect comes back as a record with a failure

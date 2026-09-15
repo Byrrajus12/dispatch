@@ -12,7 +12,7 @@ import type { RunMeta } from './types.js';
 import { TERMINAL_RUN_STATES } from './types.js';
 
 /**
- * The warden's private tool surface: read-only status tools over everything
+ * The overseer's private tool surface: read-only status tools over everything
  * the Control room's feed already shows, plus mutating tools that never
  * mutate on their own.
  *
@@ -20,7 +20,7 @@ import { TERMINAL_RUN_STATES } from './types.js';
  * daemon operator's authority — dispatching work, answering approvals,
  * cancelling runs — which is exactly the authority a task-running agent must
  * not have. The MCP server is the surface reachable by those agents; this one
- * is reachable only by the warden chat session.
+ * is reachable only by the overseer chat session.
  */
 
 // ---------------------------------------------------------------------------
@@ -28,12 +28,12 @@ import { TERMINAL_RUN_STATES } from './types.js';
 // ---------------------------------------------------------------------------
 
 /**
- * A tool call the warden got wrong: an unknown tool name, input that fails its
+ * A tool call the overseer got wrong: an unknown tool name, input that fails its
  * zod schema, or a target that doesn't exist. Mirrors packages/mcp/src/tools.ts's
  * own ToolError — the point is the same, that the calling model can read the
  * message and self-correct rather than the call failing at the protocol layer.
  */
-export class WardenToolError extends Error {}
+export class OverseerToolError extends Error {}
 
 // ---------------------------------------------------------------------------
 // Context
@@ -52,7 +52,7 @@ export class WardenToolError extends Error {}
  * Orchestrator or MergeQueue, both of which broadcast their own events, so a
  * bus on this context would only be a second, easily-desynced way to do it.
  */
-export interface WardenToolContext {
+export interface OverseerToolContext {
   store: TaskStorePort;
   cache: TaskCache;
   orchestrator: Orchestrator;
@@ -60,9 +60,9 @@ export interface WardenToolContext {
   questions: QuestionRegistry;
   ledgerStore: LedgerStorePort;
   /**
-   * Executor `dispatch_task` uses when the warden doesn't name one. Matches
+   * Executor `dispatch_task` uses when the overseer doesn't name one. Matches
    * api.ts's own fallback rather than being configurable per call site, so
-   * warden-dispatched runs are indistinguishable from UI-dispatched ones.
+   * overseer-dispatched runs are indistinguishable from UI-dispatched ones.
    */
   defaultExecutor?: string;
 }
@@ -71,7 +71,7 @@ const DEFAULT_EXECUTOR = 'claude';
 
 // Resolves the executor a dispatch action runs on: an explicit choice, else
 // this project's configured default, else the same name api.ts falls back to.
-function executorFor(ctx: WardenToolContext, chosen?: string): string {
+function executorFor(ctx: OverseerToolContext, chosen?: string): string {
   return chosen ?? ctx.defaultExecutor ?? DEFAULT_EXECUTOR;
 }
 
@@ -80,11 +80,11 @@ function executorFor(ctx: WardenToolContext, chosen?: string): string {
 // ---------------------------------------------------------------------------
 
 /** A read-only tool. Returns data; never touches the orchestrator's write paths. */
-export interface WardenStatusTool<Input = unknown, Output = unknown> {
+export interface OverseerStatusTool<Input = unknown, Output = unknown> {
   name: string;
   description: string;
   inputSchema: z.ZodType<Input>;
-  read(ctx: WardenToolContext, input: Input): Output;
+  read(ctx: OverseerToolContext, input: Input): Output;
 }
 
 /**
@@ -92,18 +92,18 @@ export interface WardenStatusTool<Input = unknown, Output = unknown> {
  *
  * `describe` runs at call time: it validates that the target exists and
  * returns the sentence a human reads before confirming. `apply` runs only from
- * WardenToolRegistry.applyAction, after that confirmation.
+ * OverseerToolRegistry.applyAction, after that confirmation.
  */
-export interface WardenMutatingTool<Input = unknown> {
+export interface OverseerMutatingTool<Input = unknown> {
   name: string;
   description: string;
   inputSchema: z.ZodType<Input>;
-  describe(ctx: WardenToolContext, input: Input): string;
-  apply(ctx: WardenToolContext, input: Input): Promise<void> | void;
+  describe(ctx: OverseerToolContext, input: Input): string;
+  apply(ctx: OverseerToolContext, input: Input): Promise<void> | void;
 }
 
 /** A mutating tool call awaiting (or past) human confirmation. */
-export interface WardenAction {
+export interface OverseerAction {
   id: string;
   /** The mutating tool this action would invoke. */
   tool: string;
@@ -156,15 +156,15 @@ function safeTitle(title: string): string {
 // Looks a task up the same way the API's own handlers do — via the cache,
 // falling back to the store so a task written since the last rebuild is still
 // found rather than reported missing.
-function requireTask(ctx: WardenToolContext, taskId: string): TaskDoc {
+function requireTask(ctx: OverseerToolContext, taskId: string): TaskDoc {
   const doc = ctx.cache.get(taskId) ?? ctx.store.get(taskId);
-  if (doc === null) throw new WardenToolError(`task not found: ${taskId}`);
+  if (doc === null) throw new OverseerToolError(`task not found: ${taskId}`);
   return doc;
 }
 
-function requireRun(ctx: WardenToolContext, runId: string): RunMeta {
+function requireRun(ctx: OverseerToolContext, runId: string): RunMeta {
   const detail = ctx.orchestrator.getRun(runId);
-  if (detail === null) throw new WardenToolError(`run not found: ${runId}`);
+  if (detail === null) throw new OverseerToolError(`run not found: ${runId}`);
   return detail.meta;
 }
 
@@ -195,7 +195,7 @@ const runSummaryFields = (meta: RunMeta) => ({
   error: meta.error ?? null,
 });
 
-const listRuns: WardenStatusTool<z.infer<typeof listRunsInput>> = {
+const listRuns: OverseerStatusTool<z.infer<typeof listRunsInput>> = {
   name: 'list_runs',
   description:
     'Live and recent runs for this project, most-recent-first. Omit ' +
@@ -214,7 +214,7 @@ const listRuns: WardenStatusTool<z.infer<typeof listRunsInput>> = {
   },
 };
 
-const readyTasksTool: WardenStatusTool<NoInput> = {
+const readyTasksTool: OverseerStatusTool<NoInput> = {
   name: 'list_ready_tasks',
   description:
     'Tasks that are safe to dispatch right now: unblocked, in priority order.',
@@ -225,7 +225,7 @@ const readyTasksTool: WardenStatusTool<NoInput> = {
   },
 };
 
-const blockedTasksTool: WardenStatusTool<NoInput> = {
+const blockedTasksTool: OverseerStatusTool<NoInput> = {
   name: 'list_blocked_tasks',
   description:
     'Tasks held up by at least one blocker that is not yet done or cancelled, ' +
@@ -273,7 +273,7 @@ function mergeEntryFields(entry: MergeQueueEntry) {
   };
 }
 
-const mergeQueueTool: WardenStatusTool<NoInput> = {
+const mergeQueueTool: OverseerStatusTool<NoInput> = {
   name: 'merge_queue',
   description:
     'The merge queue: entries waiting or in flight, plus recent merged/failed history.',
@@ -287,7 +287,7 @@ const mergeQueueTool: WardenStatusTool<NoInput> = {
   },
 };
 
-const pendingApprovalsTool: WardenStatusTool<NoInput> = {
+const pendingApprovalsTool: OverseerStatusTool<NoInput> = {
   name: 'pending_approvals',
   description:
     'Tool calls that live runs are parked on, waiting for a human to allow or deny.',
@@ -313,17 +313,18 @@ function questionFields(question: RunQuestion) {
   };
 }
 
-const openQuestionsTool: WardenStatusTool<z.infer<typeof openQuestionsInput>> =
-  {
-    name: 'open_questions',
-    description:
-      'Questions run agents have asked and are still blocked waiting on an answer to.',
-    inputSchema: openQuestionsInput,
-    read(ctx, input) {
-      const open = ctx.questions.listOpen(input.runId);
-      return { questions: open.map(questionFields), total: open.length };
-    },
-  };
+const openQuestionsTool: OverseerStatusTool<
+  z.infer<typeof openQuestionsInput>
+> = {
+  name: 'open_questions',
+  description:
+    'Questions run agents have asked and are still blocked waiting on an answer to.',
+  inputSchema: openQuestionsInput,
+  read(ctx, input) {
+    const open = ctx.questions.listOpen(input.runId);
+    return { questions: open.map(questionFields), total: open.length };
+  },
+};
 
 const ledgerInput = z.object({
   /** Scope to one epic's entries; omit for every entry in the project. */
@@ -342,7 +343,7 @@ function ledgerFields(entry: LedgerEntry) {
   };
 }
 
-const ledgerTool: WardenStatusTool<z.infer<typeof ledgerInput>> = {
+const ledgerTool: OverseerStatusTool<z.infer<typeof ledgerInput>> = {
   name: 'ledger_entries',
   description:
     'Findings and decisions earlier runs recorded for later ones to build on.',
@@ -357,7 +358,7 @@ const ledgerTool: WardenStatusTool<z.infer<typeof ledgerInput>> = {
   },
 };
 
-export const WARDEN_STATUS_TOOLS: readonly WardenStatusTool[] = [
+export const OVERSEER_STATUS_TOOLS: readonly OverseerStatusTool[] = [
   listRuns,
   readyTasksTool,
   blockedTasksTool,
@@ -365,7 +366,7 @@ export const WARDEN_STATUS_TOOLS: readonly WardenStatusTool[] = [
   pendingApprovalsTool,
   openQuestionsTool,
   ledgerTool,
-] as WardenStatusTool[];
+] as OverseerStatusTool[];
 
 // ---------------------------------------------------------------------------
 // Mutating tools
@@ -377,7 +378,7 @@ const dispatchInput = z.object({
   model: z.string().optional(),
 });
 
-const dispatchTask: WardenMutatingTool<z.infer<typeof dispatchInput>> = {
+const dispatchTask: OverseerMutatingTool<z.infer<typeof dispatchInput>> = {
   name: 'dispatch_task',
   description: 'Start an agent run on a task.',
   inputSchema: dispatchInput,
@@ -391,10 +392,10 @@ const dispatchTask: WardenMutatingTool<z.infer<typeof dispatchInput>> = {
     // orchestrator's default credits the daemon's human, and a human
     // confirming the action in the chat UI is precisely who caused it. The
     // explicit 'none' actor is for callers with no human behind them at all
-    // (EpicEngine's auto-fill), which the warden never is.
+    // (EpicEngine's auto-fill), which the overseer never is.
     // dispatchOrResume, not dispatch: a task whose last run a daemon restart
     // left recoverable is picked back up rather than started over. `executor`
-    // and `model` carry what the warden's caller actually NAMED — the daemon's
+    // and `model` carry what the overseer's caller actually NAMED — the daemon's
     // default executor is passed separately, so defaulting to it never reads
     // as an explicit ask that a resume would have to refuse.
     await ctx.orchestrator.dispatchOrResume(input.taskId, {
@@ -406,16 +407,16 @@ const dispatchTask: WardenMutatingTool<z.infer<typeof dispatchInput>> = {
 };
 
 // Both approve_run and deny_run resolve the requestId from the run itself
-// rather than making the warden carry one: the requestId it saw in a
+// rather than making the overseer carry one: the requestId it saw in a
 // pending_approvals result may already be stale by confirmation time, and
 // answering the wrong request is worse than refusing. Resolved twice on
 // purpose — once in `describe` so the summary can name the tool being
 // approved, once in `apply` so a request that rotated in between is caught.
-function requireApproval(ctx: WardenToolContext, runId: string) {
+function requireApproval(ctx: OverseerToolContext, runId: string) {
   const meta = requireRun(ctx, runId);
   const pending = ctx.orchestrator.pendingApprovalFor(runId);
   if (pending === undefined) {
-    throw new WardenToolError(`run is not awaiting approval: ${runId}`);
+    throw new OverseerToolError(`run is not awaiting approval: ${runId}`);
   }
   return { meta, pending };
 }
@@ -426,7 +427,7 @@ const approveInput = z.object({
   scope: z.enum(['once', 'session']).optional(),
 });
 
-const approveRun: WardenMutatingTool<z.infer<typeof approveInput>> = {
+const approveRun: OverseerMutatingTool<z.infer<typeof approveInput>> = {
   name: 'approve_run',
   description:
     'Allow the tool call a run is currently parked on, letting it continue.',
@@ -451,7 +452,7 @@ const denyInput = z.object({
   reason: z.string().optional(),
 });
 
-const denyRun: WardenMutatingTool<z.infer<typeof denyInput>> = {
+const denyRun: OverseerMutatingTool<z.infer<typeof denyInput>> = {
   name: 'deny_run',
   description:
     'Refuse the tool call a run is currently parked on. This ends the run as ' +
@@ -474,7 +475,7 @@ const denyRun: WardenMutatingTool<z.infer<typeof denyInput>> = {
 
 const cancelInput = z.object({ runId: z.string() });
 
-const cancelRun: WardenMutatingTool<z.infer<typeof cancelInput>> = {
+const cancelRun: OverseerMutatingTool<z.infer<typeof cancelInput>> = {
   name: 'cancel_run',
   description:
     'Stop a live run. Its worktree and branch are left in place for review.',
@@ -482,7 +483,7 @@ const cancelRun: WardenMutatingTool<z.infer<typeof cancelInput>> = {
   describe(ctx, input) {
     const meta = requireRun(ctx, input.runId);
     if (!isLive(meta)) {
-      throw new WardenToolError(`run already finished: ${meta.id}`);
+      throw new OverseerToolError(`run already finished: ${meta.id}`);
     }
     return `Cancel run ${meta.id} ("${safeTitle(meta.taskTitle)}")`;
   },
@@ -493,7 +494,7 @@ const cancelRun: WardenMutatingTool<z.infer<typeof cancelInput>> = {
 
 const dequeueInput = z.object({ runId: z.string() });
 
-const dequeueMerge: WardenMutatingTool<z.infer<typeof dequeueInput>> = {
+const dequeueMerge: OverseerMutatingTool<z.infer<typeof dequeueInput>> = {
   name: 'dequeue_merge',
   description:
     'Pull a run out of the merge queue. The entry being processed right now cannot be pulled.',
@@ -503,7 +504,9 @@ const dequeueMerge: WardenMutatingTool<z.infer<typeof dequeueInput>> = {
       .snapshot()
       .entries.find((e) => e.runId === input.runId);
     if (entry === undefined) {
-      throw new WardenToolError(`run not found in merge queue: ${input.runId}`);
+      throw new OverseerToolError(
+        `run not found in merge queue: ${input.runId}`
+      );
     }
     return `Remove run ${entry.runId} ("${safeTitle(entry.taskTitle)}") from the merge queue`;
   },
@@ -517,7 +520,7 @@ const messageInput = z.object({
   text: z.string().min(1),
 });
 
-const messageRun: WardenMutatingTool<z.infer<typeof messageInput>> = {
+const messageRun: OverseerMutatingTool<z.infer<typeof messageInput>> = {
   name: 'message_run',
   description:
     'Send a message to a live run, as the human. Only valid while the run is still going.',
@@ -525,7 +528,7 @@ const messageRun: WardenMutatingTool<z.infer<typeof messageInput>> = {
   describe(ctx, input) {
     const meta = requireRun(ctx, input.runId);
     if (!isLive(meta)) {
-      throw new WardenToolError(`run is not live: ${meta.id}`);
+      throw new OverseerToolError(`run is not live: ${meta.id}`);
     }
     return `Message run ${meta.id} ("${safeTitle(meta.taskTitle)}"): ${safeTitle(input.text)}`;
   },
@@ -534,54 +537,54 @@ const messageRun: WardenMutatingTool<z.infer<typeof messageInput>> = {
   },
 };
 
-export const WARDEN_MUTATING_TOOLS: readonly WardenMutatingTool[] = [
+export const OVERSEER_MUTATING_TOOLS: readonly OverseerMutatingTool[] = [
   dispatchTask,
   approveRun,
   denyRun,
   cancelRun,
   dequeueMerge,
   messageRun,
-] as WardenMutatingTool[];
+] as OverseerMutatingTool[];
 
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
 /**
- * The warden's tool surface, bound to one project's context.
+ * The overseer's tool surface, bound to one project's context.
  *
  * The invariant this class exists to enforce: calling a mutating tool records
- * a pending WardenAction and returns it. `applyAction(id)` is the ONLY method
+ * a pending OverseerAction and returns it. `applyAction(id)` is the ONLY method
  * that reaches a real orchestrator/store mutation, and it is never called from
  * `callMutatingTool`. That split is what lets the chat UI put a human between
  * the model deciding to cancel a run and the run actually being cancelled.
  */
-export class WardenToolRegistry {
-  private readonly actions = new Map<string, WardenAction>();
-  private readonly statusByName = new Map<string, WardenStatusTool>();
-  private readonly mutatingByName = new Map<string, WardenMutatingTool>();
+export class OverseerToolRegistry {
+  private readonly actions = new Map<string, OverseerAction>();
+  private readonly statusByName = new Map<string, OverseerStatusTool>();
+  private readonly mutatingByName = new Map<string, OverseerMutatingTool>();
 
   constructor(
-    private readonly ctx: WardenToolContext,
+    private readonly ctx: OverseerToolContext,
     // Injected so a test can pin an action's `createdAt` rather than reading
     // the wall clock. Action ids stay random either way — they must not be
     // guessable from a timestamp, since confirming one is what executes it.
     private readonly now: () => string = () => new Date().toISOString()
   ) {
-    for (const tool of WARDEN_STATUS_TOOLS) {
+    for (const tool of OVERSEER_STATUS_TOOLS) {
       this.statusByName.set(tool.name, tool);
     }
-    for (const tool of WARDEN_MUTATING_TOOLS) {
+    for (const tool of OVERSEER_MUTATING_TOOLS) {
       this.mutatingByName.set(tool.name, tool);
     }
   }
 
-  statusTools(): readonly WardenStatusTool[] {
-    return WARDEN_STATUS_TOOLS;
+  statusTools(): readonly OverseerStatusTool[] {
+    return OVERSEER_STATUS_TOOLS;
   }
 
-  mutatingTools(): readonly WardenMutatingTool[] {
-    return WARDEN_MUTATING_TOOLS;
+  mutatingTools(): readonly OverseerMutatingTool[] {
+    return OVERSEER_MUTATING_TOOLS;
   }
 
   private mintId(): string {
@@ -605,7 +608,7 @@ export class WardenToolRegistry {
           return path === '' ? issue.message : `${path}: ${issue.message}`;
         })
         .join('; ');
-      throw new WardenToolError(`invalid input for ${tool.name}: ${detail}`);
+      throw new OverseerToolError(`invalid input for ${tool.name}: ${detail}`);
     }
     return result.data;
   }
@@ -614,7 +617,7 @@ export class WardenToolRegistry {
   callStatusTool(name: string, raw: unknown = {}): unknown {
     const tool = this.statusByName.get(name);
     if (tool === undefined) {
-      throw new WardenToolError(`unknown status tool: ${name}`);
+      throw new OverseerToolError(`unknown status tool: ${name}`);
     }
     return tool.read(this.ctx, this.parse(tool, raw));
   }
@@ -623,17 +626,17 @@ export class WardenToolRegistry {
    * Validates a mutating tool call and records it as pending. Performs no part
    * of the effect — see applyAction.
    */
-  callMutatingTool(name: string, raw: unknown = {}): WardenAction {
+  callMutatingTool(name: string, raw: unknown = {}): OverseerAction {
     const tool = this.mutatingByName.get(name);
     if (tool === undefined) {
-      throw new WardenToolError(`unknown mutating tool: ${name}`);
+      throw new OverseerToolError(`unknown mutating tool: ${name}`);
     }
     const input = this.parse(tool, raw);
     // Throws on a target that doesn't exist or isn't in a state this tool can
-    // act on, so the warden finds out while it can still say something useful
+    // act on, so the overseer finds out while it can still say something useful
     // — rather than the human confirming an action that was never going to work.
     const summary = tool.describe(this.ctx, input);
-    const action: WardenAction = {
+    const action: OverseerAction = {
       id: this.mintId(),
       tool: tool.name,
       input,
@@ -645,12 +648,12 @@ export class WardenToolRegistry {
     return action;
   }
 
-  getAction(id: string): WardenAction | undefined {
+  getAction(id: string): OverseerAction | undefined {
     return this.actions.get(id);
   }
 
   /** Every action still awaiting a decision, oldest first. */
-  listPending(): WardenAction[] {
+  listPending(): OverseerAction[] {
     return [...this.actions.values()].filter((a) => a.status === 'pending');
   }
 
@@ -662,12 +665,12 @@ export class WardenToolRegistry {
    * `pending` and refuses, so a double-confirm (two clicks, a retried request)
    * can't dispatch two runs or cancel a run twice.
    */
-  async applyAction(id: string): Promise<WardenAction> {
+  async applyAction(id: string): Promise<OverseerAction> {
     const action = this.requirePending(id, 'apply');
     const tool = this.mutatingByName.get(action.tool);
     // Only reachable if the tool list changed under a still-pending action.
     if (tool === undefined) {
-      throw new WardenToolError(`unknown mutating tool: ${action.tool}`);
+      throw new OverseerToolError(`unknown mutating tool: ${action.tool}`);
     }
     // Claimed BEFORE the await, not after. requirePending alone only stops a
     // SEQUENTIAL second apply: with the flip after the await, two calls racing
@@ -687,19 +690,19 @@ export class WardenToolRegistry {
   }
 
   /** Records that the human refused this action. Nothing is executed. */
-  denyAction(id: string): WardenAction {
+  denyAction(id: string): OverseerAction {
     const action = this.requirePending(id, 'deny');
     action.status = 'denied';
     return action;
   }
 
-  private requirePending(id: string, verb: string): WardenAction {
+  private requirePending(id: string, verb: string): OverseerAction {
     const action = this.actions.get(id);
     if (action === undefined) {
-      throw new WardenToolError(`unknown action: ${id}`);
+      throw new OverseerToolError(`unknown action: ${id}`);
     }
     if (action.status !== 'pending') {
-      throw new WardenToolError(
+      throw new OverseerToolError(
         `cannot ${verb} an action that is already ${action.status}: ${id}`
       );
     }

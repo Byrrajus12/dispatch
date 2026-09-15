@@ -74,8 +74,8 @@ import {
   useFixLoops,
   useStopFixLoop,
 } from './useOrchestration';
+import { overseerKey, overseerKeyPrefix } from './useOverseerSession';
 import { useTransitionNotifications } from './useTransitionNotifications';
-import { wardenKey, wardenKeyPrefix } from './useWardenSession';
 
 // The approvals this window has seen live via the `approval.requested` WS
 // event. Not the whole picture on its own: the daemon also attaches a parked
@@ -455,7 +455,7 @@ export interface DispatchProjectData {
   /** Every task draft currently held in memory, newest first — feeds the app-wide drafts
    * tray. Running and ready drafts survive navigation and a tray reopen; see `drafts`. */
   drafts: DraftRecord[];
-  /** Every in-memory conversation agent (planner chats, enrich agents, task drafts, warden
+  /** Every in-memory conversation agent (planner chats, enrich agents, task drafts, overseer
    * chats), newest activity first — the non-run half of the All agents page. */
   agentSessions: AgentSessionMeta[];
   /** Starts a background single-task draft and returns immediately with its `running`
@@ -697,7 +697,7 @@ export function useDispatchProject(
   // on `draft.changed`.
   const draftsQueryKey = useMemo(() => ['dispatch-drafts', port], [port]);
   // The conversation-agents list (`GET /api/agents`), invalidated below on
-  // `plan.changed`, `draft.changed` and `warden.changed` — the three events
+  // `plan.changed`, `draft.changed` and `overseer.changed` — the three events
   // that cover every kind of session it returns.
   const agentSessionsQueryKey = useMemo(
     () => ['dispatch-agent-sessions', port],
@@ -969,7 +969,7 @@ export function useDispatchProject(
   });
 
   // Feeds the All agents page's conversation-agent rows (planners, enrich
-  // agents, drafts, wardens); refetched on the three WS events below.
+  // agents, drafts, overseers); refetched on the three WS events below.
   const { data: agentSessions } = useQuery({
     queryKey: agentSessionsQueryKey,
     queryFn: () => {
@@ -1169,9 +1169,9 @@ export function useDispatchProject(
             // The daemon sends `hello` from its websocket `open` handler
             // (packages/server/src/index.ts), so this fires once per socket:
             // on the first connect and again on every reconnect. A reconnect
-            // usually means dispatchd restarted, and warden records live in an
+            // usually means dispatchd restarted, and overseer records live in an
             // in-memory Map — so every cached id 404s now, and no
-            // `warden.changed` can ever arrive for a conversation the daemon
+            // `overseer.changed` can ever arrive for a conversation the daemon
             // no longer has. Without this refetch the cached record keeps a
             // pending action alive that exists nowhere: the rail shows a
             // waiting row and an amber badge, Approve/Deny 404, and
@@ -1180,11 +1180,11 @@ export function useDispatchProject(
             //
             // It has to be the whole prefix rather than one conversation's
             // key: the open conversation, and its id, live in
-            // useWardenSession, which this hook cannot see. On the first
+            // useOverseerSession, which this hook cannot see. On the first
             // connect nothing is cached yet, so the invalidation is a no-op
             // there rather than a wasted refetch.
             void queryClient.invalidateQueries({
-              queryKey: wardenKeyPrefix(port),
+              queryKey: overseerKeyPrefix(port),
             });
           } else if (event.type === 'run.changed') {
             void queryClient.invalidateQueries({ queryKey: runsQueryKey });
@@ -1276,12 +1276,12 @@ export function useDispatchProject(
             void queryClient.invalidateQueries({
               queryKey: agentSessionsQueryKey,
             });
-          } else if (event.type === 'warden.changed') {
-            // The warden record query itself lives in useWardenSession; this
+          } else if (event.type === 'overseer.changed') {
+            // The overseer record query itself lives in useOverseerSession; this
             // hook owns the one WS connection, so the invalidation happens
             // here — the same split useOrchestration's keys use.
             void queryClient.invalidateQueries({
-              queryKey: wardenKey(port, event.conversationId),
+              queryKey: overseerKey(port, event.conversationId),
             });
             void queryClient.invalidateQueries({
               queryKey: agentSessionsQueryKey,

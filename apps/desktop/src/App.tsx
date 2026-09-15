@@ -31,7 +31,7 @@ import { TaskPeekDialog } from './components/tasks/TaskPeekDialog';
 import { useDataChangedEvents } from './hooks/useDataChangedEvents';
 import { useDispatchProject } from './hooks/useDispatchProject';
 import { useGlobalKeyboard } from './hooks/useGlobalKeyboard';
-import { useWardenSession } from './hooks/useWardenSession';
+import { useOverseerSession } from './hooks/useOverseerSession';
 import { withActionFeedback } from './lib/actionFeedback';
 import type { GlobalView, ProjectView, TaskTab } from './lib/appNav';
 import { initialNavState, navReducer } from './lib/appNav';
@@ -68,13 +68,13 @@ import { GetStartedView } from './views/GetStartedView';
 import { ImpactView } from './views/ImpactView';
 import { InboxView } from './views/InboxView';
 import { LandingTableView } from './views/LandingTableView';
+import { OverseerView } from './views/OverseerView';
 import { OverviewView } from './views/OverviewView';
 import { PlansView } from './views/PlansView';
 import { PrReviewView } from './views/PrReviewView';
 import { SessionsHubView } from './views/SessionsHubView';
 import { SettingsView } from './views/SettingsView';
 import { TaskView } from './views/TaskView';
-import { WardenView } from './views/WardenView';
 import { Button } from '@/ui/button';
 import { EmptyState } from '@/ui/chrome';
 import {
@@ -344,12 +344,12 @@ function App() {
     [rawData, toasts]
   );
 
-  // The warden chat's session — mounted here, not inside WardenView, so the
+  // The overseer chat's session — mounted here, not inside OverseerView, so the
   // open conversation survives switching tabs. Uses `rawData`'s client/port
   // directly (its errors surface in the view's own transcript rows, not as
   // action-feedback toasts); useDispatchProject's WS handler invalidates its
-  // record query on `warden.changed`.
-  const warden = useWardenSession(
+  // record query on `overseer.changed`.
+  const overseer = useOverseerSession(
     rawData.client,
     rawData.port,
     activeProject?.path ?? null
@@ -718,10 +718,10 @@ function App() {
         run: () => setGlobalView('sessions'),
       },
       {
-        id: 'go-warden',
-        label: 'Go to Warden',
+        id: 'go-overseer',
+        label: 'Go to Overseer',
         kind: 'go to',
-        run: () => setGlobalView('warden'),
+        run: () => setGlobalView('overseer'),
       },
       {
         id: 'go-settings',
@@ -863,13 +863,13 @@ function App() {
                 <LiveRail
                   runs={data.runs}
                   attentionCount={inboxData.total}
-                  warden={warden}
+                  overseer={overseer}
                   daemonReady={
                     !data.portLoading && !data.portError && data.client !== null
                   }
                   onOpenTask={openTaskView}
                   onOpenInbox={() => selectProjectView('inbox')}
-                  onOpenWarden={() => setGlobalView('warden')}
+                  onOpenOverseer={() => setGlobalView('overseer')}
                   collapsed={sidebarCollapsed}
                 />
               ) : null
@@ -929,7 +929,7 @@ function App() {
                       // `visibleRuns`, not `runs`: this is the run *list* the archive filter
                       // was built for, and the only surface left that can unarchive one.
                       runs={data.visibleRuns}
-                      // The non-run agents (planners, enrich, drafts, wardens) — archiving
+                      // The non-run agents (planners, enrich, drafts, overseers) — archiving
                       // never applies to them, so they bypass the archive filter.
                       sessions={data.agentSessions}
                       archivedRunCount={archivedRunCount}
@@ -947,8 +947,8 @@ function App() {
                     />
                   )}
                   {navState.globalView === 'sessions' && <SessionsHubView />}
-                  {navState.globalView === 'warden' && (
-                    <WardenView data={data} warden={warden} />
+                  {navState.globalView === 'overseer' && (
+                    <OverseerView data={data} overseer={overseer} />
                   )}
                   {navState.globalView === 'settings' && (
                     <SettingsView

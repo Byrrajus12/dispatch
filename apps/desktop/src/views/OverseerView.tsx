@@ -1,28 +1,28 @@
 import { Plus } from 'lucide-react';
 
-import { WardenChat } from '../components/chat/WardenChat';
+import { OverseerChat } from '../components/chat/OverseerChat';
 import { DaemonUnavailable } from '../components/shell/DaemonUnavailable';
 import type { DispatchProjectData } from '../hooks/useDispatchProject';
-import type { WardenSession } from '../hooks/useWardenSession';
+import type { OverseerSession } from '../hooks/useOverseerSession';
 import { Button } from '@/ui/button';
 
-interface WardenViewProps {
+interface OverseerViewProps {
   data: DispatchProjectData;
-  warden: WardenSession;
+  overseer: OverseerSession;
 }
 
 /**
- * The Warden page — a chat with the project assistant. The conversation itself
- * (transcript, composer, confirm cards) is WardenChat, shared with the
- * LiveRail's Warden tab; this page adds only the daemon gate and the
- * new-conversation action. The session lives in `useWardenSession` (mounted by
+ * The Overseer page — a chat with the project assistant. The conversation itself
+ * (transcript, composer, confirm cards) is OverseerChat, shared with the
+ * LiveRail's Overseer tab; this page adds only the daemon gate and the
+ * new-conversation action. The session lives in `useOverseerSession` (mounted by
  * App), so switching views and coming back lands on the same transcript.
  */
-export function WardenView({ data, warden }: WardenViewProps) {
-  // Same gate as WardenChat's compact reset: a queued mutation must stay
-  // decidable. `record` is already vetoed by useWardenSession when the daemon
+export function OverseerView({ data, overseer }: OverseerViewProps) {
+  // Same gate as OverseerChat's compact reset: a queued mutation must stay
+  // decidable. `record` is already vetoed by useOverseerSession when the daemon
   // says the conversation is gone, so this cannot lock on a ghost action.
-  const hasPendingAction = (warden.record?.pendingActions.length ?? 0) > 0;
+  const hasPendingAction = (overseer.record?.pendingActions.length ?? 0) > 0;
 
   if (data.portLoading || data.portError || data.client === null) {
     return (
@@ -37,7 +37,7 @@ export function WardenView({ data, warden }: WardenViewProps) {
   return (
     <div className="mx-auto flex h-full min-h-0 w-full max-w-[60rem] flex-col gap-4">
       <div className="flex items-center justify-end gap-3">
-        {warden.conversationId !== null && (
+        {overseer.conversationId !== null && (
           // reset() drops the only UI handle on the conversation, so a queued
           // mutation must be decided before this can discard its confirm card.
           <Button
@@ -47,14 +47,14 @@ export function WardenView({ data, warden }: WardenViewProps) {
             title={
               hasPendingAction ? 'Decide the pending action first' : undefined
             }
-            onClick={() => warden.reset()}
+            onClick={() => overseer.reset()}
           >
             <Plus className="size-3.5" /> New conversation
           </Button>
         )}
       </div>
 
-      <WardenChat warden={warden} />
+      <OverseerChat overseer={overseer} />
     </div>
   );
 }

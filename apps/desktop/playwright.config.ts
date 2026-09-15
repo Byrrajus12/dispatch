@@ -5,7 +5,7 @@ import { DAEMON_PORT, HOME, REPO, ROOT, VITE_PORT } from './e2e/paths';
 export default defineConfig({
   testDir: './e2e',
   // Every spec file shares one live daemon and its fixture state —
-  // warden.spec.ts temporarily adds a needs-review run that views.spec.ts's
+  // overseer.spec.ts temporarily adds a needs-review run that views.spec.ts's
   // count assertions would trip over, and edit-diff.spec.ts rewrites a diff
   // views.spec.ts screenshots. One worker keeps the files from interleaving.
   workers: 1,
@@ -30,7 +30,7 @@ export default defineConfig({
   webServer: [
     {
       // DISPATCH_ENABLE_FAKES registers the scripted 'fake' executor, planner,
-      // and warden backend alongside the real ones (see bin.ts) — warden.spec.ts
+      // and overseer backend alongside the real ones (see bin.ts) — overseer.spec.ts
       // drives the chat's confirm/deny flow through them, with no live LLM.
       // Nothing uses a fake unless a request names it, so the screenshot specs
       // see the same daemon they always did.

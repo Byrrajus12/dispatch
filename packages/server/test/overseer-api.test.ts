@@ -7,13 +7,13 @@ import { join } from 'node:path';
 import type { ServerHandle } from '../src/index.js';
 import { startServer } from '../src/index.js';
 import { FakeExecutor } from '../src/orchestrator/executors/fake.js';
-import type { WardenRecord } from '../src/orchestrator/warden.js';
+import type { OverseerRecord } from '../src/orchestrator/overseer.js';
 import type {
-  WardenBackend,
-  WardenTurn,
-} from '../src/orchestrator/wardenBackend.js';
-import { FakeWarden } from '../src/orchestrator/wardens/fake.js';
-import type { FakeWardenScript } from '../src/orchestrator/wardens/fake.js';
+  OverseerBackend,
+  OverseerTurn,
+} from '../src/orchestrator/overseerBackend.js';
+import { FakeOverseer } from '../src/orchestrator/overseers/fake.js';
+import type { FakeOverseerScript } from '../src/orchestrator/overseers/fake.js';
 import { json } from './json.js';
 import { runGitSync } from './orchestrator/helpers.js';
 import { useTestAuth, wsUrl } from './testAuth.js';
@@ -32,7 +32,7 @@ async function waitFor(
 }
 
 function initDispatchGitRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'dispatch-warden-api-'));
+  const dir = mkdtempSync(join(tmpdir(), 'dispatch-overseer-api-'));
   runGitSync(dir, ['init', '-b', 'main']);
   runGitSync(dir, ['config', 'user.email', 'test@example.com']);
   runGitSync(dir, ['config', 'user.name', 'Test']);
@@ -43,14 +43,14 @@ function initDispatchGitRepo(): string {
 }
 
 // A backend whose turns never settle, for asserting the busy (409) shape —
-// FakeWarden always resolves on the same tick, so it can't hold a
+// FakeOverseer always resolves on the same tick, so it can't hold a
 // conversation at `running`.
-class HangingWarden implements WardenBackend {
-  start(): Promise<WardenTurn> {
-    return new Promise<WardenTurn>(() => {});
+class HangingOverseer implements OverseerBackend {
+  start(): Promise<OverseerTurn> {
+    return new Promise<OverseerTurn>(() => {});
   }
-  sendMessage(): Promise<WardenTurn> {
-    return new Promise<WardenTurn>(() => {});
+  sendMessage(): Promise<OverseerTurn> {
+    return new Promise<OverseerTurn>(() => {});
   }
 }
 
@@ -76,16 +76,16 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-// Boots a daemon whose 'claude' warden backend is the given fake, with a
+// Boots a daemon whose 'claude' overseer backend is the given fake, with a
 // FakeExecutor under 'claude' too so a confirmed dispatch_task action runs a
 // real (fake-executed) dispatch rather than touching the Agent SDK.
-async function startWithWarden(backend: WardenBackend): Promise<void> {
+async function startWithOverseer(backend: OverseerBackend): Promise<void> {
   handle = await startServer({
     rootDir: root,
     port: 0,
     writeDaemonFile: false,
-    registerWardens: (wardenManager) => {
-      wardenManager.registerBackend('claude', backend);
+    registerOverseers: (overseerManager) => {
+      overseerManager.registerBackend('claude', backend);
     },
     registerExecutors: (orchestrator) => {
       orchestrator.registerExecutor(
@@ -100,31 +100,31 @@ async function startWithWarden(backend: WardenBackend): Promise<void> {
 
 async function startConversation(prompt = 'what is running?'): Promise<{
   res: Response;
-  record: WardenRecord;
+  record: OverseerRecord;
 }> {
-  const res = await fetch(`${baseUrl}/api/warden`, {
+  const res = await fetch(`${baseUrl}/api/overseer`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt }),
   });
-  return { res, record: (await json(res)) as WardenRecord };
+  return { res, record: (await json(res)) as OverseerRecord };
 }
 
-async function getRecord(id: string): Promise<WardenRecord> {
+async function getRecord(id: string): Promise<OverseerRecord> {
   return (await json(
-    await fetch(`${baseUrl}/api/warden/${id}`)
-  )) as WardenRecord;
+    await fetch(`${baseUrl}/api/overseer/${id}`)
+  )) as OverseerRecord;
 }
 
-async function settled(id: string): Promise<WardenRecord> {
+async function settled(id: string): Promise<OverseerRecord> {
   await waitFor(async () => (await getRecord(id)).state !== 'running');
   return getRecord(id);
 }
 
-describe('POST /api/warden and GET /api/warden/:id', () => {
+describe('POST /api/overseer and GET /api/overseer/:id', () => {
   it('202s the running record immediately and settles to ready', async () => {
-    await startWithWarden(
-      new FakeWarden({ ok: true, reply: 'Nothing is running.' })
+    await startWithOverseer(
+      new FakeOverseer({ ok: true, reply: 'Nothing is running.' })
     );
 
     const { res, record } = await startConversation('what is running?');
@@ -146,16 +146,16 @@ describe('POST /api/warden and GET /api/warden/:id', () => {
   });
 
   it('400s an empty prompt and an unregistered backend', async () => {
-    await startWithWarden(new FakeWarden({ ok: true }));
+    await startWithOverseer(new FakeOverseer({ ok: true }));
 
-    const empty = await fetch(`${baseUrl}/api/warden`, {
+    const empty = await fetch(`${baseUrl}/api/overseer`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ prompt: '' }),
     });
     expect(empty.status).toBe(400);
 
-    const unknown = await fetch(`${baseUrl}/api/warden`, {
+    const unknown = await fetch(`${baseUrl}/api/overseer`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ prompt: 'hi', backend: 'nope' }),
@@ -165,21 +165,23 @@ describe('POST /api/warden and GET /api/warden/:id', () => {
   });
 
   it('404s an unknown conversation id', async () => {
-    await startWithWarden(new FakeWarden({ ok: true }));
-    const res = await fetch(`${baseUrl}/api/warden/wc-000000`);
+    await startWithOverseer(new FakeOverseer({ ok: true }));
+    const res = await fetch(`${baseUrl}/api/overseer/wc-000000`);
     expect(res.status).toBe(404);
   });
 
   it('surfaces a failed turn as state failed with the error', async () => {
-    await startWithWarden(new FakeWarden({ ok: false, error: 'model down' }));
+    await startWithOverseer(
+      new FakeOverseer({ ok: false, error: 'model down' })
+    );
     const { record } = await startConversation();
     const failed = await settled(record.id);
     expect(failed.state).toBe('failed');
     expect(failed.error).toBe('model down');
   });
 
-  it('broadcasts warden.changed with the conversation id', async () => {
-    await startWithWarden(new FakeWarden({ ok: true, reply: 'hello' }));
+  it('broadcasts overseer.changed with the conversation id', async () => {
+    await startWithOverseer(new FakeOverseer({ ok: true, reply: 'hello' }));
     const ws = new WebSocket(wsUrl(handle));
     const changed = new Promise<string>((resolve) => {
       ws.addEventListener('message', (ev) => {
@@ -187,7 +189,7 @@ describe('POST /api/warden and GET /api/warden/:id', () => {
           type: string;
           conversationId?: string;
         };
-        if (parsed.type === 'warden.changed') {
+        if (parsed.type === 'overseer.changed') {
           resolve(parsed.conversationId ?? '');
         }
       });
@@ -208,10 +210,10 @@ describe('POST /api/warden and GET /api/warden/:id', () => {
   });
 });
 
-describe('POST /api/warden/:id/message', () => {
+describe('POST /api/overseer/:id/message', () => {
   it('202s back to running and settles with the follow-up reply', async () => {
-    await startWithWarden(
-      new FakeWarden({
+    await startWithOverseer(
+      new FakeOverseer({
         ok: true,
         turns: [{ reply: 'first' }, { reply: 'second' }],
       })
@@ -219,13 +221,13 @@ describe('POST /api/warden/:id/message', () => {
     const { record } = await startConversation('opening');
     await settled(record.id);
 
-    const res = await fetch(`${baseUrl}/api/warden/${record.id}/message`, {
+    const res = await fetch(`${baseUrl}/api/overseer/${record.id}/message`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: 'and now?' }),
     });
     expect(res.status).toBe(202);
-    const busyRecord = (await json(res)) as WardenRecord;
+    const busyRecord = (await json(res)) as OverseerRecord;
     expect(busyRecord.state).toBe('running');
     expect(busyRecord.messages.at(-1)).toEqual(
       expect.objectContaining({ role: 'user', text: 'and now?' })
@@ -238,18 +240,18 @@ describe('POST /api/warden/:id/message', () => {
   });
 
   it('409s while a turn is in flight and 404s an unknown id', async () => {
-    await startWithWarden(new HangingWarden());
+    await startWithOverseer(new HangingOverseer());
     const { record } = await startConversation();
     expect(record.state).toBe('running');
 
-    const busy = await fetch(`${baseUrl}/api/warden/${record.id}/message`, {
+    const busy = await fetch(`${baseUrl}/api/overseer/${record.id}/message`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: 'still there?' }),
     });
     expect(busy.status).toBe(409);
 
-    const missing = await fetch(`${baseUrl}/api/warden/wc-000000/message`, {
+    const missing = await fetch(`${baseUrl}/api/overseer/wc-000000/message`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: 'hello?' }),
@@ -258,10 +260,10 @@ describe('POST /api/warden/:id/message', () => {
   });
 
   it('400s an empty text', async () => {
-    await startWithWarden(new FakeWarden({ ok: true }));
+    await startWithOverseer(new FakeOverseer({ ok: true }));
     const { record } = await startConversation();
     await settled(record.id);
-    const res = await fetch(`${baseUrl}/api/warden/${record.id}/message`, {
+    const res = await fetch(`${baseUrl}/api/overseer/${record.id}/message`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: '' }),
@@ -270,17 +272,17 @@ describe('POST /api/warden/:id/message', () => {
   });
 });
 
-describe('POST /api/warden/:id/actions/:actionId/confirm', () => {
+describe('POST /api/overseer/:id/actions/:actionId/confirm', () => {
   // Creates the task before the daemon boots (it reads task files at startup)
   // and scripts a single turn that queues dispatching it.
-  async function startWithQueuedDispatch(): Promise<WardenRecord> {
+  async function startWithQueuedDispatch(): Promise<OverseerRecord> {
     const doc = store.create({ title: 'Widget task' });
-    const script: FakeWardenScript = {
+    const script: FakeOverseerScript = {
       ok: true,
       calls: [{ tool: 'dispatch_task', input: { taskId: doc.meta.id } }],
       reply: 'I queued a dispatch for your confirmation.',
     };
-    await startWithWarden(new FakeWarden(script));
+    await startWithOverseer(new FakeOverseer(script));
     const { record } = await startConversation(`dispatch ${doc.meta.id}`);
     const ready = await settled(record.id);
     expect(ready.pendingActions).toHaveLength(1);
@@ -293,7 +295,7 @@ describe('POST /api/warden/:id/actions/:actionId/confirm', () => {
     approve: unknown
   ): Promise<Response> {
     return fetch(
-      `${baseUrl}/api/warden/${conversationId}/actions/${actionId}/confirm`,
+      `${baseUrl}/api/overseer/${conversationId}/actions/${actionId}/confirm`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -314,7 +316,7 @@ describe('POST /api/warden/:id/actions/:actionId/confirm', () => {
 
     const res = await confirm(ready.id, action.id, true);
     expect(res.status).toBe(200);
-    const confirmed = (await json(res)) as WardenRecord;
+    const confirmed = (await json(res)) as OverseerRecord;
     expect(confirmed.pendingActions).toHaveLength(0);
     expect(confirmed.messages.at(-1)).toEqual(
       expect.objectContaining({
@@ -333,7 +335,7 @@ describe('POST /api/warden/:id/actions/:actionId/confirm', () => {
 
     const res = await confirm(ready.id, action.id, false);
     expect(res.status).toBe(200);
-    const denied = (await json(res)) as WardenRecord;
+    const denied = (await json(res)) as OverseerRecord;
     expect(denied.pendingActions).toHaveLength(0);
     expect(denied.messages.at(-1)).toEqual(
       expect.objectContaining({

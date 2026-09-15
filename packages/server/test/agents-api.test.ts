@@ -7,9 +7,9 @@ import { join } from 'node:path';
 import type { ServerHandle } from '../src/index.js';
 import { startServer } from '../src/index.js';
 import type { AgentSessionMeta } from '../src/orchestrator/agentSessions.js';
+import { FakeOverseer } from '../src/orchestrator/overseers/fake.js';
 import type { PlanProposal } from '../src/orchestrator/planner.js';
 import { FakePlanner } from '../src/orchestrator/planners/fake.js';
-import { FakeWarden } from '../src/orchestrator/wardens/fake.js';
 import { json } from './json.js';
 import { runGitSync } from './orchestrator/helpers.js';
 import { useTestAuth } from './testAuth.js';
@@ -86,8 +86,8 @@ async function start(): Promise<void> {
         new FakePlanner({ ok: true, proposal: SAMPLE_PROPOSAL })
       );
     },
-    registerWardens: (wardenManager) => {
-      wardenManager.registerBackend('claude', new FakeWarden({ ok: true }));
+    registerOverseers: (overseerManager) => {
+      overseerManager.registerBackend('claude', new FakeOverseer({ ok: true }));
     },
     registerExecutors: () => {},
   });
@@ -107,7 +107,7 @@ describe('GET /api/agents', () => {
     expect(await fetchSessions()).toEqual([]);
   });
 
-  it('lists planner, draft and warden conversations with their kinds', async () => {
+  it('lists planner, draft and overseer conversations with their kinds', async () => {
     await start();
     const planRes = await fetch(`${baseUrl}/api/plan`, {
       method: 'POST',
@@ -123,12 +123,12 @@ describe('GET /api/agents', () => {
     });
     expect(draftRes.status).toBe(202);
 
-    const wardenRes = await fetch(`${baseUrl}/api/warden`, {
+    const overseerRes = await fetch(`${baseUrl}/api/overseer`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ prompt: 'what is running?' }),
     });
-    expect(wardenRes.status).toBe(202);
+    expect(overseerRes.status).toBe(202);
 
     // All three records exist as of their 202s; the fakes settle their turns
     // on a later tick, so wait for `ready` to make the assertion deterministic.
@@ -143,7 +143,7 @@ describe('GET /api/agents', () => {
     const byKind = new Map(sessions.map((s) => [s.kind, s]));
     expect(byKind.get('plan')?.title).toBe('plan the widget');
     expect(byKind.get('draft')?.title).toBe('draft the widget task');
-    expect(byKind.get('warden')?.title).toBe('what is running?');
+    expect(byKind.get('overseer')?.title).toBe('what is running?');
   });
 
   it('lists a task enrich agent under its task title, not its prompt', async () => {

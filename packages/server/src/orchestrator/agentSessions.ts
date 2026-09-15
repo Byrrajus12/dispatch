@@ -1,12 +1,12 @@
+import type { OverseerRecord } from './overseer.js';
 import type { DraftRecord, PlanRecord } from './plan.js';
-import type { WardenRecord } from './warden.js';
 
 // Which kind of conversation agent a session row is. Task runs are deliberately
 // not part of this union — they are durable, worktree-backed and already listed
 // by GET /api/runs; this covers the in-memory conversation agents that had no
 // listing at all: planner chats ('plan'), "add detail" drafting agents
-// ('enrich'), single-task drafts ('draft') and warden chats ('warden').
-type AgentSessionKind = 'plan' | 'enrich' | 'draft' | 'warden';
+// ('enrich'), single-task drafts ('draft') and overseer chats ('overseer').
+type AgentSessionKind = 'plan' | 'enrich' | 'draft' | 'overseer';
 
 // The one lifecycle every conversation agent shares: a turn is in flight, the
 // last turn settled with something to look at, or the last turn errored.
@@ -51,7 +51,7 @@ function promptTitle(prompt: string): string {
 export function buildAgentSessions(
   plans: PlanRecord[],
   drafts: DraftRecord[],
-  wardens: WardenRecord[]
+  overseers: OverseerRecord[]
 ): AgentSessionMeta[] {
   const sessions: AgentSessionMeta[] = [
     ...plans.map(
@@ -80,15 +80,15 @@ export function buildAgentSessions(
         updatedAt: draft.updatedAt,
       })
     ),
-    ...wardens.map(
-      (warden): AgentSessionMeta => ({
-        id: warden.id,
-        kind: 'warden',
-        title: promptTitle(warden.prompt),
-        state: warden.state,
-        error: warden.error,
-        createdAt: warden.createdAt,
-        updatedAt: warden.updatedAt,
+    ...overseers.map(
+      (overseer): AgentSessionMeta => ({
+        id: overseer.id,
+        kind: 'overseer',
+        title: promptTitle(overseer.prompt),
+        state: overseer.state,
+        error: overseer.error,
+        createdAt: overseer.createdAt,
+        updatedAt: overseer.updatedAt,
       })
     ),
   ];

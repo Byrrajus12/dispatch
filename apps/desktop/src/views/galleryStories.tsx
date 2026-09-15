@@ -245,7 +245,7 @@ const CHAT_AGENT_AVATAR = (
 
 // Mock transcript for the two-tab story. Read from a data array (rather than
 // literal `role="user"`/`role="agent"` JSX props) so each role comes from a typed
-// field, the same shape `WardenView`/`PlansView` already pass through to their own
+// field, the same shape `OverseerView`/`PlansView` already pass through to their own
 // message rows.
 const CHAT_MESSAGES: Array<{
   id: string;

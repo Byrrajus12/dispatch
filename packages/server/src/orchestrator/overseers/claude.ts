@@ -13,35 +13,35 @@ import type { z } from 'zod';
 
 import { openClaudeQuery, rewriteMissingCliError } from '../claudeCli.js';
 import type {
-  WardenBackend,
-  WardenToolDescriptor,
-  WardenToolset,
-  WardenTurn,
-} from '../wardenBackend.js';
+  OverseerBackend,
+  OverseerToolDescriptor,
+  OverseerToolset,
+  OverseerTurn,
+} from '../overseerBackend.js';
 
-// The in-process MCP server every warden tool is exposed through, and the
+// The in-process MCP server every overseer tool is exposed through, and the
 // prefix the model therefore sees on each name (`mcp__<server>__<tool>`).
 // Exported because both `allowedTools` and the canUseTool gate below key off
 // it, and the wiring test asserts on it.
-const SERVER_NAME = 'warden';
-export const WARDEN_TOOL_PREFIX = `mcp__${SERVER_NAME}__`;
+const SERVER_NAME = 'overseer';
+export const OVERSEER_TOOL_PREFIX = `mcp__${SERVER_NAME}__`;
 
 // Ceiling on tool-calling rounds in a single turn. A status question needs a
-// handful; anything approaching this is a loop, and the warden runs on the
+// handful; anything approaching this is a loop, and the overseer runs on the
 // operator's account, so an unbounded turn is a real (if small) cost risk.
-const WARDEN_MAX_TURNS = 24;
+const OVERSEER_MAX_TURNS = 24;
 
 // Shown when a turn ends with no assistant text at all — rare, but a blank
 // bubble in the chat would look like a rendering bug rather than an empty turn.
 export const EMPTY_REPLY_MESSAGE =
-  '(the warden ended its turn without saying anything)';
+  '(the overseer ended its turn without saying anything)';
 
 // The whole system prompt, deliberately NOT the `claude_code` preset: that
 // preset describes a coding agent working in a checkout, and this session has
 // no file tools at all (see `tools: []` below). Everything it needs to know is
 // here.
-const WARDEN_SYSTEM_PROMPT = [
-  'You are the warden: the assistant for one dispatch project, answering in a ' +
+const OVERSEER_SYSTEM_PROMPT = [
+  'You are the overseer: the assistant for one dispatch project, answering in a ' +
     'chat panel next to the project board. dispatch runs coding agents against ' +
     'tasks; each dispatched task becomes a "run" on its own git branch, which ' +
     'may pause for approval, ask questions, and finally enter a merge queue.',
@@ -74,20 +74,23 @@ function rawShapeOf(schema: z.ZodType<unknown>): AnyZodRawShape {
 /**
  * Wraps every tool in `toolset` as an SDK tool. Each handler routes straight
  * back through `toolset.call` — which is what keeps the "a mutating call only
- * queues" rule in WardenManager rather than in here, and is why this is
+ * queues" rule in OverseerManager rather than in here, and is why this is
  * exported: it is the one piece of the real backend a test can drive without a
  * live model.
  */
 // The explicit annotation keeps the declaration portable — the inferred type
 // reaches into zod internals the lockfile's layout can't name. `AnyZodRawShape`
 // is the schema parameter the SDK's own `tools` option takes.
-export function wardenSdkTools(
-  toolset: WardenToolset
+export function overseerSdkTools(
+  toolset: OverseerToolset
 ): SdkMcpToolDefinition<AnyZodRawShape>[] {
   return toolset.tools.map((descriptor) => sdkToolFor(descriptor, toolset));
 }
 
-function sdkToolFor(descriptor: WardenToolDescriptor, toolset: WardenToolset) {
+function sdkToolFor(
+  descriptor: OverseerToolDescriptor,
+  toolset: OverseerToolset
+) {
   const description = descriptor.mutating
     ? `${descriptor.description} QUEUES this action for human confirmation — calling it does not perform it.`
     : descriptor.description;
@@ -108,8 +111,8 @@ function sdkToolFor(descriptor: WardenToolDescriptor, toolset: WardenToolset) {
 }
 
 /**
- * The real warden backend: an Agent SDK tool-calling conversation over the
- * warden tool registry, exposed in-process via `createSdkMcpServer` so a tool
+ * The real overseer backend: an Agent SDK tool-calling conversation over the
+ * overseer tool registry, exposed in-process via `createSdkMcpServer` so a tool
  * call lands in this daemon's own objects rather than going out over a stdio
  * MCP transport.
  *
@@ -119,14 +122,14 @@ function sdkToolFor(descriptor: WardenToolDescriptor, toolset: WardenToolset) {
  * the same shape ClaudePlanner uses.
  *
  * The session is locked down harder than either the planner or the executor,
- * because the warden acts with the daemon operator's authority: no built-in
+ * because the overseer acts with the daemon operator's authority: no built-in
  * tools at all, no project/user settings, no `.mcp.json` servers, no skills, no
  * subagents. The only tools that exist are this registry's, and canUseTool
  * refuses anything else outright.
  *
- * CI never constructs this against a live model — see FakeWarden.
+ * CI never constructs this against a live model — see FakeOverseer.
  */
-export class ClaudeWarden implements WardenBackend {
+export class ClaudeOverseer implements OverseerBackend {
   // Defaults to the real SDK's `query()`; tests inject a stub that yields a
   // scripted SDKMessage stream, mirroring ClaudePlanner's own `queryFn` seam.
   constructor(
@@ -136,34 +139,34 @@ export class ClaudeWarden implements WardenBackend {
 
   start(
     prompt: string,
-    toolset: WardenToolset,
+    toolset: OverseerToolset,
     model?: string
-  ): Promise<WardenTurn> {
+  ): Promise<OverseerTurn> {
     return this.runTurn(prompt, toolset, undefined, model);
   }
 
   sendMessage(
     sessionId: string | undefined,
     message: string,
-    toolset: WardenToolset,
+    toolset: OverseerToolset,
     model?: string
-  ): Promise<WardenTurn> {
+  ): Promise<OverseerTurn> {
     return this.runTurn(message, toolset, sessionId, model);
   }
 
   private async runTurn(
     prompt: string,
-    toolset: WardenToolset,
+    toolset: OverseerToolset,
     resume: string | undefined,
     model: string | undefined
-  ): Promise<WardenTurn> {
+  ): Promise<OverseerTurn> {
     const allowedTools = toolset.tools.map(
-      (t) => `${WARDEN_TOOL_PREFIX}${t.name}`
+      (t) => `${OVERSEER_TOOL_PREFIX}${t.name}`
     );
     const allowed = new Set(allowedTools);
     const options: Options = {
       cwd: this.rootDir,
-      // No built-in tools: no Read, no Bash, no Edit. The warden answers from
+      // No built-in tools: no Read, no Bash, no Edit. The overseer answers from
       // the registry or not at all.
       tools: [],
       allowedTools,
@@ -177,17 +180,17 @@ export class ClaudeWarden implements WardenBackend {
             ? { behavior: 'allow', updatedInput: input }
             : {
                 behavior: 'deny',
-                message: `the warden may only call its own tools, not ${toolName}`,
+                message: `the overseer may only call its own tools, not ${toolName}`,
               }
         ),
       mcpServers: {
         [SERVER_NAME]: createSdkMcpServer({
           name: SERVER_NAME,
           version: '1.0.0',
-          tools: wardenSdkTools(toolset),
+          tools: overseerSdkTools(toolset),
         }),
       },
-      systemPrompt: WARDEN_SYSTEM_PROMPT,
+      systemPrompt: OVERSEER_SYSTEM_PROMPT,
       // Explicitly none: omitting this loads every source, which would pull
       // the project's CLAUDE.md coding conventions into a status-chat session
       // that cannot touch files anyway — noise, plus one more channel of
@@ -195,7 +198,7 @@ export class ClaudeWarden implements WardenBackend {
       settingSources: [],
       strictMcpConfig: true,
       skills: [],
-      maxTurns: WARDEN_MAX_TURNS,
+      maxTurns: OVERSEER_MAX_TURNS,
       ...(resume !== undefined ? { resume } : {}),
       ...(model !== undefined ? { model } : {}),
     };
@@ -213,7 +216,7 @@ export class ClaudeWarden implements WardenBackend {
         }
         if (message.type !== 'result') continue;
         if (message.subtype !== 'success') {
-          throw new Error(`warden turn failed: ${message.subtype}`);
+          throw new Error(`overseer turn failed: ${message.subtype}`);
         }
         const reply = message.result.trim();
         return {
@@ -221,7 +224,7 @@ export class ClaudeWarden implements WardenBackend {
           sessionId: message.session_id ?? sessionId,
         };
       }
-      throw new Error('warden turn produced no result message');
+      throw new Error('overseer turn produced no result message');
     } catch (err) {
       // The missing-CLI error can surface lazily on the first iteration rather
       // than synchronously from openClaudeQuery — apply the same install-hint

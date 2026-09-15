@@ -11,6 +11,17 @@ import { LedgerStore } from '../../src/ledger.js';
 import { FakeExecutor } from '../../src/orchestrator/executors/fake.js';
 import { MergeQueue } from '../../src/orchestrator/mergeQueue.js';
 import { Orchestrator } from '../../src/orchestrator/orchestrator.js';
+import { OverseerManager } from '../../src/orchestrator/overseer.js';
+import type { OverseerRecord } from '../../src/orchestrator/overseer.js';
+import type {
+  OverseerBackend,
+  OverseerToolset,
+  OverseerTurn,
+} from '../../src/orchestrator/overseerBackend.js';
+import { FakeOverseer } from '../../src/orchestrator/overseers/fake.js';
+import type { FakeOverseerScript } from '../../src/orchestrator/overseers/fake.js';
+import type { OverseerToolContext } from '../../src/orchestrator/overseerTools.js';
+import { OverseerToolRegistry } from '../../src/orchestrator/overseerTools.js';
 import type { CommandResult } from '../../src/orchestrator/pr.js';
 import { QuestionRegistry } from '../../src/orchestrator/questions.js';
 import {
@@ -18,24 +29,13 @@ import {
   OrchestratorConflictError,
   OrchestratorNotFoundError,
 } from '../../src/orchestrator/types.js';
-import { WardenManager } from '../../src/orchestrator/warden.js';
-import type { WardenRecord } from '../../src/orchestrator/warden.js';
-import type {
-  WardenBackend,
-  WardenToolset,
-  WardenTurn,
-} from '../../src/orchestrator/wardenBackend.js';
-import { FakeWarden } from '../../src/orchestrator/wardens/fake.js';
-import type { FakeWardenScript } from '../../src/orchestrator/wardens/fake.js';
-import type { WardenToolContext } from '../../src/orchestrator/wardenTools.js';
-import { WardenToolRegistry } from '../../src/orchestrator/wardenTools.js';
 import { initGitRepo } from './helpers.js';
 
 let fakeHome: string;
 let repo: string;
 const originalDispatchHome = process.env.DISPATCH_HOME;
 
-// Same teardown contract as wardenTools.test.ts: a merge queue left running
+// Same teardown contract as overseerTools.test.ts: a merge queue left running
 // arms a retry timer, and a 'slow' run left live finishes during some LATER
 // test against whatever DISPATCH_HOME is set then.
 const liveQueues: MergeQueue[] = [];
@@ -44,7 +44,7 @@ const liveOrchestrators: Orchestrator[] = [];
 beforeEach(() => {
   fakeHome = mkdtempSync(join(tmpdir(), 'dispatch-home-'));
   process.env.DISPATCH_HOME = fakeHome;
-  repo = initGitRepo('dispatch-warden-mgr-');
+  repo = initGitRepo('dispatch-overseer-mgr-');
 });
 
 afterEach(async () => {
@@ -79,7 +79,7 @@ async function waitFor(check: () => boolean, timeoutMs = 5000): Promise<void> {
 }
 
 // Answers the git/gh invocations the merge queue makes, so no test here
-// depends on a real rebase/push (copied in shape from wardenTools.test.ts).
+// depends on a real rebase/push (copied in shape from overseerTools.test.ts).
 const stubRunner = async (
   _cwd: string,
   cmd: string[]
@@ -92,8 +92,8 @@ const stubRunner = async (
   return { ok: false, stdout: '', stderr: 'unhandled stub command' };
 };
 
-interface Harness extends WardenToolContext {
-  registry: WardenToolRegistry;
+interface Harness extends OverseerToolContext {
+  registry: OverseerToolRegistry;
   events: EventBus;
   seen: ServerEvent[];
 }
@@ -131,7 +131,7 @@ function makeHarness(): Harness {
     stubRunner
   );
   liveQueues.push(mergeQueue);
-  const ctx: WardenToolContext = {
+  const ctx: OverseerToolContext = {
     store,
     cache,
     orchestrator,
@@ -140,18 +140,18 @@ function makeHarness(): Harness {
     ledgerStore: new LedgerStore(repo),
     defaultExecutor: 'fake',
   };
-  return { ...ctx, registry: new WardenToolRegistry(ctx), events, seen };
+  return { ...ctx, registry: new OverseerToolRegistry(ctx), events, seen };
 }
 
 interface ManagerHarness extends Harness {
-  manager: WardenManager;
-  backend: FakeWarden;
+  manager: OverseerManager;
+  backend: FakeOverseer;
 }
 
-function makeManager(script: FakeWardenScript): ManagerHarness {
+function makeManager(script: FakeOverseerScript): ManagerHarness {
   const h = makeHarness();
-  const backend = new FakeWarden(script);
-  const manager = new WardenManager({
+  const backend = new FakeOverseer(script);
+  const manager = new OverseerManager({
     rootDir: repo,
     registry: h.registry,
     events: h.events,
@@ -164,7 +164,7 @@ function makeManager(script: FakeWardenScript): ManagerHarness {
 async function startAndSettle(
   h: ManagerHarness,
   prompt = 'what is going on?'
-): Promise<WardenRecord> {
+): Promise<OverseerRecord> {
   const started = h.manager.start(prompt, 'fake');
   await waitFor(() => h.manager.get(started.id).state !== 'running');
   return h.manager.get(started.id);
@@ -180,7 +180,7 @@ function makeTask(h: Harness, title: string): string {
 // Turn bookkeeping
 // ---------------------------------------------------------------------------
 
-describe('WardenManager turns', () => {
+describe('OverseerManager turns', () => {
   it('opens at running with the prompt recorded, then lands the reply at ready', async () => {
     const h = makeManager({ ok: true, reply: 'nothing is on fire' });
 
@@ -202,7 +202,7 @@ describe('WardenManager turns', () => {
     });
     // The backend's resume handle is kept for the next turn.
     expect(settled.sessionId).toBe('1');
-    expect(h.seen.some((e) => e.type === 'warden.changed')).toBe(true);
+    expect(h.seen.some((e) => e.type === 'overseer.changed')).toBe(true);
   });
 
   it('runs a status tool during the turn and records what it returned', async () => {
@@ -229,7 +229,7 @@ describe('WardenManager turns', () => {
   });
 
   it('derives a later call input from an earlier result in the same turn', async () => {
-    // The shape bin.ts's default fake warden script relies on: read the ready
+    // The shape bin.ts's default fake overseer script relies on: read the ready
     // list, then queue a dispatch of whatever task that read returned — no
     // hard-coded id anywhere in the script.
     const h = makeManager({
@@ -297,7 +297,7 @@ describe('WardenManager turns', () => {
       'invalid input for cancel_run'
     );
     expect(JSON.stringify(h.backend.observations[1].result.content)).toContain(
-      'unknown warden tool: summon_the_moon'
+      'unknown overseer tool: summon_the_moon'
     );
     // A call that failed its schema is not a queued action.
     expect(record.pendingActions).toEqual([]);
@@ -317,9 +317,9 @@ describe('WardenManager turns', () => {
     const h = makeManager({ ok: true, reply: 'unused' });
     // A backend that never settles, so the conversation stays `running`.
     let release: (() => void) | undefined;
-    const stuck: WardenBackend = {
+    const stuck: OverseerBackend = {
       start: () =>
-        new Promise<WardenTurn>((resolve) => {
+        new Promise<OverseerTurn>((resolve) => {
           release = () => resolve({ reply: 'done' });
         }),
       sendMessage: async () => ({ reply: 'done' }),
@@ -359,7 +359,7 @@ describe('WardenManager turns', () => {
 
   it('advertises every registry tool, flagging which ones mutate', async () => {
     const h = makeManager({ ok: true, reply: 'ok' });
-    let offered: WardenToolset | undefined;
+    let offered: OverseerToolset | undefined;
     h.manager.registerBackend('spy', {
       start: async (_prompt, toolset) => {
         offered = toolset;
@@ -414,13 +414,13 @@ describe('WardenManager turns', () => {
  */
 async function queueDispatch(title = 'Ship the thing'): Promise<{
   h: ManagerHarness;
-  record: WardenRecord;
+  record: OverseerRecord;
   taskId: string;
   actionId: string;
 }> {
   const base = makeHarness();
   const taskId = makeTask(base, title);
-  const backend = new FakeWarden({
+  const backend = new FakeOverseer({
     ok: true,
     turns: [
       {
@@ -430,7 +430,7 @@ async function queueDispatch(title = 'Ship the thing'): Promise<{
       { reply: 'anything else?' },
     ],
   });
-  const manager = new WardenManager({
+  const manager = new OverseerManager({
     rootDir: repo,
     registry: base.registry,
     events: base.events,
@@ -441,7 +441,7 @@ async function queueDispatch(title = 'Ship the thing'): Promise<{
   return { h, record, taskId, actionId: record.pendingActions[0].id };
 }
 
-describe('WardenManager queued actions', () => {
+describe('OverseerManager queued actions', () => {
   it('queues a mutating call with its summary and dispatches nothing', async () => {
     const { h, record, taskId } = await queueDispatch();
 
@@ -559,7 +559,7 @@ describe('WardenManager queued actions', () => {
     const meta = await h.orchestrator.dispatch(taskId, 'slow');
     h.manager.registerBackend(
       'fake',
-      new FakeWarden({
+      new FakeOverseer({
         ok: true,
         calls: [{ tool: 'cancel_run', input: { runId: meta.id } }],
         reply: 'queued a cancel',
@@ -614,14 +614,14 @@ describe('WardenManager queued actions', () => {
     // The turn that would have delivered the news dies before reaching a model.
     h.manager.registerBackend(
       'fake',
-      new FakeWarden({ ok: false, error: 'model unreachable' })
+      new FakeOverseer({ ok: false, error: 'model unreachable' })
     );
     h.manager.sendMessage(opened.id, 'did it go?');
     await waitFor(() => h.manager.get(opened.id).state === 'failed');
     expect(h.manager.get(opened.id).undeliveredDecisions).toHaveLength(1);
 
     // So the retry still carries it.
-    const retry = new FakeWarden({ ok: true, reply: 'yes, it is running' });
+    const retry = new FakeOverseer({ ok: true, reply: 'yes, it is running' });
     h.manager.registerBackend('fake', retry);
     h.manager.sendMessage(opened.id, 'did it go?');
     await waitFor(() => h.manager.get(opened.id).state === 'ready');

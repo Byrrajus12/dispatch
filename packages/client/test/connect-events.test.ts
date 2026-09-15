@@ -209,7 +209,7 @@ describe('connectEvents', () => {
 
   it('delivers a hello from every socket generation, not just the first', async () => {
     // The desktop's daemon-restart reconciliation hangs off `hello`: a
-    // restarted dispatchd drops every in-memory warden record, and the only
+    // restarted dispatchd drops every in-memory overseer record, and the only
     // signal that reaches the client is this frame, which the server sends
     // from its websocket `open` handler. That is worth nothing unless
     // `onEvent` is still wired to the *replacement* socket after a reconnect —
