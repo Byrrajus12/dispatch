@@ -418,6 +418,7 @@ export class CodexExecutor implements Executor {
           resumed
             ? {
                 threadId: opts.resumeSessionId,
+                model: opts.model,
                 cwd: opts.cwd,
                 sandbox: 'workspace-write',
                 approvalPolicy: 'on-request',
@@ -425,6 +426,7 @@ export class CodexExecutor implements Executor {
                 config,
               }
             : {
+                model: opts.model,
                 cwd: opts.cwd,
                 approvalPolicy: 'on-request',
                 approvalsReviewer: 'auto_review',

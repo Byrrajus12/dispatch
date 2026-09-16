@@ -129,7 +129,8 @@ function scriptedProcess(
 
 function startHarness(
   process: FakeCodexProcess,
-  resumeSessionId?: string
+  resumeSessionId?: string,
+  model?: string
 ): {
   entries: NormalizedEntry[];
   approvals: Parameters<ExecutorEvents['onApprovalRequest']>[0][];
@@ -150,6 +151,7 @@ function startHarness(
       prompt: 'make the change',
       permissionMode: 'auto',
       resumeSessionId,
+      model,
     },
     {
       onEntry: (entry) => entries.push(entry),
@@ -377,7 +379,7 @@ describe('CodexExecutor', () => {
           });
         },
       });
-      const harness = startHarness(process);
+      const harness = startHarness(process, undefined, 'gpt-6-astra');
       await waitFor(() => harness.finishes.length === 1);
 
       expect(process.requests.map((request) => request.method)).toEqual([
@@ -387,6 +389,7 @@ describe('CodexExecutor', () => {
         'turn/start',
       ]);
       expect(process.requests[2]?.params).toEqual({
+        model: 'gpt-6-astra',
         cwd: 'C:\\worktree',
         approvalPolicy: 'on-request',
         approvalsReviewer: 'auto_review',
@@ -450,12 +453,13 @@ describe('CodexExecutor', () => {
         });
       },
     });
-    const harness = startHarness(process, 'thread-existing');
+    const harness = startHarness(process, 'thread-existing', 'gpt-5.6-codex');
     await waitFor(() => harness.finishes.length === 1);
     const resume = process.requests.find(
       (request) => request.method === 'thread/resume'
     );
     expect(resume?.params?.threadId).toBe('thread-existing');
+    expect(resume?.params?.model).toBe('gpt-5.6-codex');
     expect(resume?.params?.config).toEqual({
       mcp_servers: {
         dispatch: {
