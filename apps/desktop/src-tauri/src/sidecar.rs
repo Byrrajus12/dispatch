@@ -18,6 +18,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
+use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -370,40 +371,49 @@ pub trait DaemonSpawner: Send + Sync {
     fn spawn(&self, launch: &DaemonLaunch, root: &str) -> Result<Child, String>;
 }
 
-/// PATH for the spawned dispatchd child: the app's own PATH plus the standard
-/// tool-install directories a Finder/Spotlight launch omits. The daemon shells
-/// out to `gh` (PR capability/reviews/merge-queue) and `git`; with the
-/// Finder-minimal `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`) a Homebrew-installed
-/// `gh` is invisible, so a packaged app loses PR features that work fine from
-/// a terminal launch. Appending (not prepending) keeps an explicitly
-/// configured PATH's own ordering authoritative.
-fn enriched_child_path() -> std::ffi::OsString {
-    let current = std::env::var("PATH").unwrap_or_default();
-    let home = std::env::var("HOME").ok();
-    std::ffi::OsString::from(enrich_path(&current, home.as_deref()))
+/// PATH for the spawned dispatchd child. On Unix, this adds the standard
+/// tool-install directories a Finder/Spotlight launch omits; on Windows, the
+/// inherited PATH is preserved unchanged. The daemon shells out to `gh` (PR
+/// capability/reviews/merge-queue) and `git`; with the Finder-minimal `PATH`
+/// (`/usr/bin:/bin:/usr/sbin:/sbin`) a Homebrew-installed `gh` is invisible, so
+/// a packaged app loses PR features that work fine from a terminal launch.
+/// Appending (not prepending) keeps an explicitly configured PATH's own
+/// ordering authoritative.
+fn enriched_child_path() -> OsString {
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    #[cfg(unix)]
+    let extras = unix_tool_path_extras(std::env::var_os("HOME").as_deref().map(Path::new));
+    #[cfg(not(unix))]
+    let extras = Vec::new();
+    enrich_path(&current, &extras)
 }
 
 /// Pure core of `enriched_child_path`, split out so tests can drive it with
 /// explicit inputs instead of mutating process-global env vars (the same
 /// parallel-safety convention as the registry/needs_init tests).
-fn enrich_path(current: &str, home: Option<&str>) -> String {
-    let mut parts: Vec<String> = current
-        .split(':')
-        .filter(|p| !p.is_empty())
-        .map(String::from)
+fn enrich_path(current: &OsStr, extras: &[PathBuf]) -> OsString {
+    let mut parts: Vec<PathBuf> = std::env::split_paths(current)
+        .filter(|part| !part.as_os_str().is_empty())
         .collect();
-    let mut extras: Vec<String> =
-        vec!["/opt/homebrew/bin".into(), "/usr/local/bin".into()];
-    if let Some(home) = home {
-        extras.push(format!("{home}/.bun/bin"));
-        extras.push(format!("{home}/.local/bin"));
-    }
     for extra in extras {
-        if !parts.iter().any(|p| p == &extra) {
-            parts.push(extra);
+        if !parts.iter().any(|part| part == extra) {
+            parts.push(extra.clone());
         }
     }
-    parts.join(":")
+    std::env::join_paths(parts).expect("PATH entries must be joinable")
+}
+
+#[cfg(unix)]
+fn unix_tool_path_extras(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut extras = vec![
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ];
+    if let Some(home) = home {
+        extras.push(home.join(".bun/bin"));
+        extras.push(home.join(".local/bin"));
+    }
+    extras
 }
 
 /// Resolves the `bun` executable to an absolute path. A macOS app launched from
@@ -1031,25 +1041,61 @@ mod tests {
     use super::*;
     use std::fs;
 
+    #[cfg(unix)]
     #[test]
     fn enrich_path_appends_missing_tool_dirs_without_reordering() {
-        let result = enrich_path("/usr/bin:/bin", Some("/Users/x"));
+        let extras = unix_tool_path_extras(Some(Path::new("/Users/x")));
+        let result = enrich_path(OsStr::new("/usr/bin:/bin"), &extras);
         assert_eq!(
             result,
-            "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin:/Users/x/.bun/bin:/Users/x/.local/bin"
+            OsString::from(
+                "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin:/Users/x/.bun/bin:/Users/x/.local/bin"
+            )
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn enrich_path_never_duplicates_an_already_present_dir() {
-        let result = enrich_path("/opt/homebrew/bin:/usr/bin", None);
-        assert_eq!(result, "/opt/homebrew/bin:/usr/bin:/usr/local/bin");
+        let extras = unix_tool_path_extras(None);
+        let result = enrich_path(OsStr::new("/opt/homebrew/bin:/usr/bin"), &extras);
+        assert_eq!(
+            result,
+            OsString::from("/opt/homebrew/bin:/usr/bin:/usr/local/bin")
+        );
     }
 
+    #[cfg(unix)]
     #[test]
     fn enrich_path_tolerates_an_empty_path() {
-        let result = enrich_path("", None);
-        assert_eq!(result, "/opt/homebrew/bin:/usr/local/bin");
+        let extras = unix_tool_path_extras(None);
+        let result = enrich_path(OsStr::new(""), &extras);
+        assert_eq!(result, OsString::from("/opt/homebrew/bin:/usr/local/bin"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn enrich_path_preserves_distinct_windows_entries() {
+        let current = OsStr::new(r"C:\Windows\System32;C:\Program Files\Git\cmd");
+        let result = enrich_path(current, &[]);
+
+        assert_eq!(result, current);
+        assert_eq!(
+            std::env::split_paths(&result).collect::<Vec<_>>(),
+            vec![
+                PathBuf::from(r"C:\Windows\System32"),
+                PathBuf::from(r"C:\Program Files\Git\cmd")
+            ]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn enrich_path_does_not_duplicate_an_existing_windows_entry() {
+        let current = OsStr::new(r"C:\Windows\System32;C:\Tools");
+        let result = enrich_path(current, &[PathBuf::from(r"C:\Tools")]);
+
+        assert_eq!(result, current);
     }
 
     #[test]
