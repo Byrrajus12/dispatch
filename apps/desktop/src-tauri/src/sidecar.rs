@@ -196,8 +196,9 @@ async fn probe_health(client: &reqwest::Client, port: u16) -> HealthProbe {
     }
 }
 
-/// Whether `pid` is still a live process — `kill -0` sends no signal, it only
-/// checks. Same shell-out rationale as `kill_pid_best_effort`.
+/// Whether `pid` is still a live process. On Unix, `kill -0` sends no signal,
+/// it only checks.
+#[cfg(not(windows))]
 fn pid_alive(pid: u32) -> bool {
     Command::new("kill")
         .arg("-0")
@@ -205,6 +206,44 @@ fn pid_alive(pid: u32) -> bool {
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
+}
+
+/// Windows counterpart to `kill -0`. A process handle is waitable: a zero-time
+/// wait reports whether the process has exited without changing its state.
+/// Access failures are treated as "possibly alive" so a protected process is
+/// never mistaken for a stale pid; Windows reports a missing pid specifically
+/// as `ERROR_INVALID_PARAMETER` from `OpenProcess`.
+#[cfg(windows)]
+fn pid_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    };
+
+    // SAFETY: OpenProcess receives a numeric pid and does not dereference any
+    // caller-owned memory. Every successfully opened handle is closed below.
+    let handle = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            0,
+            pid,
+        )
+    };
+    if handle.is_null() {
+        // SAFETY: GetLastError has no preconditions and immediately follows
+        // the failing OpenProcess call whose error it reads.
+        return unsafe { GetLastError() } != ERROR_INVALID_PARAMETER;
+    }
+
+    // SAFETY: `handle` is a valid process handle. A zero timeout only queries
+    // its signaled (exited) state, and CloseHandle releases our ownership.
+    let wait_result = unsafe { WaitForSingleObject(handle, 0) };
+    unsafe {
+        CloseHandle(handle);
+    }
+    wait_result != WAIT_OBJECT_0
 }
 
 /// What the reuse fast path should do with the daemon a daemon file names.
@@ -303,18 +342,33 @@ fn should_kill_superseded_daemon(
     health_ok && daemon_root_dir == root && health_root_dir == Some(root)
 }
 
-/// Best-effort termination of `pid` by shelling out to the platform `kill`
-/// command — see `should_kill_superseded_daemon` for the safety gating that
-/// must pass before this is ever called; this function itself makes no
-/// judgment about whether killing is safe. `std::process::Command("kill")`
-/// rather than a raw libc signal call: this only ever needs to run on macOS/
-/// Linux (where dispatchd and the desktop app run), and shelling out avoids
-/// pulling in a raw-syscall FFI dependency for one best-effort signal send.
-/// Any failure (already exited, permission denied, no such pid) is
-/// swallowed — "nothing left running under that pid" is exactly the outcome
-/// wanted anyway.
+/// Best-effort termination of `pid` on Unix by shelling out to `kill`. See
+/// `should_kill_superseded_daemon` for the safety gating that must pass before
+/// this is ever called; this function itself makes no judgment about whether
+/// killing is safe. Any failure is swallowed.
+#[cfg(not(windows))]
 fn kill_pid_best_effort(pid: u32) {
     let _ = Command::new("kill").arg(pid.to_string()).status();
+}
+
+/// Best-effort Windows termination for a daemon known only by pid. This acts
+/// on exactly that process, not its descendants, matching the existing Unix
+/// helper's single-pid scope.
+#[cfg(windows)]
+fn kill_pid_best_effort(pid: u32) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+
+    // SAFETY: OpenProcess receives a numeric pid. If it returns a handle, it
+    // is valid for TerminateProcess with the requested right and is closed.
+    let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, pid) };
+    if handle.is_null() {
+        return;
+    }
+    unsafe {
+        let _ = TerminateProcess(handle, 1);
+        CloseHandle(handle);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1096,6 +1150,57 @@ mod tests {
         let result = enrich_path(current, &[PathBuf::from(r"C:\Tools")]);
 
         assert_eq!(result, current);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pid_alive_detects_live_and_exited_processes() {
+        assert!(pid_alive(std::process::id()));
+
+        let mut child = Command::new("cmd")
+            .args(["/C", "exit", "0"])
+            .spawn()
+            .expect("spawn short-lived child");
+        let pid = child.id();
+        child.wait().expect("wait for short-lived child");
+
+        assert!(!pid_alive(pid));
+        assert!(!pid_alive(u32::MAX));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn kill_pid_best_effort_terminates_only_the_test_child() {
+        let mut child = Command::new("ping")
+            .args(["-n", "60", "127.0.0.1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn harmless long-lived child");
+        let pid = child.id();
+        let was_alive = pid_alive(pid);
+
+        kill_pid_best_effort(pid);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let terminated = loop {
+            match child.try_wait().expect("poll test child") {
+                Some(_) => break true,
+                None if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                None => break false,
+            }
+        };
+
+        if !terminated {
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+
+        assert!(was_alive);
+        assert!(terminated, "Windows termination should stop the test child");
+        assert!(!pid_alive(pid));
     }
 
     #[test]
