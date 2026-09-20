@@ -7,11 +7,7 @@ name: Release
 #   - macos-latest       -> aarch64 .dmg (Apple Silicon)
 #   - macos-15-intel     -> x64 .dmg (Intel Macs)
 #   - ubuntu-latest      -> x64 .deb / .rpm / .AppImage
-# Windows is intentionally absent. The sidecars themselves now build and
-# resolve as `.exe` there (tauri.windows.conf.json, build-sidecars.ts,
-# commands.rs), but dispatchd's packaged-app spawn path is still untested on
-# Windows — `enrich_path` in apps/desktop/src-tauri/src/sidecar.rs splits
-# PATH on `:`, and no CI job exercises the platform.
+#   - windows-latest     -> x64 .msi / NSIS setup .exe
 
 on:
   push:
@@ -68,7 +64,8 @@ jobs:
         # release) and as the platform key the publish-updater-manifest job emits
         # in latest.json. Each `bundles` glob now also captures the signed
         # updater artifacts (`*.app.tar.gz`+`.sig` on macOS, `*.AppImage.sig` on
-        # Linux) produced by `createUpdaterArtifacts` so they reach the release.
+        # Linux, and the MSI `.sig` on Windows) produced by
+        # `createUpdaterArtifacts` so they reach the release.
         include:
           - os: macos-latest
             updater_platform: darwin-aarch64
@@ -88,6 +85,11 @@ jobs:
               src-tauri/target/release/bundle/rpm/*.rpm
               src-tauri/target/release/bundle/appimage/*.AppImage
               src-tauri/target/release/bundle/appimage/*.AppImage.sig
+          - os: windows-latest
+            bundles: >-
+              src-tauri/target/release/bundle/msi/*.msi
+              src-tauri/target/release/bundle/msi/*.msi.sig
+              src-tauri/target/release/bundle/nsis/*-setup.exe
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
@@ -168,6 +170,7 @@ jobs:
       # repo without signing secrets still produces unsigned builds instead
       # of failing on a bogus empty identity.
       - name: Build desktop bundles
+        shell: bash
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -206,6 +209,7 @@ jobs:
 
       - name: Upload bundles to the release
         working-directory: apps/desktop
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -236,13 +240,15 @@ jobs:
           VERSION="${TAG#v}"
           BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
 
-          # Pull down just the signature files (and the AppImage, whose exact
-          # name carries the arch we can't predict up front). The macOS tarball
-          # sigs are the per-arch-renamed `Dispatch_<platform>.app.tar.gz.sig`.
+          # Pull down just the signature files plus the AppImage and Windows
+          # MSI, whose exact names we discover below. The macOS tarball sigs are
+          # the per-arch-renamed `Dispatch_<platform>.app.tar.gz.sig`.
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
             --pattern '*.app.tar.gz.sig' \
             --pattern '*.AppImage' \
-            --pattern '*.AppImage.sig'
+            --pattern '*.AppImage.sig' \
+            --pattern '*.msi' \
+            --pattern '*.msi.sig'
 
           # Build the platforms map incrementally so a platform whose artifacts
           # are missing (e.g. a skipped/failed arch) is simply omitted rather
@@ -275,6 +281,15 @@ jobs:
             add_platform linux-x86_64 "${APPIMAGE}.sig" "${BASE}/${APPIMAGE}"
           else
             echo "note: no AppImage found — omitting linux-x86_64 from latest.json"
+          fi
+
+          # Tauri v2 signs the MSI itself, so discover the uploaded installer
+          # and pair it with its adjacent `<name>.sig`.
+          WINDOWS_MSI="$(ls ./*.msi 2>/dev/null | head -n1 | sed 's|^\./||' || true)"
+          if [ -n "$WINDOWS_MSI" ]; then
+            add_platform windows-x86_64 "${WINDOWS_MSI}.sig" "${BASE}/${WINDOWS_MSI}"
+          else
+            echo "note: no MSI found — omitting windows-x86_64 from latest.json"
           fi
 
           jq -n \
