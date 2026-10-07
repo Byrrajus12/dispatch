@@ -15,6 +15,7 @@ import { OriginLander } from './originLanding.js';
 import { mergeQueuePath, runsDir } from './paths.js';
 import { type CommandRunner, defaultCommandRunner } from './pr.js';
 import type { CommandResult, RepoPr } from './pr.js';
+import { withProtoShims } from './protoShims.js';
 import { trimWorktree } from './trim.js';
 import type { RunMeta } from './types.js';
 import {
@@ -1300,7 +1301,7 @@ export class MergeQueue {
     const record = entry.steps?.[index];
     const result = await this.run(
       meta.worktreePath,
-      ['bash', '-lc', step.command],
+      ['bash', '-lc', withProtoShims(meta.worktreePath, step.command)],
       {
         timeoutMs: timeoutSec * 1000,
         // Each chunk goes out as its own event and is appended to a bounded tail
