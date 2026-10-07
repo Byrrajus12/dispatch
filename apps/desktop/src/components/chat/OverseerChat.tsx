@@ -516,6 +516,10 @@ function OverseerOutcomeRow({
 // How many chips a tool run shows before "+N".
 const SHOWN_TOOLS = 6;
 
+// How close to the bottom (px) the transcript counts as "at the bottom", so new
+// rows keep following a reader who is a few pixels short of the end.
+const FOLLOW_SLACK_PX = 48;
+
 /** One turn's tool calls as a chip row; the raw results stay behind "details". */
 function ToolRun({
   calls,
@@ -659,12 +663,27 @@ export function OverseerChat({
   // can change what's at the bottom without changing how many rows there are.
   // Mount counts as a change: every surface that renders this chat mounts it
   // with a real layout box, so there is no zero-scrollHeight case to skip.
+  //
+  // The pin only follows a reader who is at (or within FOLLOW_SLACK_PX of) the
+  // bottom; `followRef` is that answer as of the last scroll event. It is read
+  // from `onScroll` rather than measured in the effect because by the time the
+  // effect runs the new row is already in `scrollHeight`, so a reader who was
+  // at the bottom would look scrolled up. Scrolling back down re-attaches, and
+  // so does sending a message (see `submitDraft`).
   const scrollRef = useRef<HTMLDivElement>(null);
+  const followRef = useRef(true);
   const lastKey = thread.length > 0 ? thread[thread.length - 1].key : '';
   useEffect(() => {
     const el = scrollRef.current;
-    if (el !== null) el.scrollTop = el.scrollHeight;
+    if (el !== null && followRef.current) el.scrollTop = el.scrollHeight;
   }, [thread.length, lastKey]);
+
+  function onLogScroll() {
+    const el = scrollRef.current;
+    if (el === null) return;
+    followRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight <= FOLLOW_SLACK_PX;
+  }
 
   // A turn is in flight — dispatchd 409s a second message until it settles.
   // Confirm cards stay live on purpose: the server accepts a decision mid-turn.
@@ -702,6 +721,9 @@ export function OverseerChat({
     const text = draft.trim();
     // A durable conversation takes a message mid-turn: the daemon queues it.
     if (text === '' || sending || (busy && !durable)) return;
+    // The reader asked for a reply, so their message and the answer should be
+    // in view even if they had scrolled up to read.
+    followRef.current = true;
     void overseer.submit(text);
   }
 
@@ -957,7 +979,8 @@ export function OverseerChat({
         ref={scrollRef}
         role="log"
         aria-label="Overseer conversation"
-        className="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto [overflow-wrap:anywhere]"
+        onScroll={onLogScroll}
+        className="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto [overflow-wrap:anywhere] [&>*]:shrink-0"
       >
         {(durable
           ? groupConfirmRows(groupToolRows(thread))

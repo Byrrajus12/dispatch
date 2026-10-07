@@ -465,6 +465,107 @@ test('a new transcript row re-pins to the bottom', () => {
   expect(log.scrollTop).toBe(480);
 });
 
+// The pin follows only a reader already at the bottom: one who scrolled up to
+// read (a tool run's details, an earlier reply) keeps their place while the
+// turn keeps adding rows below them.
+test('a reader scrolled up stays put when a new row arrives', () => {
+  const messages = [
+    { role: 'user' as const, text: 'status?', at: '2026-08-10T00:00:01Z' },
+  ];
+  const { rerender } = render(
+    <OverseerChat
+      overseer={overseerSession({
+        conversationId: 'w-1',
+        record: overseerRecord({ messages }),
+      })}
+      compact
+    />
+  );
+
+  const log = screen.getByRole('log');
+  Object.defineProperty(log, 'scrollHeight', {
+    value: 900,
+    configurable: true,
+  });
+  Object.defineProperty(log, 'clientHeight', {
+    value: 300,
+    configurable: true,
+  });
+  Object.defineProperty(log, 'scrollTop', {
+    value: 100,
+    writable: true,
+    configurable: true,
+  });
+  fireEvent.scroll(log);
+
+  rerender(
+    <OverseerChat
+      overseer={overseerSession({
+        conversationId: 'w-1',
+        record: overseerRecord({
+          messages: [
+            ...messages,
+            {
+              role: 'assistant',
+              text: 'All quiet.',
+              at: '2026-08-10T00:00:02Z',
+            },
+          ],
+        }),
+      })}
+      compact
+    />
+  );
+  expect(log.scrollTop).toBe(100);
+});
+
+// Sending is an explicit "show me the answer": it re-attaches a reader who had
+// scrolled up, so their own message and the reply land in view.
+test('sending a message re-pins a reader who had scrolled up', async () => {
+  const messages = [
+    { role: 'user' as const, text: 'status?', at: '2026-08-10T00:00:01Z' },
+  ];
+  const session = (msgs: typeof messages) =>
+    overseerSession({
+      conversationId: 'w-1',
+      record: overseerRecord({ messages: msgs }),
+    });
+  const { rerender } = render(
+    <ChatWithDraft overseer={session(messages)} compact />
+  );
+
+  const log = screen.getByRole('log');
+  Object.defineProperty(log, 'scrollHeight', {
+    value: 900,
+    configurable: true,
+  });
+  Object.defineProperty(log, 'clientHeight', {
+    value: 300,
+    configurable: true,
+  });
+  Object.defineProperty(log, 'scrollTop', {
+    value: 100,
+    writable: true,
+    configurable: true,
+  });
+  fireEvent.scroll(log);
+
+  fireEvent.change(screen.getByLabelText('Follow-up message'), {
+    target: { value: 'and the queue?' },
+  });
+  await clickAndSettle(screen.getByRole('button', { name: 'Send' }));
+  rerender(
+    <ChatWithDraft
+      overseer={session([
+        ...messages,
+        { role: 'user', text: 'and the queue?', at: '2026-08-10T00:00:02Z' },
+      ])}
+      compact
+    />
+  );
+  expect(log.scrollTop).toBe(900);
+});
+
 // The case `lastKey` is in the scroll effect's deps for, and the one the
 // row-count test above cannot reach: a turn settling in place. While the
 // record is `running` the thread is [user message, pending spinner]; when it
