@@ -1,6 +1,6 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Options, Query } from '@anthropic-ai/claude-agent-sdk';
-import { DEFAULT_REPO_DIGEST } from '@dispatch-foo/core';
+import { agentEnv, DEFAULT_REPO_DIGEST } from '@dispatch-foo/core';
 import type { RepoDigestConfig } from '@dispatch-foo/core';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -141,6 +141,7 @@ export async function generateRepoDigest(
 ): Promise<DigestResult> {
   const options: Options = {
     cwd: rootDir,
+    env: agentEnv(),
     permissionMode: 'plan',
     systemPrompt: { type: 'preset', preset: 'claude_code' },
     settingSources: ['project', 'local'],

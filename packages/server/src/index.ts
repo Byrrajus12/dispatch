@@ -470,7 +470,8 @@ const DESKTOP_DIST_DIR = join(
 // Codex is offered only when its CLI is actually installed, so no picker ever
 // lists an executor whose first run would die on spawn.
 export function registerCodexIfInstalled(orchestrator: Orchestrator): void {
-  if (Bun.which('codex') === null) return;
+  // Bun.which snapshots PATH at startup, so pass the live one (boot widens it).
+  if (Bun.which('codex', { PATH: process.env.PATH }) === null) return;
   orchestrator.registerExecutor('codex', new CodexExecutor());
 }
 

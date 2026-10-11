@@ -1,6 +1,6 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Options, Query } from '@anthropic-ai/claude-agent-sdk';
-import { loadConfig } from '@dispatch-foo/core';
+import { agentEnv, loadConfig } from '@dispatch-foo/core';
 
 import { openClaudeQuery } from '../orchestrator/claudeCli.js';
 
@@ -59,6 +59,7 @@ export class CommitMessageGenerator {
     try {
       const options: Options = {
         cwd: this.rootDir,
+        env: agentEnv(),
         model: loadConfig(this.rootDir).models.summarize,
         permissionMode: 'plan',
         // No built-in tools and no MCP servers: the prompt carries an untrusted

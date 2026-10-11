@@ -1,7 +1,13 @@
 import { credentialsPath, TaskStore } from '@dispatch-foo/core';
 import type { SetupReport } from '@dispatch-foo/core';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,12 +15,14 @@ import { setSetupCheckDepsForTest } from '../src/api/setup.js';
 import type { ServerHandle } from '../src/index.js';
 import { startServer } from '../src/index.js';
 import { FakeExecutor } from '../src/orchestrator/executors/fake.js';
-import { useTestAuth } from './testAuth.js';
+import { rawFetch, useTestAuth } from './testAuth.js';
 
 let root: string;
 let home: string;
 let handle: ServerHandle;
 let baseUrl: string;
+// Names passed to registerExecutor after boot, to prove refresh never re-registers a live one.
+let lateRegistrations: string[];
 const originalHome = process.env.DISPATCH_HOME;
 
 beforeEach(async () => {
@@ -49,11 +57,18 @@ beforeEach(async () => {
     rootDir: root,
     port: 0,
     writeDaemonFile: false,
-    registerExecutors: (o) =>
+    registerExecutors: (o) => {
+      lateRegistrations = [];
       o.registerExecutor(
         'claude',
         new FakeExecutor({ steps: [], finish: { state: 'finished' as const } })
-      ),
+      );
+      const register = o.registerExecutor.bind(o);
+      o.registerExecutor = (name, executor) => {
+        lateRegistrations.push(name);
+        register(name, executor);
+      };
+    },
   });
   useTestAuth(handle);
   baseUrl = `http://127.0.0.1:${handle.port}`;
@@ -118,11 +133,60 @@ describe('/api/setup', () => {
     ).toBe(400);
   });
 
-  it('refresh returns the executors it newly registered', async () => {
-    const body = (await (await post('/api/setup/refresh', {})).json()) as {
-      added: string[];
-    };
-    expect(Array.isArray(body.added)).toBe(true);
-    expect(body.added).not.toContain('claude');
+  it('refresh registers newly installed agents without disturbing live ones', async () => {
+    const bin = mkdtempSync(join(tmpdir(), 'dispatch-setup-bin-'));
+    const originalPath = process.env.PATH;
+    try {
+      const names = async () =>
+        (
+          (await (await fetch(`${baseUrl}/api/executors`)).json()) as {
+            executors: { name: string }[];
+          }
+        ).executors.map((e) => e.name);
+      expect(await names()).toContain('claude');
+      expect(await names()).not.toContain('gemini');
+
+      writeFileSync(join(bin, 'gemini'), '#!/bin/sh\nexit 0\n');
+      chmodSync(join(bin, 'gemini'), 0o755);
+      process.env.PATH = `${bin}:${originalPath ?? ''}`;
+
+      const first = (await (await post('/api/setup/refresh', {})).json()) as {
+        added: string[];
+      };
+      expect(first.added).toContain('gemini');
+      expect(first.added).not.toContain('claude');
+      const second = (await (await post('/api/setup/refresh', {})).json()) as {
+        added: string[];
+      };
+      expect(second.added).toEqual([]);
+      expect(await names()).toEqual(
+        expect.arrayContaining(['claude', 'gemini'])
+      );
+      expect(lateRegistrations).not.toContain('claude');
+    } finally {
+      process.env.PATH = originalPath;
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses the agent token on both writes', async () => {
+    const asAgent = (path: string, body: unknown) =>
+      rawFetch(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${handle.tokens.agentToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+    expect(
+      (
+        await asAgent('/api/setup/agent-key', {
+          provider: 'codex',
+          apiKey: 'sk-1',
+        })
+      ).status
+    ).toBe(403);
+    expect((await asAgent('/api/setup/refresh', {})).status).toBe(403);
   });
 });
