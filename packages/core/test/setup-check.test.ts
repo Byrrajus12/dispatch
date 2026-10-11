@@ -1,7 +1,11 @@
 // packages/core/test/setup-check.test.ts
 import { describe, expect, it } from 'bun:test';
 
-import { runSetupCheck, type SetupCheckDeps } from '../src/setup/check.js';
+import {
+  defaultSetupCheckDeps,
+  runSetupCheck,
+  type SetupCheckDeps,
+} from '../src/setup/check.js';
 import type { ProbeResult } from '../src/setup/types.js';
 
 type Script = Record<string, ProbeResult>;
@@ -242,5 +246,72 @@ describe('runSetupCheck', () => {
       fix: { label: 'Install Claude Code' },
     });
     expect(agent.message).not.toContain("won't start");
+  });
+});
+
+describe('the macOS git stub', () => {
+  const stubDeps = (tools: ProbeResult, platform: string) => {
+    const calls: string[] = [];
+    const d: SetupCheckDeps = {
+      path: '/usr/bin',
+      which: (b) => (b === 'git' ? '/usr/bin/git' : null),
+      run: (command, args) => {
+        const key = `${command} ${args.join(' ')}`;
+        calls.push(key);
+        if (key === 'xcode-select -p') return Promise.resolve(tools);
+        if (key === '/usr/bin/git --version')
+          return Promise.resolve(ok('git version 2'));
+        return Promise.resolve(ok('x'));
+      },
+      env: {},
+      savedAgentKeys: {},
+      platform,
+    };
+    return { d, calls };
+  };
+
+  it('reports git missing without running the stub when the tools are absent', async () => {
+    const { d, calls } = stubDeps(fail('no developer tools'), 'darwin');
+    const r = await runSetupCheck({ rootDir: '/p' }, d);
+    expect(step(r, 'git')).toMatchObject({
+      status: 'missing',
+      fix: { kind: 'install-git' },
+    });
+    expect(step(r, 'project').status).toBe('unknown');
+    expect(calls.some((c) => c.startsWith('/usr/bin/git'))).toBe(false);
+  });
+
+  it('runs /usr/bin/git when the tools are installed', async () => {
+    const { d, calls } = stubDeps(
+      ok('/Library/Developer/CommandLineTools'),
+      'darwin'
+    );
+    await runSetupCheck({}, d);
+    expect(calls).toContain('/usr/bin/git --version');
+  });
+
+  it('never asks xcode-select off macOS', async () => {
+    const { d, calls } = stubDeps(fail(), 'linux');
+    await runSetupCheck({}, d);
+    expect(calls).not.toContain('xcode-select -p');
+    expect(calls).toContain('/usr/bin/git --version');
+  });
+});
+
+describe('defaultSetupCheckDeps', () => {
+  it('keeps daemon secrets out of probed binaries', async () => {
+    const before = process.env.DISPATCH_APP_TOKEN;
+    process.env.DISPATCH_APP_TOKEN = 'app-secret';
+    try {
+      const r = await defaultSetupCheckDeps().run('env', [], {
+        timeoutMs: 5_000,
+      });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('PATH=');
+      expect(r.stdout).not.toContain('app-secret');
+    } finally {
+      if (before === undefined) delete process.env.DISPATCH_APP_TOKEN;
+      else process.env.DISPATCH_APP_TOKEN = before;
+    }
   });
 });

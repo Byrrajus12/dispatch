@@ -58,6 +58,12 @@ describe('agent API keys', () => {
     expect(agentEnv().OPENAI_API_KEY).toBe('sk-env');
   });
 
+  it('applies a saved key when the real variable is set but empty', () => {
+    writeAgentKey('OPENAI_API_KEY', 'sk-saved');
+    process.env.OPENAI_API_KEY = '';
+    expect(agentEnv().OPENAI_API_KEY).toBe('sk-saved');
+  });
+
   it('lets `extra` win over both', () => {
     writeAgentKey('OPENAI_API_KEY', 'sk-saved');
     expect(agentEnv({ OPENAI_API_KEY: 'sk-extra' }).OPENAI_API_KEY).toBe(

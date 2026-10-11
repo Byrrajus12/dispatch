@@ -1,6 +1,7 @@
 // packages/core/src/setup/check.ts
 import { execFile } from 'node:child_process';
 
+import { childEnv } from '../childEnv.js';
 import { readAgentKeys } from './agentEnv.js';
 import { whichOnPath, widenedPath } from './path.js';
 import { providerById, PROVIDERS, resolveInstallFix } from './providers.js';
@@ -28,6 +29,8 @@ export interface SetupCheckDeps {
   ) => Promise<ProbeResult>;
   env: Record<string, string | undefined>;
   savedAgentKeys: Record<string, string>;
+  /** Defaults to process.platform; tests pin it. */
+  platform?: string;
 }
 
 const PROBE_TIMEOUT_MS = 10_000;
@@ -37,10 +40,25 @@ const firstLine = (r: ProbeResult) =>
     r.error ?? (r.stderr.trim() !== '' ? r.stderr.trim() : r.stdout.trim())
   ).split('\n')[0];
 
+// On macOS without the command line tools, /usr/bin/git is a stub that pops Apple's
+// installer when run, so check for the tools before touching it.
+async function isGitStub(git: string, deps: SetupCheckDeps): Promise<boolean> {
+  if (
+    (deps.platform ?? process.platform) !== 'darwin' ||
+    git !== '/usr/bin/git'
+  )
+    return false;
+  const tools = await deps.run('xcode-select', ['-p'], {
+    timeoutMs: PROBE_TIMEOUT_MS,
+  });
+  return tools.status !== 0;
+}
+
 async function gitStep(deps: SetupCheckDeps): Promise<SetupStep> {
   const git = deps.which('git');
   if (
     git === null ||
+    (await isGitStub(git, deps)) ||
     (await deps.run(git, ['--version'], { timeoutMs: PROBE_TIMEOUT_MS }))
       .status !== 0
   ) {
@@ -82,7 +100,7 @@ async function projectStep(
   deps: SetupCheckDeps
 ): Promise<SetupStep> {
   const git = deps.which('git');
-  if (git === null)
+  if (git === null || (await isGitStub(git, deps)))
     return { id: 'project', status: 'unknown', message: 'Install Git first.' };
   const inside = await deps.run(
     git,
@@ -273,7 +291,7 @@ export async function runSetupCheck(
   };
 }
 
-/** Real deps: the widened PATH, node's execFile with a timeout, this process's env. */
+/** Real deps: the widened PATH, node's execFile with a timeout (and no daemon secrets), this process's env. */
 export function defaultSetupCheckDeps(): SetupCheckDeps {
   const path = widenedPath();
   return {
@@ -288,7 +306,7 @@ export function defaultSetupCheckDeps(): SetupCheckDeps {
             cwd: opts.cwd,
             timeout: opts.timeoutMs,
             killSignal: 'SIGKILL',
-            env: { ...process.env, PATH: path },
+            env: childEnv({ PATH: path }),
             encoding: 'utf8',
           },
           (error, stdout, stderr) => {

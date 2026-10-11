@@ -35,9 +35,13 @@ export function writeAgentKey(envVar: string, apiKey: string | null): void {
   });
 }
 
-/** Env for an agent process: saved keys, overridden by the real env, then `extra`. */
+/** Env for an agent process: saved keys, overridden by a non-empty real env, then `extra`. */
 export function agentEnv(
   extra: Record<string, string> = {}
 ): Record<string, string> {
-  return { ...readAgentKeys(), ...childEnv(extra) };
+  const saved = readAgentKeys();
+  const real = childEnv();
+  // An empty variable would hide the saved key while Setup reports the key in use.
+  for (const key of Object.keys(saved)) if (real[key] === '') delete real[key];
+  return { ...saved, ...real, ...extra };
 }
