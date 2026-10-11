@@ -2,7 +2,7 @@
 //! Pre-daemon setup: what the first-launch screen needs before any project (and so
 //! any dispatchd) exists — git itself, git's identity, and making a folder a repo.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::Serialize;
@@ -47,7 +47,8 @@ build/
 ";
 
 fn git(args: &[&str], cwd: Option<&Path>, extra_env: &[(&str, &str)]) -> Result<String, String> {
-    let mut cmd = Command::new("git");
+    let bin = git_binary().ok_or_else(|| "git is not installed".to_string())?;
+    let mut cmd = Command::new(bin);
     cmd.args(args).env("PATH", enriched_child_path());
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
@@ -75,22 +76,34 @@ pub(crate) fn linux_install_hint(os_release: &str) -> String {
     }
 }
 
-// On macOS /usr/bin/git is a stub that pops Apple's installer when run without the
-// command line tools, so check for the tools instead of running it.
-fn git_installed() -> bool {
-    if cfg!(target_os = "macos") {
-        let real_git_elsewhere = std::env::split_paths(&enriched_child_path())
-            .filter(|d| d != Path::new("/usr/bin"))
-            .any(|d| d.join("git").is_file());
-        let clt = Command::new("xcode-select")
-            .arg("-p")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        real_git_elsewhere || clt
-    } else {
-        git(&["--version"], None, &[]).is_ok()
+// Picks the git to run. On macOS without the command line tools, /usr/bin/git is a stub
+// that pops Apple's installer, so only a git found in another PATH dir is usable.
+pub(crate) fn select_git(clt_present: bool, dirs: &[PathBuf]) -> Option<PathBuf> {
+    if clt_present {
+        return Some(PathBuf::from("git"));
     }
+    dirs.iter()
+        .filter(|d| d.as_path() != Path::new("/usr/bin"))
+        .map(|d| d.join("git"))
+        .find(|p| p.is_file())
+}
+
+// Resolves the git binary for this call (not cached, so installing the tools is noticed).
+fn git_binary() -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return Some(PathBuf::from("git"));
+    }
+    let clt = Command::new("xcode-select")
+        .arg("-p")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let dirs: Vec<PathBuf> = std::env::split_paths(&enriched_child_path()).collect();
+    select_git(clt, &dirs)
+}
+
+fn git_installed() -> bool {
+    git_binary().is_some() && git(&["--version"], None, &[]).is_ok()
 }
 
 #[tauri::command]
@@ -156,8 +169,14 @@ pub fn set_git_identity(name: String, email: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn project_folder_state(path: String) -> FolderState {
-    let dir = Path::new(&path);
+pub async fn project_folder_state(path: String) -> Result<FolderState, String> {
+    tauri::async_runtime::spawn_blocking(move || project_folder_state_sync(&path))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn project_folder_state_sync(path: &str) -> FolderState {
+    let dir = Path::new(path);
     let is_dir = dir.is_dir();
     let is_git_repo = is_dir
         && git(&["rev-parse", "--is-inside-work-tree"], Some(dir), &[])
@@ -212,8 +231,10 @@ pub(crate) fn prepare_project_folder_with(
 }
 
 #[tauri::command]
-pub fn prepare_project_folder(path: String) -> Result<(), String> {
-    prepare_project_folder_with(Path::new(&path), &[])
+pub async fn prepare_project_folder(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || prepare_project_folder_with(Path::new(&path), &[]))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -235,6 +256,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn select_git_uses_plain_git_when_tools_present() {
+        let dirs = vec![PathBuf::from("/usr/bin")];
+        assert_eq!(select_git(true, &dirs), Some(PathBuf::from("git")));
+    }
+
+    #[test]
+    fn select_git_skips_the_stub_dir_without_tools() {
+        let dir = temp_dir("select-git");
+        std::fs::write(dir.join("git"), "").unwrap();
+        let dirs = vec![PathBuf::from("/usr/bin"), dir.clone()];
+        assert_eq!(select_git(false, &dirs), Some(dir.join("git")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn select_git_is_none_with_only_the_stub() {
+        let dirs = vec![PathBuf::from("/usr/bin")];
+        assert_eq!(select_git(false, &dirs), None);
     }
 
     #[test]
