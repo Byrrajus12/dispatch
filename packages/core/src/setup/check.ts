@@ -211,6 +211,14 @@ function agentStep(
       status: 'missing',
       message: 'Choose an AI agent to do the work.',
     };
+  if (!chosen.installed) {
+    return {
+      id: 'agent',
+      status: 'missing',
+      message: `${chosen.name} isn't installed yet.`,
+      ...(chosen.install === undefined ? {} : { fix: chosen.install }),
+    };
+  }
   if (!chosen.works) {
     return {
       id: 'agent',
@@ -279,6 +287,7 @@ export function defaultSetupCheckDeps(): SetupCheckDeps {
           {
             cwd: opts.cwd,
             timeout: opts.timeoutMs,
+            killSignal: 'SIGKILL',
             env: { ...process.env, PATH: path },
             encoding: 'utf8',
           },

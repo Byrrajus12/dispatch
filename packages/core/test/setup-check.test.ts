@@ -227,4 +227,20 @@ describe('runSetupCheck', () => {
     );
     expect(codexOnly.defaultProvider).toBe('codex');
   });
+
+  it('says the default agent is not installed (not broken) when only another agent is broken', async () => {
+    const r = await runSetupCheck(
+      {},
+      deps(['git', 'codex', 'curl', 'bash'], {
+        ...GIT_OK,
+        'codex --version': fail('boom'),
+      })
+    );
+    const agent = step(r, 'agent');
+    expect(agent).toMatchObject({
+      status: 'missing',
+      fix: { label: 'Install Claude Code' },
+    });
+    expect(agent.message).not.toContain("won't start");
+  });
 });
