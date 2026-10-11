@@ -217,9 +217,19 @@ test('continue is disabled until the agent step is ok or unknown', async () => {
 });
 
 test('continue is enabled for a ready agent and makes it the default', async () => {
+  const base = report();
   const ready = report({
     steps: [{ id: 'agent', status: 'ok', message: 'Codex is ready.' }],
     defaultProvider: 'codex',
+    providers: [
+      {
+        ...base.providers[1],
+        installed: true,
+        works: true,
+        ready: true,
+        auth: 'signed-in',
+      },
+    ],
   });
   const { onSetDefault, onContinue } = setup(ready);
   await click(await screen.findByText('Continue'));
@@ -232,5 +242,55 @@ test('never shows internal words', async () => {
   await screen.findByText("Claude Code isn't signed in.");
   expect(document.body.textContent).not.toMatch(
     /dispatchd|\.dispatch\/|tracker|worktree|executor/i
+  );
+});
+
+test('continue follows the selected agent, not the default', async () => {
+  const signedOutDefault = report({
+    defaultProvider: 'codex',
+    steps: [{ id: 'agent', status: 'ok', message: 'Codex is ready.' }],
+    providers: [
+      {
+        ...report().providers[0],
+        id: 'codex',
+        name: 'Codex',
+        ready: true,
+        auth: 'signed-in',
+      },
+      report().providers[0],
+    ],
+  });
+  setup(signedOutDefault);
+  const button = (await screen.findByText('Continue')).closest('button');
+  expect(button?.disabled).toBe(false);
+  await click(screen.getByLabelText('Use Claude Code'));
+  await waitFor(() => expect(button?.disabled).toBe(true));
+});
+
+test('continue is enabled for a ready selection even when the default needs action', async () => {
+  const mixed = report();
+  mixed.providers[1] = {
+    ...mixed.providers[1],
+    installed: true,
+    works: true,
+    ready: true,
+    auth: 'signed-in',
+  };
+  setup(mixed);
+  const button = (await screen.findByText('Continue')).closest('button');
+  expect(button?.disabled).toBe(true);
+  await click(screen.getByLabelText('Use Codex'));
+  await waitFor(() => expect(button?.disabled).toBe(false));
+});
+
+test('re-checks the machine after an install command exits', async () => {
+  const { client } = setup();
+  client.fetchTerminal.mockImplementation(() =>
+    Promise.resolve({ id: 't1', state: 'exited', pty: true, exitCode: 0 })
+  );
+  await click(await screen.findByText('Install Codex'));
+  await waitFor(() => expect(client.refreshSetup).toHaveBeenCalled());
+  await waitFor(() =>
+    expect(client.fetchSetup.mock.calls.length).toBeGreaterThan(1)
   );
 });

@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { openUrl } from '../../lib/tauri';
 import { CommandTerminal } from './CommandTerminal';
 import { DetailsDisclosure } from './DetailsDisclosure';
+import { errorText } from './errorText';
 import { SetupStepRow } from './SetupStepRow';
 import { Badge } from '@/ui/badge';
 import { Button } from '@/ui/button';
@@ -28,12 +29,6 @@ type Running = {
 
 /** A plain sentence for the screen plus the raw reason for the Details disclosure. */
 type Problem = { sentence: string; detail: string };
-
-// Tauri rejects with plain strings, the daemon client with Errors.
-function errorText(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return typeof err === 'string' ? err : 'Unknown error';
-}
 
 function problemOf(sentence: string, err: unknown): Problem {
   return { sentence, detail: errorText(err) };
@@ -83,7 +78,14 @@ export function AgentStep({
       Number(b.ready) - Number(a.ready) ||
       Number(b.installed) - Number(a.installed)
   );
-  const canContinue = step.status === 'ok' || step.status === 'unknown';
+  const selectedProvider = data.providers.find((p) => p.id === selected);
+  // Follows the picked provider; with nothing picked, the overall step decides.
+  const canContinue =
+    selectedProvider === undefined
+      ? step.status === 'ok' || step.status === 'unknown'
+      : selectedProvider.installed &&
+        selectedProvider.works &&
+        (selectedProvider.ready || selectedProvider.auth === 'unknown');
 
   // Re-reads the machine after an install or sign-in so the row reflects it.
   async function recheck() {

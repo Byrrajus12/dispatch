@@ -6,6 +6,7 @@ import { createInputQueue } from '../../lib/terminalInput';
 import { encodeKey } from '../../lib/terminalKeys';
 import { TerminalCanvas } from '../terminal/TerminalCanvas';
 import { DetailsDisclosure } from './DetailsDisclosure';
+import { errorText } from './errorText';
 
 interface CommandTerminalProps {
   client: ApiClient;
@@ -39,17 +40,7 @@ export function CommandTerminal({
     client
       .createTerminal(launch.current)
       .then((t) => !cancelled && setTerminalId(t.id))
-      .catch(
-        (err: unknown) =>
-          !cancelled &&
-          setStartError(
-            err instanceof Error
-              ? err.message
-              : typeof err === 'string'
-                ? err
-                : 'Unknown error'
-          )
-      );
+      .catch((err: unknown) => !cancelled && setStartError(errorText(err)));
     return () => {
       cancelled = true;
     };

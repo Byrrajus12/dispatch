@@ -120,7 +120,11 @@ import { buildPosts, type Post } from './lib/posts';
 import { basename } from './lib/projectName';
 import { prNumberFromUrl } from './lib/reviewTarget';
 import { isTerminalRunState } from './lib/runState';
-import { readSetupComplete, writeSetupComplete } from './lib/setupState';
+import {
+  readSetupComplete,
+  shouldAutoComplete,
+  writeSetupComplete,
+} from './lib/setupState';
 import { useStatusModelOf } from './lib/statusModel';
 import { computeBlockedIds } from './lib/taskGraph';
 import { itemBucket, queuedTaskIds, taskStatusCounts } from './lib/taskStatus';
@@ -1258,18 +1262,25 @@ function App() {
     },
     enabled: !setupComplete && setupClient !== null && gateScreen === null,
   });
-  const setupAllOk = setupReport?.steps.every((s) => s.status === 'ok');
+  // Decided once, from the first report: later reports (after an install or
+  // sign-in) must not dismiss Setup before the chosen agent is saved.
+  const [setupShown, setSetupShown] = useState(false);
+  const setupDecided = useRef(false);
   useEffect(() => {
-    if (setupAllOk === true) {
+    if (setupReport === undefined || setupDecided.current) return;
+    setupDecided.current = true;
+    if (shouldAutoComplete(setupReport)) {
       writeSetupComplete();
       setSetupComplete(true);
+    } else {
+      setSetupShown(true);
     }
-  }, [setupAllOk]);
+  }, [setupReport]);
   const agentSetupScreen: ReactNode =
     !setupComplete &&
     gateScreen === null &&
     setupClient !== null &&
-    setupAllOk === false ? (
+    setupShown ? (
       <SetupView
         projectPath={root ?? null}
         onProjectChosen={() => Promise.resolve()}

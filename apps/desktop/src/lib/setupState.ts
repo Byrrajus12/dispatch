@@ -1,3 +1,5 @@
+import type { SetupReport } from '@dispatch-foo/core/browser';
+
 // Whether this machine finished Setup. localStorage, like reviewViewed: it's about
 // this desk, not the project, and losing it only shows Setup once more.
 
@@ -19,4 +21,9 @@ export function writeSetupComplete(): void {
   } catch {
     // Blocked storage only means Setup shows again next launch.
   }
+}
+
+/** True when the first report finds nothing to fix, so Setup can finish silently. */
+export function shouldAutoComplete(firstReport: SetupReport): boolean {
+  return firstReport.steps.every((s) => s.status === 'ok');
 }
