@@ -237,6 +237,55 @@ pub async fn prepare_project_folder(path: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
+/// Symlinks `bundled` as `dispatch` into the first candidate dir that exists (or,
+/// for ~/.local/bin, can be created) and is writable. No sudo: /usr/local/bin is
+/// tried first and skipped when not writable.
+pub(crate) fn link_cli(bundled: &Path, candidates: &[PathBuf]) -> Result<PathBuf, String> {
+    for dir in candidates {
+        let is_home_local = dir.ends_with(".local/bin");
+        if !dir.is_dir() && is_home_local {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if !dir.is_dir() {
+            continue;
+        }
+        let target = dir.join("dispatch");
+        let _ = std::fs::remove_file(&target);
+        #[cfg(unix)]
+        if std::os::unix::fs::symlink(bundled, &target).is_ok() {
+            return Ok(target);
+        }
+    }
+    Err("No writable folder on your PATH. Add ~/.local/bin to PATH and try again.".into())
+}
+
+/// Links the bundled `dispatch` CLI onto the user's PATH and returns the linked path.
+#[tauri::command]
+pub async fn install_cli_command(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri::Manager;
+    let bundled = app
+        .path()
+        .resource_dir()
+        .map_err(|e| e.to_string())?
+        .join("resources")
+        .join("dispatch-cli");
+    tauri::async_runtime::spawn_blocking(move || {
+        if !bundled.is_file() {
+            return Err(
+                "This build doesn't include the dispatch command (dev builds don't).".to_string(),
+            );
+        }
+        let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+        link_cli(
+            &bundled,
+            &["/usr/local/bin".into(), Path::new(&home).join(".local/bin")],
+        )
+        .map(|p| p.display().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,6 +305,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn links_the_cli_into_the_first_writable_dir() {
+        let base = temp_dir("cli-link");
+        let bundled = base.join("dispatch-cli");
+        std::fs::write(&bundled, "#!/bin/sh\n").unwrap();
+        let unwritable = base.join("missing/bin");
+        let writable = base.join("home/.local/bin");
+
+        let linked = link_cli(&bundled, &[unwritable.clone(), writable.clone()]).unwrap();
+
+        assert_eq!(linked, writable.join("dispatch"));
+        assert_eq!(std::fs::read_link(&linked).unwrap(), bundled);
+        // Idempotent: a second run replaces the link instead of failing.
+        assert_eq!(
+            link_cli(&bundled, &[unwritable, writable.clone()]).unwrap(),
+            writable.join("dispatch")
+        );
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

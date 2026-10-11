@@ -65,6 +65,7 @@ import {
 import { TakeOverDaemon } from '../components/settings/TakeOverDaemon';
 import { TeamSection } from '../components/settings/TeamSection';
 import { AgentStep } from '../components/setup/AgentStep';
+import { CliCommandStep } from '../components/setup/CliCommandStep';
 import { GitStep } from '../components/setup/GitStep';
 import type { DispatchProjectData } from '../hooks/useDispatchProject';
 import type { SettingsPage } from '../lib/appNav';
@@ -173,6 +174,7 @@ const SETTINGS_GROUPS: { label: string; pages: PageSpec[] }[] = [
                 continueLabel="Save"
               />
             )}
+            <CliCommandStep />
           </>
         ),
       },

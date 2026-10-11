@@ -350,3 +350,7 @@ export function projectFolderState(path: string): Promise<FolderState> {
 export function prepareProjectFolder(path: string): Promise<void> {
   return invoke('prepare_project_folder', { path });
 }
+
+export function installCliCommand(): Promise<string> {
+  return invoke('install_cli_command');
+}
