@@ -460,3 +460,5 @@ export type { FailureExplanation } from './setup/failures.js';
 export { whichOnPath, widenPath, widenedPath } from './setup/path.js';
 export type { PathIo } from './setup/path.js';
 export { agentEnv, readAgentKeys, writeAgentKey } from './setup/agentEnv.js';
+export { defaultSetupCheckDeps, runSetupCheck } from './setup/check.js';
+export type { SetupCheckDeps, SetupCheckInput } from './setup/check.js';
