@@ -35,6 +35,7 @@ import { ThreadPeek } from './components/peek/ThreadPeek';
 import { PeopleProvider } from './components/people/PeopleContext';
 import { OverseerGrantsGroup } from './components/settings/OverseerGrantsGroup';
 import { AgentStep } from './components/setup/AgentStep';
+import { SetupBanner } from './components/setup/SetupBanner';
 import { AddProjectDialog } from './components/shell/AddProjectDialog';
 import { CommandPalette } from './components/shell/CommandPalette';
 import { DaemonUnavailable } from './components/shell/DaemonUnavailable';
@@ -1262,6 +1263,18 @@ function App() {
     },
     enabled: !setupComplete && setupClient !== null && gateScreen === null,
   });
+  // Background re-check once setup is done (signed out later, etc.). Shares the
+  // report key but never feeds the first-run decision below.
+  const { data: setupBannerReport } = useQuery({
+    queryKey: ['setup', 'report'],
+    queryFn: () => {
+      if (setupClient === null) throw new Error('dispatchd client not ready');
+      return setupClient.fetchSetup();
+    },
+    enabled: setupComplete && setupClient !== null,
+    refetchInterval: 5 * 60_000,
+    refetchOnWindowFocus: true,
+  });
   // Decided once, from the first report: later reports (after an install or
   // sign-in) must not dismiss Setup before the chosen agent is saved.
   const [setupShown, setSetupShown] = useState(false);
@@ -1772,6 +1785,16 @@ function App() {
       <TwoViewShell
         view={twoViewsState.mainView}
         gate={gateScreen ?? agentSetupScreen}
+        banner={
+          setupComplete ? (
+            <SetupBanner
+              report={setupBannerReport}
+              onOpen={() =>
+                dispatchNav({ type: 'tv/openSettings', page: 'setup' })
+              }
+            />
+          ) : undefined
+        }
         topBar={{
           view: twoViewsState.mainView,
           orb,

@@ -1,3 +1,4 @@
+import type { ConfigPatch } from '@dispatch-foo/core/browser';
 import type { LucideIcon } from 'lucide-react';
 import {
   Bell,
@@ -19,6 +20,7 @@ import {
   Settings2,
   ShieldCheck,
   Users,
+  Wrench,
   XIcon,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
@@ -62,6 +64,8 @@ import {
 } from '../components/settings/search';
 import { TakeOverDaemon } from '../components/settings/TakeOverDaemon';
 import { TeamSection } from '../components/settings/TeamSection';
+import { AgentStep } from '../components/setup/AgentStep';
+import { GitStep } from '../components/setup/GitStep';
 import type { DispatchProjectData } from '../hooks/useDispatchProject';
 import type { SettingsPage } from '../lib/appNav';
 import { isInsufficientTier } from '../lib/daemonAuth';
@@ -149,6 +153,29 @@ const SETTINGS_GROUPS: { label: string; pages: PageSpec[] }[] = [
   {
     label: 'Project',
     pages: [
+      {
+        id: 'setup',
+        label: 'Setup',
+        icon: Wrench,
+        intro: 'Git and your AI agents: install, sign in, or switch.',
+        savesConfig: false,
+        render: (ctx) => (
+          <>
+            <GitStep onReady={() => {}} />
+            {ctx.data.client !== null && (
+              <AgentStep
+                client={ctx.data.client}
+                onSetDefault={(executor) => {
+                  const patch: ConfigPatch = { executor };
+                  return ctx.save(patch);
+                }}
+                onContinue={() => {}}
+                continueLabel="Save"
+              />
+            )}
+          </>
+        ),
+      },
       {
         id: 'general',
         label: 'General',

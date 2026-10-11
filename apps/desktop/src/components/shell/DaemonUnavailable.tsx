@@ -1,8 +1,8 @@
 import { OctagonAlert } from 'lucide-react';
 
+import { DetailsDisclosure } from '../setup/DetailsDisclosure';
 import { Button } from '@/ui/button';
 import { EmptyState } from '@/ui/chrome';
-import { ScrollArea } from '@/ui/scroll-area';
 import { Spinner } from '@/ui/spinner';
 
 interface DaemonUnavailableProps {
@@ -14,7 +14,7 @@ interface DaemonUnavailableProps {
 }
 
 /**
- * The dispatchd-unreachable empty state, extracted from the original `BoardView` (I4 in the
+ * The background-service-unreachable empty state, extracted from the original `BoardView` (I4 in the
  * phase-8 fix report) so every primary dispatch view shows the *same* starting/error/retry
  * treatment instead of each one growing its own copy (or, worse, silently showing an
  * unrelated "Loading…" state forever when the daemon never came up at all — the bug this was
@@ -29,7 +29,10 @@ export function DaemonUnavailable({
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
         <Spinner className="text-muted-foreground size-5" />
-        <EmptyState message="Starting the task daemon…" className="p-0" />
+        <EmptyState
+          message="Starting Dispatch’s background service…"
+          className="p-0"
+        />
       </div>
     );
   }
@@ -39,19 +42,11 @@ export function DaemonUnavailable({
     <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
       <OctagonAlert className="text-destructive size-5" />
       <EmptyState
-        message="Couldn’t start dispatchd for this project"
+        message="Dispatch couldn’t start for this project"
         className="p-0"
         action={
           <>
-            {detail !== null && (
-              // EmptyState's action slot is `max-w-none` (unbounded), so the old `max-w-lg`
-              // cap has to be restored explicitly here rather than inherited.
-              <ScrollArea className="bg-secondary/50 max-h-48 w-full max-w-lg rounded-md">
-                <pre className="text-muted-foreground p-3 text-left font-mono text-[11px] whitespace-pre-wrap">
-                  {detail}
-                </pre>
-              </ScrollArea>
-            )}
+            {detail !== null && <DetailsDisclosure text={detail} />}
             <Button variant="secondary" size="sm" onClick={onRetry}>
               Retry
             </Button>

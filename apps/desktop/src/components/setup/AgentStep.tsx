@@ -19,6 +19,8 @@ interface AgentStepProps {
   /** Persists the chosen provider as the project's default agent. */
   onSetDefault: (providerId: string) => Promise<unknown>;
   onContinue: () => void;
+  /** Label of the confirm button; Settings uses "Save". */
+  continueLabel?: string;
 }
 
 type Running = {
@@ -48,6 +50,7 @@ export function AgentStep({
   client,
   onSetDefault,
   onContinue,
+  continueLabel = 'Continue',
 }: AgentStepProps) {
   const queryClient = useQueryClient();
   const { data } = useQuery({
@@ -144,7 +147,7 @@ export function AgentStep({
       message={step.message}
       action={
         <Button disabled={!canContinue} onClick={() => void proceed()}>
-          Continue
+          {continueLabel}
         </Button>
       }
       {...(step.detail === undefined ? {} : { detail: step.detail })}

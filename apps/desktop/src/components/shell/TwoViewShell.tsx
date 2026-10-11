@@ -9,6 +9,8 @@ export interface TwoViewShellProps {
   view: MainView;
   /** A resolution, sign-in or get-started screen; it replaces both views. */
   gate: ReactNode | null;
+  /** An app-wide notice strip under the top bar (setup problems). */
+  banner?: ReactNode;
   overseer: ReactNode;
   tasks: ReactNode;
   /** A drawer over either view; it never changes the view underneath. */
@@ -20,6 +22,7 @@ export function TwoViewShell({
   topBar,
   view,
   gate,
+  banner,
   overseer,
   tasks,
   peek,
@@ -30,6 +33,7 @@ export function TwoViewShell({
       className="flex min-h-0 flex-1 flex-col overflow-hidden"
     >
       <TwoViewTopBar {...topBar} />
+      {banner}
       <main className="bg-background border-border-panel shadow-panel rounded-popover relative mx-2 mb-2 min-h-0 flex-1 overflow-hidden border-[0.5px]">
         <ErrorBoundary label="this view">
           {gate ?? (
