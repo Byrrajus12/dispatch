@@ -672,3 +672,7 @@ cloudflared
 linkkeys
 LINKKEYS
 Cowork
+pacman
+xcrun
+charmbracelet
+charmland
