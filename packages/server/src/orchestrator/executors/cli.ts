@@ -1,5 +1,5 @@
 import type { ExecutorCommand } from '@dispatch-foo/core';
-import { childEnv } from '@dispatch-foo/core';
+import { agentEnv } from '@dispatch-foo/core';
 
 import { FLOOR_COMMAND_ACTIONS } from '../../floor.js';
 import type {
@@ -192,7 +192,7 @@ export class CliExecutor implements Executor {
       child = this.spawn({
         command: argv,
         cwd: opts.cwd,
-        env: childEnv(this.options.command.env),
+        env: agentEnv(this.options.command.env),
         stdinPrompt,
       });
     } catch (err) {

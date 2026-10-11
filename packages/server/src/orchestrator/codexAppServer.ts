@@ -1,4 +1,4 @@
-import { childEnv } from '@dispatch-foo/core';
+import { agentEnv } from '@dispatch-foo/core';
 import { spawn } from 'node:child_process';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
@@ -51,7 +51,7 @@ export function spawnCodexAppServer(
 ): ChildProcessWithoutNullStreams {
   return spawn(binary, binary === 'codex' ? ['app-server', '--stdio'] : [], {
     cwd,
-    env: childEnv(),
+    env: agentEnv(),
     stdio: 'pipe',
     windowsHide: true,
   });

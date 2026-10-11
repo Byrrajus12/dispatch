@@ -13,7 +13,7 @@ import {
   DISPATCH_MCP_TOOLS,
   DISPATCH_MESSAGING_TOOLS,
 } from '@dispatch-foo/core';
-import { childEnv } from '@dispatch-foo/core';
+import { agentEnv } from '@dispatch-foo/core';
 import type { CartoBinary } from '@dispatch-foo/core/carto';
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
 
@@ -195,7 +195,7 @@ export function experimentOptions(
   }
   return {
     disallowedTools: disallowed,
-    env: childEnv(
+    env: agentEnv(
       experiments.includes('cache-1h') ? { ENABLE_PROMPT_CACHING_1H: '1' } : {}
     ),
   };

@@ -489,7 +489,8 @@ export function registerCodexIfInstalled(orchestrator: Orchestrator): void {
  */
 export function registerCliExecutors(
   orchestrator: Orchestrator,
-  rootDir: string
+  rootDir: string,
+  skip: ReadonlySet<string> = new Set()
 ): void {
   // Boot must survive a malformed config.yml, the same way the carto and
   // prWorktreeDir reads below do: a config typo must cost the user their
@@ -508,9 +509,23 @@ export function registerCliExecutors(
     if (entry.command !== undefined) commands[name] = entry.command;
   }
   for (const [name, command] of Object.entries(commands)) {
-    if (name === 'claude' || name === 'codex') continue;
+    if (name === 'claude' || name === 'codex' || skip.has(name)) continue;
     orchestrator.registerExecutor(name, new CliExecutor({ command }));
   }
+}
+
+// Registers agents installed since boot (Setup's Install button), leaving live
+// executors alone. Returns the names it added.
+export function refreshExecutors(
+  orchestrator: Orchestrator,
+  rootDir: string
+): string[] {
+  const before = new Set(orchestrator.registeredExecutorNames());
+  if (!before.has('codex')) registerCodexIfInstalled(orchestrator);
+  registerCliExecutors(orchestrator, rootDir, before);
+  return orchestrator
+    .registeredExecutorNames()
+    .filter((name) => !before.has(name));
 }
 
 /**

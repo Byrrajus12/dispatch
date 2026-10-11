@@ -1,6 +1,6 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Options, Query } from '@anthropic-ai/claude-agent-sdk';
-import { loadConfig } from '@dispatch-foo/core';
+import { agentEnv, loadConfig } from '@dispatch-foo/core';
 import type { EffortLevel } from '@dispatch-foo/core';
 
 import { openClaudeQuery, rewriteMissingCliError } from '../claudeCli.js';
@@ -320,6 +320,7 @@ export class ClaudePlanner implements Planner {
     const options: Options = {
       cwd: this.rootDir,
       permissionMode: 'plan',
+      env: agentEnv(),
       outputFormat: { type: 'json_schema', schema: TURN_JSON_SCHEMA },
       // `'project'` loads CLAUDE.md/AGENTS.md; `'user'` omitted to isolate from
       // operator's personal environment.
