@@ -82,7 +82,11 @@ fn git_installed() -> bool {
         let real_git_elsewhere = std::env::split_paths(&enriched_child_path())
             .filter(|d| d != Path::new("/usr/bin"))
             .any(|d| d.join("git").is_file());
-        let clt = Command::new("xcode-select").arg("-p").output().map(|o| o.status.success()).unwrap_or(false);
+        let clt = Command::new("xcode-select")
+            .arg("-p")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
         real_git_elsewhere || clt
     } else {
         git(&["--version"], None, &[]).is_ok()
@@ -93,18 +97,34 @@ fn git_installed() -> bool {
 pub fn git_setup_status() -> GitSetupStatus {
     if !git_installed() {
         let install_hint = if cfg!(target_os = "linux") {
-            Some(linux_install_hint(&std::fs::read_to_string("/etc/os-release").unwrap_or_default()))
+            Some(linux_install_hint(
+                &std::fs::read_to_string("/etc/os-release").unwrap_or_default(),
+            ))
         } else {
             None
         };
-        return GitSetupStatus { installed: false, version: None, name: None, email: None, install_hint };
+        return GitSetupStatus {
+            installed: false,
+            version: None,
+            name: None,
+            email: None,
+            install_hint,
+        };
     }
     let non_empty = |r: Result<String, String>| r.ok().filter(|s| !s.is_empty());
     GitSetupStatus {
         installed: true,
         version: non_empty(git(&["--version"], None, &[])),
-        name: non_empty(git(&["config", "--global", "--get", "user.name"], None, &[])),
-        email: non_empty(git(&["config", "--global", "--get", "user.email"], None, &[])),
+        name: non_empty(git(
+            &["config", "--global", "--get", "user.name"],
+            None,
+            &[],
+        )),
+        email: non_empty(git(
+            &["config", "--global", "--get", "user.email"],
+            None,
+            &[],
+        )),
         install_hint: None,
     }
 }
@@ -112,9 +132,15 @@ pub fn git_setup_status() -> GitSetupStatus {
 #[tauri::command]
 pub fn install_git() -> Result<(), String> {
     if cfg!(target_os = "macos") {
-        Command::new("xcode-select").arg("--install").spawn().map(|_| ()).map_err(|e| e.to_string())
+        Command::new("xcode-select")
+            .arg("--install")
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     } else {
-        Err(linux_install_hint(&std::fs::read_to_string("/etc/os-release").unwrap_or_default()))
+        Err(linux_install_hint(
+            &std::fs::read_to_string("/etc/os-release").unwrap_or_default(),
+        ))
     }
 }
 
@@ -133,17 +159,35 @@ pub fn set_git_identity(name: String, email: String) -> Result<(), String> {
 pub fn project_folder_state(path: String) -> FolderState {
     let dir = Path::new(&path);
     let is_dir = dir.is_dir();
-    let is_git_repo = is_dir && git(&["rev-parse", "--is-inside-work-tree"], Some(dir), &[]).map(|s| s == "true").unwrap_or(false);
-    let has_commits = is_git_repo && git(&["rev-parse", "--verify", "HEAD"], Some(dir), &[]).is_ok();
-    FolderState { is_dir, is_git_repo, has_commits, has_gitignore: dir.join(".gitignore").is_file() }
+    let is_git_repo = is_dir
+        && git(&["rev-parse", "--is-inside-work-tree"], Some(dir), &[])
+            .map(|s| s == "true")
+            .unwrap_or(false);
+    let has_commits =
+        is_git_repo && git(&["rev-parse", "--verify", "HEAD"], Some(dir), &[]).is_ok();
+    FolderState {
+        is_dir,
+        is_git_repo,
+        has_commits,
+        has_gitignore: dir.join(".gitignore").is_file(),
+    }
 }
 
 /// Makes `path` a repo with a first commit, writing a default .gitignore if none exists.
-pub(crate) fn prepare_project_folder_with(path: &Path, extra_env: &[(&str, &str)]) -> Result<(), String> {
+pub(crate) fn prepare_project_folder_with(
+    path: &Path,
+    extra_env: &[(&str, &str)],
+) -> Result<(), String> {
     if !path.is_dir() {
         return Err(format!("not a folder: {}", path.display()));
     }
-    let is_repo = git(&["rev-parse", "--is-inside-work-tree"], Some(path), extra_env).map(|s| s == "true").unwrap_or(false);
+    let is_repo = git(
+        &["rev-parse", "--is-inside-work-tree"],
+        Some(path),
+        extra_env,
+    )
+    .map(|s| s == "true")
+    .unwrap_or(false);
     if !is_repo {
         git(&["init", "-b", "main"], Some(path), extra_env)?;
     }
@@ -153,7 +197,16 @@ pub(crate) fn prepare_project_folder_with(path: &Path, extra_env: &[(&str, &str)
     }
     if git(&["rev-parse", "--verify", "HEAD"], Some(path), extra_env).is_err() {
         git(&["add", "-A"], Some(path), extra_env)?;
-        git(&["commit", "--allow-empty", "-m", "Start tracking with Dispatch"], Some(path), extra_env)?;
+        git(
+            &[
+                "commit",
+                "--allow-empty",
+                "-m",
+                "Start tracking with Dispatch",
+            ],
+            Some(path),
+            extra_env,
+        )?;
     }
     Ok(())
 }
@@ -188,7 +241,10 @@ mod tests {
     fn linux_hint_matches_distro() {
         assert_eq!(linux_install_hint("ID=fedora\n"), "sudo dnf install git");
         assert_eq!(linux_install_hint("ID=arch\n"), "sudo pacman -S git");
-        assert_eq!(linux_install_hint("ID=ubuntu\nID_LIKE=debian\n"), "sudo apt install git");
+        assert_eq!(
+            linux_install_hint("ID=ubuntu\nID_LIKE=debian\n"),
+            "sudo apt install git"
+        );
     }
 
     #[test]
@@ -218,7 +274,10 @@ mod tests {
 
         prepare_project_folder_with(&dir, ENV).unwrap();
 
-        assert_eq!(std::fs::read_to_string(dir.join(".gitignore")).unwrap(), "secret.txt\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".gitignore")).unwrap(),
+            "secret.txt\n"
+        );
         let tracked = git(&["ls-files"], Some(&dir), ENV).unwrap();
         assert!(!tracked.contains("secret.txt"));
         assert!(tracked.contains(".env")); // the user's own ignore rules are theirs
@@ -241,7 +300,10 @@ mod tests {
         git(&["commit", "--allow-empty", "-m", "first"], Some(&dir), ENV).unwrap();
         let before = git(&["rev-parse", "HEAD"], Some(&dir), ENV).unwrap();
         prepare_project_folder_with(&dir, ENV).unwrap();
-        assert_eq!(git(&["rev-parse", "HEAD"], Some(&dir), ENV).unwrap(), before);
+        assert_eq!(
+            git(&["rev-parse", "HEAD"], Some(&dir), ENV).unwrap(),
+            before
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
