@@ -166,6 +166,7 @@ const SETTINGS_GROUPS: { label: string; pages: PageSpec[] }[] = [
             {ctx.data.client !== null && (
               <AgentStep
                 client={ctx.data.client}
+                port={ctx.data.port}
                 onSetDefault={(executor) => {
                   const patch: ConfigPatch = { executor };
                   return ctx.save(patch);

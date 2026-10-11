@@ -29,9 +29,13 @@ const tauri = {
       isGitRepo: false,
       hasCommits: false,
       hasGitignore: false,
+      tooBroad: false,
     })
   ),
   prepareProjectFolder: mock(() => Promise.resolve()),
+  installCliCommand: mock(() =>
+    Promise.resolve({ path: '/usr/local/bin/dispatch', onPath: true })
+  ),
 };
 // bun replaces the whole module, so stub every export AddProjectDialog's import graph uses.
 void mock.module('../lib/tauri', () => ({
@@ -43,6 +47,7 @@ void mock.module('../lib/tauri', () => ({
 }));
 
 const { SetupView } = await import('./SetupView');
+const { CliCommandStep } = await import('../components/setup/CliCommandStep');
 
 // GitStep reads and invalidates react-query, so every render needs a fresh client.
 function render(ui: ReactElement) {
@@ -189,6 +194,7 @@ test('adds a folder that is already a repo with history straight away', async ()
       isGitRepo: true,
       hasCommits: true,
       hasGitignore: true,
+      tooBroad: false,
     })
   );
   const onProjectChosen = mock(() => Promise.resolve());
@@ -198,6 +204,79 @@ test('adds a folder that is already a repo with history straight away', async ()
     expect(onProjectChosen).toHaveBeenCalledWith('/Users/ada/site')
   );
   expect(tauri.prepareProjectFolder).not.toHaveBeenCalled();
+});
+
+test('refuses a folder too broad to be one project', async () => {
+  tauri.pickDirectory.mockImplementationOnce(() =>
+    Promise.resolve('/Users/ada/Documents')
+  );
+  tauri.projectFolderState.mockImplementationOnce(() =>
+    Promise.resolve({
+      isDir: true,
+      isGitRepo: false,
+      hasCommits: false,
+      hasGitignore: false,
+      tooBroad: true,
+    })
+  );
+  const onProjectChosen = mock(() => Promise.resolve());
+  render(<SetupView projectPath={null} onProjectChosen={onProjectChosen} />);
+  await click(await screen.findByText('Choose a folder'));
+  expect(
+    await screen.findByText(
+      'Pick a project folder, not your whole Documents folder.'
+    )
+  ).toBeTruthy();
+  expect(screen.queryByText('Turn on version tracking')).toBeNull();
+  expect(tauri.prepareProjectFolder).not.toHaveBeenCalled();
+  expect(onProjectChosen).not.toHaveBeenCalled();
+});
+
+test('goes back to picking from the version tracking prompt', async () => {
+  render(
+    <SetupView projectPath={null} onProjectChosen={() => Promise.resolve()} />
+  );
+  await click(await screen.findByText('Choose a folder'));
+  await click(await screen.findByText('Choose a different folder'));
+  expect(await screen.findByText('Choose a folder')).toBeTruthy();
+  expect(screen.queryByText('Turn on version tracking')).toBeNull();
+  expect(tauri.prepareProjectFolder).not.toHaveBeenCalled();
+});
+
+test('goes back to picking from an open folder that is not set up', async () => {
+  render(
+    <SetupView
+      projectPath="/Users/ada/site"
+      onProjectChosen={() => Promise.resolve()}
+    />
+  );
+  await screen.findByText('Git is installed and knows who you are.');
+  await click(await screen.findByText('Choose a different folder'));
+  expect(await screen.findByText('Choose a folder')).toBeTruthy();
+});
+
+test('says where the terminal command went when its folder is on PATH', async () => {
+  render(<CliCommandStep />);
+  await click(screen.getByText('Install command'));
+  expect(
+    await screen.findByText('Installed at /usr/local/bin/dispatch')
+  ).toBeTruthy();
+});
+
+test('tells you to add ~/.local/bin to PATH when it is not on it', async () => {
+  tauri.installCliCommand.mockImplementationOnce(() =>
+    Promise.resolve({
+      path: '/Users/ada/.local/bin/dispatch',
+      onPath: false,
+    })
+  );
+  render(<CliCommandStep />);
+  await click(screen.getByText('Install command'));
+  expect(
+    await screen.findByText(
+      `Installed. Add ~/.local/bin to your PATH to use it: echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc`
+    )
+  ).toBeTruthy();
 });
 
 test('never shows internal words', async () => {

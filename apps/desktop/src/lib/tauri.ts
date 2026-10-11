@@ -329,6 +329,14 @@ export interface FolderState {
   isGitRepo: boolean;
   hasCommits: boolean;
   hasGitignore: boolean;
+  /** `/`, the home folder or one of its standard folders: never one project. */
+  tooBroad: boolean;
+}
+
+export interface CliInstall {
+  path: string;
+  /** False when the linked folder isn't on PATH, so a terminal won't find it yet. */
+  onPath: boolean;
 }
 
 export function gitSetupStatus(): Promise<GitSetupStatus> {
@@ -351,6 +359,6 @@ export function prepareProjectFolder(path: string): Promise<void> {
   return invoke('prepare_project_folder', { path });
 }
 
-export function installCliCommand(): Promise<string> {
+export function installCliCommand(): Promise<CliInstall> {
   return invoke('install_cli_command');
 }

@@ -1,13 +1,16 @@
 import { useState } from 'react';
 
-import { installCliCommand } from '../../lib/tauri';
+import { type CliInstall, installCliCommand } from '../../lib/tauri';
 import { errorText } from './errorText';
 import { SetupStepRow } from './SetupStepRow';
 import { Button } from '@/ui/button';
 
+// Only ~/.local/bin can be off PATH (/usr/local/bin always counts as on it).
+const NOT_ON_PATH = `Installed. Add ~/.local/bin to your PATH to use it: echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc`;
+
 /** Optional: puts the `dispatch` command on PATH for people who also use a terminal. */
 export function CliCommandStep() {
-  const [linked, setLinked] = useState<string | null>(null);
+  const [linked, setLinked] = useState<CliInstall | null>(null);
   const [detail, setDetail] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -25,11 +28,15 @@ export function CliCommandStep() {
 
   return (
     <SetupStepRow
-      status={linked === null ? 'waiting' : 'ok'}
+      status={
+        linked === null ? 'waiting' : linked.onPath ? 'ok' : 'needs-action'
+      }
       title="Terminal command"
       message={
         linked !== null
-          ? `Installed at ${linked}`
+          ? linked.onPath
+            ? `Installed at ${linked.path}`
+            : NOT_ON_PATH
           : detail !== null
             ? "Couldn't install the command."
             : 'Use Dispatch from a terminal with the `dispatch` command.'

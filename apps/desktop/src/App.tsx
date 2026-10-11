@@ -122,8 +122,10 @@ import { basename } from './lib/projectName';
 import { prNumberFromUrl } from './lib/reviewTarget';
 import { isTerminalRunState } from './lib/runState';
 import {
+  autoCompleteAction,
   readSetupComplete,
-  shouldAutoComplete,
+  SETUP_REPORT_STALE_MS,
+  setupReportKey,
   writeSetupComplete,
 } from './lib/setupState';
 import { useStatusModelOf } from './lib/statusModel';
@@ -1256,39 +1258,77 @@ function App() {
   // silently when nothing needs attention (an equipped developer sees nothing).
   const setupClient = data.client;
   const { data: setupReport } = useQuery({
-    queryKey: ['setup', 'report'],
+    queryKey: setupReportKey(data.port),
     queryFn: () => {
       if (setupClient === null) throw new Error('dispatchd client not ready');
       return setupClient.fetchSetup();
     },
     enabled: !setupComplete && setupClient !== null && gateScreen === null,
+    staleTime: SETUP_REPORT_STALE_MS,
   });
   // Background re-check once setup is done (signed out later, etc.). Shares the
   // report key but never feeds the first-run decision below.
   const { data: setupBannerReport } = useQuery({
-    queryKey: ['setup', 'report'],
+    queryKey: setupReportKey(data.port),
     queryFn: () => {
       if (setupClient === null) throw new Error('dispatchd client not ready');
       return setupClient.fetchSetup();
     },
     enabled: setupComplete && setupClient !== null,
+    staleTime: SETUP_REPORT_STALE_MS,
     refetchInterval: 5 * 60_000,
     refetchOnWindowFocus: true,
   });
-  // Decided once, from the first report: later reports (after an install or
-  // sign-in) must not dismiss Setup before the chosen agent is saved.
+  // Saves `executor` as the default agent and refetches what reads the default.
+  // Callers refresh the daemon's agents first so a newly installed one is known.
+  const saveDefaultAgent = useCallback(
+    async (executor: string) => {
+      if (setupClient === null) throw new Error('dispatchd client not ready');
+      await setupClient.updateConfig({ executor });
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: dispatchConfigKey(data.port),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['dispatch-executors', data.port],
+        }),
+      ]);
+    },
+    [setupClient, queryClient, data.port]
+  );
+  // Decided once, from the first report (and the config it's judged against): later
+  // reports (after an install or sign-in) must not dismiss Setup before the chosen
+  // agent is saved.
   const [setupShown, setSetupShown] = useState(false);
   const setupDecided = useRef(false);
+  const configuredExecutor =
+    data.config?.orchestrator.executor ?? data.executors?.default;
   useEffect(() => {
-    if (setupReport === undefined || setupDecided.current) return;
+    if (
+      setupReport === undefined ||
+      configuredExecutor === undefined ||
+      setupDecided.current
+    )
+      return;
     setupDecided.current = true;
-    if (shouldAutoComplete(setupReport)) {
+    const action = autoCompleteAction(setupReport, configuredExecutor);
+    if (!action.complete) {
+      setSetupShown(true);
+      return;
+    }
+    const finish = () => {
       writeSetupComplete();
       setSetupComplete(true);
-    } else {
-      setSetupShown(true);
-    }
-  }, [setupReport]);
+    };
+    if (action.setDefault === undefined) return finish();
+    // A failed save shows Setup instead, so the agent gets picked by hand.
+    const fallback = action.setDefault;
+    (async () => {
+      if (setupClient === null) throw new Error('dispatchd client not ready');
+      await setupClient.refreshSetup();
+      await saveDefaultAgent(fallback);
+    })().then(finish, () => setSetupShown(true));
+  }, [setupReport, configuredExecutor, saveDefaultAgent, setupClient]);
   const agentSetupScreen: ReactNode =
     !setupComplete &&
     gateScreen === null &&
@@ -1300,17 +1340,8 @@ function App() {
         agentStep={
           <AgentStep
             client={setupClient}
-            onSetDefault={async (executor) => {
-              await setupClient.updateConfig({ executor });
-              await Promise.all([
-                queryClient.invalidateQueries({
-                  queryKey: dispatchConfigKey(data.port),
-                }),
-                queryClient.invalidateQueries({
-                  queryKey: ['dispatch-executors', data.port],
-                }),
-              ]);
-            }}
+            port={data.port}
+            onSetDefault={saveDefaultAgent}
             onContinue={() => {
               writeSetupComplete();
               setSetupComplete(true);

@@ -3,6 +3,7 @@ import type { ApiClient } from '@dispatch/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 
+import { SETUP_REPORT_STALE_MS, setupReportKey } from '../../lib/setupState';
 import { openUrl } from '../../lib/tauri';
 import { CommandTerminal } from './CommandTerminal';
 import { DetailsDisclosure } from './DetailsDisclosure';
@@ -16,6 +17,8 @@ import { RadioGroup, RadioGroupItem } from '@/ui/radio-group';
 
 interface AgentStepProps {
   client: ApiClient;
+  /** The project's daemon port, which scopes the cached setup report. */
+  port: number | undefined;
   /** Persists the chosen provider as the project's default agent. */
   onSetDefault: (providerId: string) => Promise<unknown>;
   onContinue: () => void;
@@ -48,14 +51,17 @@ function stateLabel(p: ProviderState): string {
 /** Pick an agent, install it, sign in (or paste a key), and continue. Works for every catalog provider. */
 export function AgentStep({
   client,
+  port,
   onSetDefault,
   onContinue,
   continueLabel = 'Continue',
 }: AgentStepProps) {
   const queryClient = useQueryClient();
+  const reportKey = setupReportKey(port);
   const { data } = useQuery({
-    queryKey: ['setup', 'report'],
+    queryKey: reportKey,
     queryFn: () => client.fetchSetup(),
+    staleTime: SETUP_REPORT_STALE_MS,
   });
   const [chosen, setChosen] = useState<string | null>(null);
   const [running, setRunning] = useState<Running | null>(null);
@@ -94,7 +100,7 @@ export function AgentStep({
   async function recheck() {
     try {
       await client.refreshSetup();
-      await queryClient.invalidateQueries({ queryKey: ['setup', 'report'] });
+      await queryClient.invalidateQueries({ queryKey: reportKey });
     } catch (err) {
       setProblem(problemOf("Couldn't re-check your agents.", err));
     }
@@ -120,7 +126,7 @@ export function AgentStep({
     setProblem(null);
     try {
       const next = await client.saveAgentKey(p.id, key);
-      queryClient.setQueryData(['setup', 'report'], next);
+      queryClient.setQueryData(reportKey, next);
       setKeyFor(null);
       setKey('');
     } catch (err) {
@@ -130,9 +136,24 @@ export function AgentStep({
     }
   }
 
+  async function removeKey(p: ProviderState) {
+    setProblem(null);
+    try {
+      queryClient.setQueryData(
+        reportKey,
+        await client.saveAgentKey(p.id, null)
+      );
+    } catch (err) {
+      setProblem(problemOf("Couldn't remove that key. Try again.", err));
+    }
+  }
+
+  // Refreshes first so an agent installed outside this screen (a download page, a
+  // terminal) is known before it becomes the default.
   async function proceed() {
     setProblem(null);
     try {
+      await client.refreshSetup();
       if (selected !== null) await onSetDefault(selected);
       onContinue();
     } catch (err) {
@@ -211,7 +232,6 @@ export function AgentStep({
             )}
             {p.apiKeyEnv !== undefined &&
               p.installed &&
-              !p.usingApiKey &&
               (keyFor === p.id ? (
                 <div className="flex items-end gap-2">
                   <div className="flex flex-1 flex-col gap-1">
@@ -229,6 +249,28 @@ export function AgentStep({
                     onClick={() => void saveKey(p)}
                   >
                     Save key
+                  </Button>
+                </div>
+              ) : p.usingApiKey ? (
+                <div className="flex flex-wrap items-center gap-x-3">
+                  <span className="text-muted-foreground text-xs">
+                    Using an API key instead of your {p.name} sign-in.
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="link"
+                    className="px-0"
+                    onClick={() => setKeyFor(p.id)}
+                  >
+                    Replace key
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="link"
+                    className="px-0"
+                    onClick={() => void removeKey(p)}
+                  >
+                    Remove key
                   </Button>
                 </div>
               ) : (

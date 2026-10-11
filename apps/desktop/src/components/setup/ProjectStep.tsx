@@ -19,6 +19,12 @@ interface ProjectStepProps {
 
 const basename = (p: string) => p.split('/').filter(Boolean).at(-1) ?? p;
 
+// Why a folder too broad to be one project (`/`, home, Documents…) was refused.
+const tooBroadSentence = (path: string) =>
+  path.split('/').filter(Boolean).length === 0
+    ? 'Pick a project folder, not your whole computer.'
+    : `Pick a project folder, not your whole ${basename(path)} folder.`;
+
 /** Choose (or confirm) the project folder, make it a repo with a first snapshot, then hand it to the app. */
 export function ProjectStep({
   enabled,
@@ -30,9 +36,19 @@ export function ProjectStep({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [githubOpen, setGithubOpen] = useState(false);
+  const [refused, setRefused] = useState<string | null>(null);
+
+  // Back to picking: drops the pending folder and anything said about it.
+  function reset() {
+    setPending(null);
+    setNeedsPrep(null);
+    setError(null);
+    setRefused(null);
+  }
 
   async function consider(path: string) {
     setError(null);
+    setRefused(null);
     setPending(path);
     let state;
     try {
@@ -40,6 +56,10 @@ export function ProjectStep({
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       return;
+    }
+    if (state.tooBroad) {
+      reset();
+      return setRefused(tooBroadSentence(path));
     }
     if (!state.isGitRepo) return setNeedsPrep('init');
     if (!state.hasCommits) return setNeedsPrep('snapshot');
@@ -102,11 +122,16 @@ export function ProjectStep({
             : `${basename(pending)} needs a first saved snapshot before an agent can work on it.`
         }
         action={
-          <Button onClick={() => void prepare()} disabled={busy}>
-            {needsPrep === 'init'
-              ? 'Turn on version tracking'
-              : 'Save a first snapshot'}
-          </Button>
+          <>
+            <Button onClick={() => void prepare()} disabled={busy}>
+              {needsPrep === 'init'
+                ? 'Turn on version tracking'
+                : 'Save a first snapshot'}
+            </Button>
+            <Button variant="outline" onClick={reset} disabled={busy}>
+              Choose a different folder
+            </Button>
+          </>
         }
         {...(error === null ? {} : { detail: error })}
       />
@@ -119,9 +144,9 @@ export function ProjectStep({
         status="needs-action"
         title="Your project"
         message={
-          pending === null
-            ? 'Pick the folder you want agents to work on.'
-            : `Set up ${basename(pending)} for Dispatch.`
+          pending !== null
+            ? `Set up ${basename(pending)} for Dispatch.`
+            : (refused ?? 'Pick the folder you want agents to work on.')
         }
         action={
           pending === null ? (
@@ -138,9 +163,14 @@ export function ProjectStep({
               </Button>
             </>
           ) : (
-            <Button onClick={() => void consider(pending)} disabled={busy}>
-              Set up this folder
-            </Button>
+            <>
+              <Button onClick={() => void consider(pending)} disabled={busy}>
+                Set up this folder
+              </Button>
+              <Button variant="outline" onClick={reset} disabled={busy}>
+                Choose a different folder
+              </Button>
+            </>
           )
         }
         {...(error === null ? {} : { detail: error })}

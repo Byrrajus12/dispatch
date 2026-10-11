@@ -131,6 +131,7 @@ function setup(r = report()) {
     >
       <AgentStep
         client={client as unknown as ApiClient}
+        port={4771}
         onSetDefault={onSetDefault}
         onContinue={onContinue}
       />
@@ -235,6 +236,71 @@ test('continue is enabled for a ready agent and makes it the default', async () 
   await click(await screen.findByText('Continue'));
   await waitFor(() => expect(onSetDefault).toHaveBeenCalledWith('codex'));
   await waitFor(() => expect(onContinue).toHaveBeenCalled());
+});
+
+test('re-reads installed agents before saving the default', async () => {
+  const base = report();
+  const ready = report({
+    steps: [{ id: 'agent', status: 'ok', message: 'Codex is ready.' }],
+    defaultProvider: 'codex',
+    providers: [
+      {
+        ...base.providers[1],
+        installed: true,
+        works: true,
+        ready: true,
+        auth: 'signed-in',
+      },
+    ],
+  });
+  const order: string[] = [];
+  const { client, onSetDefault } = setup(ready);
+  client.refreshSetup.mockImplementation(() => {
+    order.push('refresh');
+    return Promise.resolve({ added: [] });
+  });
+  onSetDefault.mockImplementation((id: string) => {
+    order.push(`default:${id}`);
+    return Promise.resolve();
+  });
+  await click(await screen.findByText('Continue'));
+  await waitFor(() => expect(order).toEqual(['refresh', 'default:codex']));
+});
+
+const usingKey = () => {
+  const r = report();
+  r.providers[0] = {
+    ...r.providers[0],
+    usingApiKey: true,
+    ready: true,
+  };
+  return r;
+};
+
+test('a saved key can be replaced', async () => {
+  const { client } = setup(usingKey());
+  expect(
+    await screen.findByText(
+      'Using an API key instead of your Claude Code sign-in.'
+    )
+  ).toBeTruthy();
+  expect(screen.queryByText('Use an API key instead')).toBeNull();
+  await click(screen.getByText('Replace key'));
+  fireEvent.change(screen.getByLabelText('Claude Code API key'), {
+    target: { value: 'sk-ant-2' },
+  });
+  await click(screen.getByText('Save key'));
+  await waitFor(() =>
+    expect(client.saveAgentKey).toHaveBeenCalledWith('claude', 'sk-ant-2')
+  );
+});
+
+test('a saved key can be removed', async () => {
+  const { client } = setup(usingKey());
+  await click(await screen.findByText('Remove key'));
+  await waitFor(() =>
+    expect(client.saveAgentKey).toHaveBeenCalledWith('claude', null)
+  );
 });
 
 test('never shows internal words', async () => {
