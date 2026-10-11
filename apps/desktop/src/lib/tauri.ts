@@ -85,6 +85,10 @@ export function openPath(path: string): Promise<void> {
   return invoke('open_url', { url: path });
 }
 
+export function openUrl(url: string): Promise<void> {
+  return invoke('open_url', { url });
+}
+
 export function getDashboardStats(): Promise<DashboardStats> {
   return invoke('dashboard_stats');
 }

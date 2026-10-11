@@ -36,6 +36,8 @@ const tauri = {
 // bun replaces the whole module, so stub every export AddProjectDialog's import graph uses.
 void mock.module('../lib/tauri', () => ({
   ...tauri,
+  // The mock registry is shared across test files, so AgentStep.test's import needs this.
+  openUrl: mock(() => Promise.resolve()),
   listGithubRepos: mock(() => Promise.resolve([])),
   cloneGithubRepo: mock(() => Promise.resolve('')),
 }));

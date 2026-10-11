@@ -34,6 +34,7 @@ import { PersonPeek } from './components/peek/PersonPeek';
 import { ThreadPeek } from './components/peek/ThreadPeek';
 import { PeopleProvider } from './components/people/PeopleContext';
 import { OverseerGrantsGroup } from './components/settings/OverseerGrantsGroup';
+import { AgentStep } from './components/setup/AgentStep';
 import { AddProjectDialog } from './components/shell/AddProjectDialog';
 import { CommandPalette } from './components/shell/CommandPalette';
 import { DaemonUnavailable } from './components/shell/DaemonUnavailable';
@@ -98,6 +99,7 @@ import {
 } from './lib/appNav';
 import { hideArchivedRuns } from './lib/archiveFilter';
 import { hasDispatchKey, launchRootKey } from './lib/bootWarm';
+import { dispatchConfigKey } from './lib/configEvents';
 import { mentions, subjectOf } from './lib/conversationScope';
 import { type DecisionItem, decisionTarget } from './lib/decisionFeed';
 import { draftTrayViewModel } from './lib/draftTray';
@@ -118,6 +120,7 @@ import { buildPosts, type Post } from './lib/posts';
 import { basename } from './lib/projectName';
 import { prNumberFromUrl } from './lib/reviewTarget';
 import { isTerminalRunState } from './lib/runState';
+import { readSetupComplete, writeSetupComplete } from './lib/setupState';
 import { useStatusModelOf } from './lib/statusModel';
 import { computeBlockedIds } from './lib/taskGraph';
 import { itemBucket, queuedTaskIds, taskStatusCounts } from './lib/taskStatus';
@@ -1243,6 +1246,56 @@ function App() {
       </div>
     ) : null;
 
+  const [setupComplete, setSetupComplete] = useState(readSetupComplete);
+  // First run on this machine: once the project is up, check the agent. Completes
+  // silently when nothing needs attention (an equipped developer sees nothing).
+  const setupClient = data.client;
+  const { data: setupReport } = useQuery({
+    queryKey: ['setup', 'report'],
+    queryFn: () => {
+      if (setupClient === null) throw new Error('dispatchd client not ready');
+      return setupClient.fetchSetup();
+    },
+    enabled: !setupComplete && setupClient !== null && gateScreen === null,
+  });
+  const setupAllOk = setupReport?.steps.every((s) => s.status === 'ok');
+  useEffect(() => {
+    if (setupAllOk === true) {
+      writeSetupComplete();
+      setSetupComplete(true);
+    }
+  }, [setupAllOk]);
+  const agentSetupScreen: ReactNode =
+    !setupComplete &&
+    gateScreen === null &&
+    setupClient !== null &&
+    setupAllOk === false ? (
+      <SetupView
+        projectPath={root ?? null}
+        onProjectChosen={() => Promise.resolve()}
+        agentStep={
+          <AgentStep
+            client={setupClient}
+            onSetDefault={async (executor) => {
+              await setupClient.updateConfig({ executor });
+              await Promise.all([
+                queryClient.invalidateQueries({
+                  queryKey: dispatchConfigKey(data.port),
+                }),
+                queryClient.invalidateQueries({
+                  queryKey: ['dispatch-executors', data.port],
+                }),
+              ]);
+            }}
+            onContinue={() => {
+              writeSetupComplete();
+              setSetupComplete(true);
+            }}
+          />
+        }
+      />
+    ) : null;
+
   const projectSwitcher = (
     <ProjectSwitcher
       teamSession={teamSession}
@@ -1707,7 +1760,7 @@ function App() {
     <>
       <TwoViewShell
         view={twoViewsState.mainView}
-        gate={gateScreen}
+        gate={gateScreen ?? agentSetupScreen}
         topBar={{
           view: twoViewsState.mainView,
           orb,
