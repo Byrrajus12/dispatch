@@ -457,3 +457,6 @@ export type {
 } from './setup/types.js';
 export { explainFailure } from './setup/failures.js';
 export type { FailureExplanation } from './setup/failures.js';
+export { whichOnPath, widenPath, widenedPath } from './setup/path.js';
+export type { PathIo } from './setup/path.js';
+export { agentEnv, readAgentKeys, writeAgentKey } from './setup/agentEnv.js';

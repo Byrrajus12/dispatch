@@ -63,6 +63,8 @@ export interface CredentialsFile {
   linear?: { apiKey: string };
   /** Machine-wide TypeSafe key. Read as the last fallback; nothing writes it. */
   typesafe?: { apiKey: string };
+  /** Agent API keys by env var (ANTHROPIC_API_KEY, …), machine-wide. Set from Setup. */
+  agents?: Record<string, string>;
   /** Per-project secrets, keyed by `normalizeProjectPath` of the project root. */
   projects?: Record<string, ProjectCredentials>;
 }
@@ -293,6 +295,9 @@ function updateCredentials(
     release();
   }
 }
+
+/** `updateCredentials` for sibling modules that own their own slot. */
+export const updateCredentialsFile = updateCredentials;
 
 // updateCredentials for the daemon: the same read-modify-write, waiting
 // asynchronously for the lock.
