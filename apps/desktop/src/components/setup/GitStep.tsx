@@ -23,6 +23,15 @@ export function GitStep({ onReady }: { onReady: (ready: boolean) => void }) {
     data?.installed === true && data.name !== null && data.email !== null;
   useEffect(() => onReady(ready), [ready, onReady]);
 
+  async function install() {
+    setError(null);
+    try {
+      await installGit();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   if (data === undefined)
     return <SetupStepRow status="checking" title="Git" message="Checking…" />;
 
@@ -38,19 +47,7 @@ export function GitStep({ onReady }: { onReady: (ready: boolean) => void }) {
         }
         action={
           data.installHint === null ? (
-            <Button
-              onClick={() =>
-                void installGit().catch((e: unknown) =>
-                  setError(
-                    e instanceof Error
-                      ? e.message
-                      : 'The install could not start.'
-                  )
-                )
-              }
-            >
-              Install Git
-            </Button>
+            <Button onClick={() => void install()}>Install Git</Button>
           ) : undefined
         }
         {...(error === null ? {} : { detail: error })}
@@ -73,6 +70,7 @@ export function GitStep({ onReady }: { onReady: (ready: boolean) => void }) {
         status="needs-action"
         title="Git"
         message="Git labels every saved change with a name and email. These stay on your computer."
+        {...(error === null ? {} : { detail: error })}
       >
         <div className="flex flex-wrap items-end gap-2">
           <div className="flex flex-col gap-1">
@@ -101,7 +99,7 @@ export function GitStep({ onReady }: { onReady: (ready: boolean) => void }) {
         </div>
         {error !== null && (
           <p className="text-sm text-(--state-error-fg)" role="alert">
-            {error}
+            Couldn't save that. Check your name and email and try again.
           </p>
         )}
       </SetupStepRow>

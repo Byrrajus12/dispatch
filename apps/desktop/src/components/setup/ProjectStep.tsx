@@ -34,10 +34,27 @@ export function ProjectStep({
   async function consider(path: string) {
     setError(null);
     setPending(path);
-    const state = await projectFolderState(path);
+    let state;
+    try {
+      state = await projectFolderState(path);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return;
+    }
     if (!state.isGitRepo) return setNeedsPrep('init');
     if (!state.hasCommits) return setNeedsPrep('snapshot');
     await finish(path);
+  }
+
+  // Opens the native folder picker, then considers the chosen folder; picker failures land in Details.
+  async function choose() {
+    setError(null);
+    try {
+      const path = await pickDirectory();
+      if (path !== null) await consider(path);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function finish(path: string) {
@@ -109,14 +126,7 @@ export function ProjectStep({
         action={
           pending === null ? (
             <>
-              <Button
-                onClick={() =>
-                  void pickDirectory().then((p) =>
-                    p === null ? undefined : consider(p)
-                  )
-                }
-                disabled={busy}
-              >
+              <Button onClick={() => void choose()} disabled={busy}>
                 Choose a folder
               </Button>
               <Button

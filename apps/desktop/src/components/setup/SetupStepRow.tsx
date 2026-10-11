@@ -33,7 +33,10 @@ const ICONS: Record<SetupStatus | 'waiting', ReactNode> = {
     />
   ),
   waiting: (
-    <CircleDashed className="text-text-tertiary size-4" aria-label="Not yet" />
+    <CircleDashed
+      className="text-muted-foreground size-4"
+      aria-label="Not yet"
+    />
   ),
 };
 
