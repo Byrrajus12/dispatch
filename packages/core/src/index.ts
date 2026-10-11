@@ -437,3 +437,21 @@ export type {
   SyncSpawnResult,
 } from './syncSpawn.js';
 export { setSyncSpawner, spawnSyncText } from './syncSpawn.js';
+export {
+  PROVIDERS,
+  providerById,
+  providerForBinary,
+  resolveInstallFix,
+} from './setup/providers.js';
+export type {
+  AuthState,
+  InstallMethod,
+  ProbeResult,
+  ProviderSpec,
+  ProviderState,
+  SetupFix,
+  SetupReport,
+  SetupStatus,
+  SetupStep,
+  SetupStepId,
+} from './setup/types.js';
