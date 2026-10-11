@@ -26,6 +26,55 @@ pub struct FolderState {
     is_git_repo: bool,
     has_commits: bool,
     has_gitignore: bool,
+    /// `/`, the home folder or one of its standard folders: too much to track.
+    too_broad: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliInstall {
+    path: String,
+    /// False when the linked folder isn't on this app's PATH (so likely not the shell's).
+    on_path: bool,
+}
+
+/// Home's standard folders that are never a single project.
+const BROAD_HOME_CHILDREN: &[&str] = &[
+    "Desktop",
+    "Documents",
+    "Downloads",
+    "Library",
+    "Movies",
+    "Music",
+    "Pictures",
+    "Public",
+    "Applications",
+];
+
+/// True for a folder too broad to make a project of: `/`, home, or a standard child of home.
+pub(crate) fn is_too_broad(path: &Path, home: Option<&Path>) -> bool {
+    if path.parent().is_none() {
+        return true;
+    }
+    let Some(home) = home else { return false };
+    path == home
+        || (path.parent() == Some(home)
+            && path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| BROAD_HOME_CHILDREN.contains(&n)))
+}
+
+// Resolves symlinks (e.g. /tmp -> /private/tmp) so comparisons see one spelling.
+fn canonical(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// True only when `dir` is the top of its own repo, not a folder inside a parent repo.
+fn is_own_repo(dir: &Path, extra_env: &[(&str, &str)]) -> bool {
+    git(&["rev-parse", "--show-toplevel"], Some(dir), extra_env)
+        .map(|top| canonical(Path::new(&top)) == canonical(dir))
+        .unwrap_or(false)
 }
 
 /// Written only when a folder has no .gitignore, so secrets and dependencies stay out
@@ -170,25 +219,29 @@ pub fn set_git_identity(name: String, email: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn project_folder_state(path: String) -> Result<FolderState, String> {
-    tauri::async_runtime::spawn_blocking(move || project_folder_state_sync(&path))
-        .await
-        .map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        project_folder_state_with(Path::new(&path), home.as_deref(), &[])
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
-fn project_folder_state_sync(path: &str) -> FolderState {
-    let dir = Path::new(path);
+pub(crate) fn project_folder_state_with(
+    dir: &Path,
+    home: Option<&Path>,
+    extra_env: &[(&str, &str)],
+) -> FolderState {
     let is_dir = dir.is_dir();
-    let is_git_repo = is_dir
-        && git(&["rev-parse", "--is-inside-work-tree"], Some(dir), &[])
-            .map(|s| s == "true")
-            .unwrap_or(false);
+    let is_git_repo = is_dir && is_own_repo(dir, extra_env);
     let has_commits =
-        is_git_repo && git(&["rev-parse", "--verify", "HEAD"], Some(dir), &[]).is_ok();
+        is_git_repo && git(&["rev-parse", "--verify", "HEAD"], Some(dir), extra_env).is_ok();
     FolderState {
         is_dir,
         is_git_repo,
         has_commits,
         has_gitignore: dir.join(".gitignore").is_file(),
+        too_broad: is_too_broad(&canonical(dir), home.map(canonical).as_deref()),
     }
 }
 
@@ -200,14 +253,8 @@ pub(crate) fn prepare_project_folder_with(
     if !path.is_dir() {
         return Err(format!("not a folder: {}", path.display()));
     }
-    let is_repo = git(
-        &["rev-parse", "--is-inside-work-tree"],
-        Some(path),
-        extra_env,
-    )
-    .map(|s| s == "true")
-    .unwrap_or(false);
-    if !is_repo {
+    // A folder inside a parent repo gets its own, so only its files are tracked.
+    if !is_own_repo(path, extra_env) {
         git(&["init", "-b", "main"], Some(path), extra_env)?;
     }
     let gitignore = path.join(".gitignore");
@@ -239,8 +286,10 @@ pub async fn prepare_project_folder(path: String) -> Result<(), String> {
 
 /// Symlinks `bundled` as `dispatch` into the first candidate dir that exists (or,
 /// for ~/.local/bin, can be created) and is writable. No sudo: /usr/local/bin is
-/// tried first and skipped when not writable.
+/// tried first and skipped when not writable. Only an existing symlink is replaced;
+/// a real `dispatch` file blocks that dir.
 pub(crate) fn link_cli(bundled: &Path, candidates: &[PathBuf]) -> Result<PathBuf, String> {
+    let mut blocked: Option<PathBuf> = None;
     for dir in candidates {
         let is_home_local = dir.ends_with(".local/bin");
         if !dir.is_dir() && is_home_local {
@@ -250,18 +299,42 @@ pub(crate) fn link_cli(bundled: &Path, candidates: &[PathBuf]) -> Result<PathBuf
             continue;
         }
         let target = dir.join("dispatch");
-        let _ = std::fs::remove_file(&target);
+        match std::fs::symlink_metadata(&target) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let _ = std::fs::remove_file(&target);
+            }
+            Ok(_) => {
+                blocked.get_or_insert(target);
+                continue;
+            }
+            Err(_) => {}
+        }
         #[cfg(unix)]
         if std::os::unix::fs::symlink(bundled, &target).is_ok() {
             return Ok(target);
         }
     }
-    Err("No writable folder on your PATH. Add ~/.local/bin to PATH and try again.".into())
+    match blocked {
+        Some(path) => Err(format!(
+            "Another `dispatch` command is already installed at {}.",
+            path.display()
+        )),
+        None => {
+            Err("No writable folder on your PATH. Add ~/.local/bin to PATH and try again.".into())
+        }
+    }
 }
 
-/// Links the bundled `dispatch` CLI onto the user's PATH and returns the linked path.
+/// Whether `dir` is on `path_var` (this app's PATH) or is /usr/local/bin, which every
+/// login shell has even when a GUI app's PATH doesn't.
+pub(crate) fn dir_on_path(dir: &Path, path_var: &std::ffi::OsStr) -> bool {
+    dir == Path::new("/usr/local/bin") || std::env::split_paths(path_var).any(|p| p == dir)
+}
+
+/// Links the bundled `dispatch` CLI onto the user's PATH and says where, and whether
+/// that folder is on PATH.
 #[tauri::command]
-pub async fn install_cli_command(app: tauri::AppHandle) -> Result<String, String> {
+pub async fn install_cli_command(app: tauri::AppHandle) -> Result<CliInstall, String> {
     use tauri::Manager;
     let bundled = app
         .path()
@@ -276,11 +349,18 @@ pub async fn install_cli_command(app: tauri::AppHandle) -> Result<String, String
             );
         }
         let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-        link_cli(
+        let linked = link_cli(
             &bundled,
             &["/usr/local/bin".into(), Path::new(&home).join(".local/bin")],
-        )
-        .map(|p| p.display().to_string())
+        )?;
+        let path_var = std::env::var_os("PATH").unwrap_or_default();
+        let on_path = linked
+            .parent()
+            .is_some_and(|dir| dir_on_path(dir, &path_var));
+        Ok(CliInstall {
+            path: linked.display().to_string(),
+            on_path,
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -325,6 +405,102 @@ mod tests {
             writable.join("dispatch")
         );
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn never_removes_a_real_dispatch_file() {
+        let base = temp_dir("cli-blocked");
+        let bundled = base.join("dispatch-cli");
+        std::fs::write(&bundled, "#!/bin/sh\n").unwrap();
+        let taken = base.join("taken/bin");
+        std::fs::create_dir_all(&taken).unwrap();
+        std::fs::write(taken.join("dispatch"), "mine").unwrap();
+        let free = base.join("home/.local/bin");
+
+        // Skips the blocked dir and links into the next one.
+        let linked = link_cli(&bundled, &[taken.clone(), free.clone()]).unwrap();
+        assert_eq!(linked, free.join("dispatch"));
+        assert_eq!(
+            std::fs::read_to_string(taken.join("dispatch")).unwrap(),
+            "mine"
+        );
+
+        // With no other dir, it errors and still leaves the file alone.
+        let err = link_cli(&bundled, std::slice::from_ref(&taken)).unwrap_err();
+        assert!(err.contains("already installed at"), "{err}");
+        assert!(err.contains(&taken.join("dispatch").display().to_string()));
+        assert_eq!(
+            std::fs::read_to_string(taken.join("dispatch")).unwrap(),
+            "mine"
+        );
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn dir_on_path_checks_path_and_usr_local_bin() {
+        let path = std::ffi::OsString::from("/usr/bin:/home/a/.local/bin");
+        assert!(dir_on_path(Path::new("/home/a/.local/bin"), &path));
+        assert!(dir_on_path(Path::new("/usr/local/bin"), &path));
+        assert!(!dir_on_path(
+            Path::new("/home/a/.local/bin"),
+            &std::ffi::OsString::from("/usr/bin:/bin")
+        ));
+    }
+
+    #[test]
+    fn too_broad_folders_are_refused() {
+        let home = Path::new("/Users/ada");
+        assert!(is_too_broad(Path::new("/"), Some(home)));
+        assert!(is_too_broad(home, Some(home)));
+        assert!(is_too_broad(Path::new("/Users/ada/Documents"), Some(home)));
+        assert!(is_too_broad(Path::new("/Users/ada/Desktop/"), Some(home)));
+        assert!(!is_too_broad(
+            Path::new("/Users/ada/Documents/site"),
+            Some(home)
+        ));
+        assert!(!is_too_broad(Path::new("/Users/ada/code"), Some(home)));
+        assert!(!is_too_broad(Path::new("/Users/ada/code"), None));
+    }
+
+    #[test]
+    fn folder_state_flags_home_as_too_broad() {
+        let home = temp_dir("broad-home");
+        std::fs::create_dir_all(home.join("Documents/site")).unwrap();
+        assert!(project_folder_state_with(&home, Some(&home), ENV).too_broad);
+        assert!(project_folder_state_with(&home.join("Documents"), Some(&home), ENV).too_broad);
+        assert!(
+            !project_folder_state_with(&home.join("Documents/site"), Some(&home), ENV).too_broad
+        );
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn a_subfolder_of_a_parent_repo_is_not_its_own_repo() {
+        for with_commits in [false, true] {
+            let parent = temp_dir(&format!("parent-{with_commits}"));
+            git(&["init", "-b", "main"], Some(&parent), ENV).unwrap();
+            std::fs::write(parent.join("private.txt"), "parent file").unwrap();
+            if with_commits {
+                git(&["add", "-A"], Some(&parent), ENV).unwrap();
+                git(&["commit", "-m", "parent"], Some(&parent), ENV).unwrap();
+            }
+            let sub = parent.join("site");
+            std::fs::create_dir_all(&sub).unwrap();
+            std::fs::write(sub.join("index.html"), "<h1>hi</h1>").unwrap();
+
+            let state = project_folder_state_with(&sub, None, ENV);
+            assert!(!state.is_git_repo, "with_commits={with_commits}");
+            assert!(!state.has_commits);
+
+            prepare_project_folder_with(&sub, ENV).unwrap();
+
+            assert!(sub.join(".git").is_dir());
+            let tracked = git(&["ls-files"], Some(&sub), ENV).unwrap();
+            assert!(tracked.contains("index.html"));
+            assert!(!tracked.contains("private.txt"));
+            assert!(project_folder_state_with(&sub, None, ENV).has_commits);
+            std::fs::remove_dir_all(&parent).unwrap();
+        }
     }
 
     #[test]
