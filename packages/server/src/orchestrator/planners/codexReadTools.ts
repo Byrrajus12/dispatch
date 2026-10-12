@@ -1,7 +1,8 @@
 import { childEnv } from '@dispatch-foo/core';
-import { realpathSync } from 'node:fs';
+import { constants, realpathSync } from 'node:fs';
 import type { Dirent } from 'node:fs';
-import { open, readdir, readFile, stat } from 'node:fs/promises';
+import { open, readdir, stat } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 
@@ -31,7 +32,9 @@ const MAX_ENTRIES = 1000;
 // How far read_file scans for an offset deep in a huge file before giving up.
 const MAX_SCAN_BYTES = 64 * 1024 * 1024;
 const SEARCH_TIMEOUT_MS = 10_000;
-// The JS fallback's bounds: files it opens, the largest it reads, the walk depth.
+const MAX_STDERR_CHARS = 2000;
+const TIMED_OUT_NOTE = '[search timed out; narrow the path or glob]';
+// The JS fallback's bounds: entries it visits, the largest file it reads, the walk depth.
 const FALLBACK_MAX_FILES = 20_000;
 const FALLBACK_MAX_FILE_BYTES = 1024 * 1024;
 const FALLBACK_MAX_DEPTH = 24;
@@ -188,15 +191,29 @@ function looksBinary(bytes: Uint8Array): boolean {
   return false;
 }
 
+// Opens a file for reading without following a final symlink or blocking on a
+// FIFO; the handle's own fstat then decides, so a swap after locate() can't slip in.
+async function openRegular(
+  file: string
+): Promise<{ handle: FileHandle; size: number } | 'directory' | 'other'> {
+  const handle = await open(
+    file,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+  );
+  const info = await handle.stat();
+  if (info.isFile()) return { handle, size: info.size };
+  await handle.close();
+  return info.isDirectory() ? 'directory' : 'other';
+}
+
 // Streams the file in chunks, so a huge file costs only the lines asked for;
 // stops at `limit` lines or MAX_OUTPUT_BYTES and says where to continue.
 async function readLines(
-  file: string,
+  handle: FileHandle,
   asked: string,
   offset: number,
   limit: number
 ): Promise<ToolResult> {
-  const handle = await open(file, 'r');
   try {
     const decoder = new TextDecoder();
     const buffer = new Uint8Array(CHUNK_BYTES);
@@ -247,6 +264,8 @@ async function readLines(
         pending = pending.slice(0, MAX_LINE_CHARS + 1);
       for (const piece of pieces) if (!take(piece)) break reading;
       if (scanned > MAX_SCAN_BYTES) {
+        // A wanted line still unfinished at the cap shows its clipped head.
+        if (pending !== '' && lineNo + 1 >= offset && !take(pending)) break;
         stopNote = `[stopped after scanning 64MB; use a smaller offset]`;
         break;
       }
@@ -278,12 +297,13 @@ async function readFileTool(
     return fail(`invalid read_file arguments: ${parsed.error.message}`);
   const where = locate(rootDir, parsed.data.path);
   if (!where.ok) return fail(where.message);
-  const info = await stat(where.real);
-  if (info.isDirectory())
+  const opened = await openRegular(where.real);
+  if (opened === 'directory')
     return fail(`${parsed.data.path} is a directory; use list_files`);
-  if (!info.isFile()) return fail(`${parsed.data.path} is not a regular file`);
+  if (opened === 'other')
+    return fail(`${parsed.data.path} is not a regular file`);
   return readLines(
-    where.real,
+    opened.handle,
     parsed.data.path,
     parsed.data.offset ?? 1,
     Math.min(parsed.data.limit ?? MAX_LINES, MAX_LINES)
@@ -302,6 +322,19 @@ interface SearchScope {
   real: string;
   rel: string;
   realRoot: string;
+}
+
+// Drains a stream to its end but keeps only its first `max` characters.
+async function readCapped(
+  stream: ReadableStream<Uint8Array>,
+  max: number
+): Promise<string> {
+  const decoder = new TextDecoder();
+  let text = '';
+  for await (const chunk of stream) {
+    if (text.length < max) text += decoder.decode(chunk, { stream: true });
+  }
+  return text.slice(0, max);
 }
 
 // Runs ripgrep with fixed leading options and no config file, reading at most
@@ -327,7 +360,7 @@ async function runRg(
     timedOut = true;
     proc.kill();
   }, SEARCH_TIMEOUT_MS);
-  const stderrText = new Response(proc.stderr).text();
+  const stderrText = readCapped(proc.stderr, MAX_STDERR_CHARS);
   const reader = proc.stdout.getReader();
   const decoder = new TextDecoder();
   let text = '';
@@ -361,7 +394,7 @@ async function runRg(
     truncated: truncated || newlines > maxLines,
     timedOut,
     code,
-    stderr: (await stderrText).slice(0, 2000),
+    stderr: await stderrText,
   };
 }
 
@@ -390,9 +423,7 @@ const SEALED_GLOBS = ['--iglob=!.dispatch', '--iglob=!.git'];
 function rgResult(outcome: RgOutcome, empty: string): ToolResult {
   if (outcome.timedOut) {
     return ok(
-      listing(outcome.lines, true, empty).concat(
-        '\n[search timed out after 10s; narrow the path or glob]'
-      )
+      listing(outcome.lines, true, empty).concat(`\n${TIMED_OUT_NOTE}`)
     );
   }
   if (!outcome.truncated && outcome.code === 1) return ok(empty);
@@ -410,13 +441,20 @@ interface WalkedFile {
   local: string;
 }
 
+interface Walked {
+  files: WalkedFile[];
+  truncated: boolean;
+  timedOut: boolean;
+}
+
 // The fallback's walk: never follows symlinks, never enters SEALED or
-// node_modules, and stops at FALLBACK_MAX_FILES files.
+// node_modules, and stops at FALLBACK_MAX_FILES entries (directories count) or the deadline.
 async function walkFiles(
   start: string,
   realRoot: string,
-  glob: string | null | undefined
-): Promise<{ files: WalkedFile[]; truncated: boolean }> {
+  glob: string | null | undefined,
+  deadline: number
+): Promise<Walked> {
   const matcher = glob ? new Bun.Glob(glob) : null;
   const files: WalkedFile[] = [];
   const startInfo = await stat(start);
@@ -424,11 +462,17 @@ async function walkFiles(
     return {
       files: [{ real: start, rel: relative(realRoot, start), local: '' }],
       truncated: false,
+      timedOut: false,
     };
   }
   const stack: { dir: string; depth: number }[] = [{ dir: start, depth: 0 }];
   let seen = 0;
+  const sorted = (): WalkedFile[] =>
+    files.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
   while (stack.length > 0) {
+    if (Date.now() >= deadline) {
+      return { files: sorted(), truncated: true, timedOut: true };
+    }
     const next = stack.pop();
     if (next === undefined) break;
     let entries: Dirent[];
@@ -442,21 +486,44 @@ async function walkFiles(
       const lower = entry.name.toLowerCase();
       if (SEALED.has(lower) || FALLBACK_SKIP.has(lower)) continue;
       const full = join(next.dir, entry.name);
-      if (entry.isDirectory()) {
+      const isDir = entry.isDirectory();
+      if (!isDir && !entry.isFile()) continue;
+      seen += 1;
+      if (seen > FALLBACK_MAX_FILES) {
+        return { files: sorted(), truncated: true, timedOut: false };
+      }
+      if (isDir) {
         if (next.depth < FALLBACK_MAX_DEPTH)
           stack.push({ dir: full, depth: next.depth + 1 });
         continue;
       }
-      if (!entry.isFile()) continue;
-      seen += 1;
-      if (seen > FALLBACK_MAX_FILES) return { files, truncated: true };
       const local = relative(start, full);
       if (matcher !== null && !matcher.match(local)) continue;
       files.push({ real: full, rel: relative(realRoot, full), local });
     }
   }
-  files.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
-  return { files, truncated: false };
+  return { files: sorted(), truncated: false, timedOut: false };
+}
+
+// One fallback file's text, or null for one it skips: unreadable (EACCES and
+// the like), not a regular file, too big, or binary.
+async function fallbackText(file: string): Promise<string | null> {
+  let opened: Awaited<ReturnType<typeof openRegular>>;
+  try {
+    opened = await openRegular(file);
+  } catch {
+    return null;
+  }
+  if (typeof opened === 'string') return null;
+  try {
+    if (opened.size > FALLBACK_MAX_FILE_BYTES) return null;
+    const bytes = await opened.handle.readFile();
+    return looksBinary(bytes) ? null : bytes.toString('utf8');
+  } catch {
+    return null;
+  } finally {
+    await opened.handle.close();
+  }
 }
 
 // Without ripgrep, the pattern is matched as plain text: a JS RegExp can't be
@@ -465,23 +532,25 @@ async function grepFallback(
   where: { real: string; realRoot: string },
   pattern: string,
   glob: string | null | undefined,
-  ignoreCase: boolean
+  ignoreCase: boolean,
+  timeoutMs: number
 ): Promise<ToolResult> {
   const needle = ignoreCase ? pattern.toLowerCase() : pattern;
-  const walked = await walkFiles(where.real, where.realRoot, glob);
+  // One budget for the walk and the reads together.
+  const deadline = Date.now() + timeoutMs;
+  const walked = await walkFiles(where.real, where.realRoot, glob, deadline);
   const hits: string[] = [];
   let truncated = walked.truncated;
-  const deadline = Date.now() + SEARCH_TIMEOUT_MS;
+  let timedOut = walked.timedOut;
   for (const file of walked.files) {
-    if (Date.now() > deadline) {
+    if (Date.now() >= deadline) {
       truncated = true;
+      timedOut = true;
       break;
     }
-    const info = await stat(file.real);
-    if (info.size > FALLBACK_MAX_FILE_BYTES) continue;
-    const bytes = await readFile(file.real);
-    if (looksBinary(bytes)) continue;
-    const lines = bytes.toString('utf8').split('\n');
+    const text = await fallbackText(file.real);
+    if (text === null) continue;
+    const lines = text.split('\n');
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const hay = ignoreCase ? line.toLowerCase() : line;
@@ -496,13 +565,15 @@ async function grepFallback(
   }
   const note =
     '[ripgrep is not installed, so the pattern was matched as plain text]';
-  return ok(`${listing(hits, truncated, 'No matches.')}\n${note}`);
+  const body = listing(hits, truncated, 'No matches.');
+  return ok(`${body}${timedOut ? `\n${TIMED_OUT_NOTE}` : ''}\n${note}`);
 }
 
 async function grepTool(
   rootDir: string,
   args: unknown,
-  rgPath: string | null
+  rgPath: string | null,
+  timeoutMs: number
 ): Promise<ToolResult> {
   const parsed = grepArgs.safeParse(args);
   if (!parsed.success)
@@ -511,7 +582,9 @@ async function grepTool(
   const ignoreCase = parsed.data.ignore_case === true;
   const where = locate(rootDir, parsed.data.path);
   if (!where.ok) return fail(where.message);
-  if (rgPath === null) return grepFallback(where, pattern, glob, ignoreCase);
+  if (rgPath === null) {
+    return grepFallback(where, pattern, glob, ignoreCase, timeoutMs);
+  }
   // Every model value rides inside its own `--flag=value` token, and the path
   // after `--`, so none can be read as an option (`--pre` would run a program).
   const outcome = await runRg(
@@ -555,7 +628,8 @@ async function listDirectory(
 async function listFilesTool(
   rootDir: string,
   args: unknown,
-  rgPath: string | null
+  rgPath: string | null,
+  timeoutMs: number
 ): Promise<ToolResult> {
   const parsed = listArgs.safeParse(args);
   if (!parsed.success)
@@ -566,15 +640,19 @@ async function listFilesTool(
   const glob = parsed.data.glob;
   if (!glob) return listDirectory(where, asked);
   if (rgPath === null) {
-    const walked = await walkFiles(where.real, where.realRoot, glob);
-    const paths = walked.files.map((file) => file.rel);
-    return ok(
-      listing(
-        paths.slice(0, MAX_ENTRIES),
-        walked.truncated || paths.length > MAX_ENTRIES,
-        'No files matched.'
-      )
+    const walked = await walkFiles(
+      where.real,
+      where.realRoot,
+      glob,
+      Date.now() + timeoutMs
     );
+    const paths = walked.files.map((file) => file.rel);
+    const body = listing(
+      paths.slice(0, MAX_ENTRIES),
+      walked.truncated || paths.length > MAX_ENTRIES,
+      'No files matched.'
+    );
+    return ok(walked.timedOut ? `${body}\n${TIMED_OUT_NOTE}` : body);
   }
   const outcome = await runRg(
     rgPath,
@@ -588,6 +666,8 @@ async function listFilesTool(
 interface PlannerReadToolOptions {
   /** ripgrep's path, or null for the JS fallback; found on PATH per call by default. */
   rgPath?: string | null;
+  /** How long the JS fallback may walk and read; 10s by default. */
+  searchTimeoutMs?: number;
 }
 
 /** The planner's read-only tools for `rootDir` and the handler that serves them. */
@@ -599,12 +679,14 @@ export function plannerReadTools(
     options.rgPath !== undefined
       ? options.rgPath
       : Bun.which('rg', { PATH: process.env.PATH ?? '' });
+  const timeoutMs = options.searchTimeoutMs ?? SEARCH_TIMEOUT_MS;
   const handler: CodexToolHandler = async (name, args) => {
     try {
       if (name === 'read_file') return await readFileTool(rootDir, args);
-      if (name === 'grep') return await grepTool(rootDir, args, rg());
+      if (name === 'grep')
+        return await grepTool(rootDir, args, rg(), timeoutMs);
       if (name === 'list_files')
-        return await listFilesTool(rootDir, args, rg());
+        return await listFilesTool(rootDir, args, rg(), timeoutMs);
       return fail(`unknown tool: ${name}`);
     } catch (error) {
       return fail(error instanceof Error ? error.message : String(error));

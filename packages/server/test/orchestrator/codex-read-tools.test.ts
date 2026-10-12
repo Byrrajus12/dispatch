@@ -346,3 +346,92 @@ describe('list_files caps', () => {
     }
   });
 });
+
+describe('hardening', () => {
+  it('refuses a FIFO rather than blocking on it', async () => {
+    const fifo = join(root, 'pipe');
+    expect(Bun.spawnSync(['mkfifo', fifo]).exitCode).toBe(0);
+    try {
+      const started = Date.now();
+      const out = await call('read_file', { path: 'pipe' });
+      expect(Date.now() - started).toBeLessThan(2000);
+      expect(out.isError).toBe(true);
+      expect(out.content).toContain('not a regular file');
+    } finally {
+      rmSync(fifo, { force: true });
+    }
+  });
+
+  it('refuses a symlink into .dispatch and a relative symlinked parent', async () => {
+    symlinkSync('.dispatch', join(root, 'cfg'));
+    mkdirSync(join(root, 'sub'));
+    symlinkSync('../..', join(root, 'sub', 'up2'));
+    try {
+      for (const rgPath of [RG, null]) {
+        for (const path of ['cfg/config.yml', 'sub/up2/outside/secret.txt']) {
+          const read = await call('read_file', { path }, rgPath);
+          expect(read.isError).toBe(true);
+          expect(String(read.content)).not.toContain('secret\n');
+        }
+        for (const path of ['cfg', 'sub/up2', 'sub/up2/outside']) {
+          expect(
+            (await call('grep', { pattern: 'needle', path }, rgPath)).isError
+          ).toBe(true);
+          expect((await call('list_files', { path }, rgPath)).isError).toBe(
+            true
+          );
+        }
+        const all = String(
+          (await call('grep', { pattern: 'needle' }, rgPath)).content
+        );
+        expect(all).not.toContain('secret');
+        expect(all).not.toContain('outside');
+      }
+    } finally {
+      rmSync(join(root, 'cfg'), { force: true });
+      rmSync(join(root, 'sub'), { recursive: true, force: true });
+    }
+  });
+
+  it('shows the clipped head of a first line longer than 64MB', async () => {
+    const huge = join(root, 'huge.txt');
+    writeFileSync(huge, 'y'.repeat(65 * 1024 * 1024));
+    try {
+      const out = await call('read_file', { path: 'huge.txt' });
+      expect(out.isError).toBe(false);
+      const text = String(out.content);
+      expect(text.startsWith(`1\t${'y'.repeat(2000)} [line truncated]`)).toBe(
+        true
+      );
+      expect(text.length).toBeLessThan(2200);
+      expect(text).toContain('64MB');
+    } finally {
+      rmSync(huge, { force: true });
+    }
+  });
+
+  it('skips an unreadable file in the fallback grep instead of failing', async () => {
+    const locked = join(root, 'src', 'locked.ts');
+    writeFileSync(locked, 'needle locked\n');
+    chmodSync(locked, 0o000);
+    try {
+      const out = await call('grep', { pattern: 'needle' }, null);
+      expect(out.isError).toBe(false);
+      expect(out.content).toContain('src/a.ts:1:');
+      expect(out.content).not.toContain('locked');
+    } finally {
+      chmodSync(locked, 0o644);
+      rmSync(locked, { force: true });
+    }
+  });
+
+  it('time-caps the fallback walk for grep and list_files', async () => {
+    const tools = plannerReadTools(root, { rgPath: null, searchTimeoutMs: 0 });
+    const grep = await tools.handler('grep', { pattern: 'needle' });
+    expect(grep.isError).toBe(false);
+    expect(grep.content).toContain('timed out');
+    const list = await tools.handler('list_files', { glob: '**/*.ts' });
+    expect(list.isError).toBe(false);
+    expect(list.content).toContain('timed out');
+  });
+});
