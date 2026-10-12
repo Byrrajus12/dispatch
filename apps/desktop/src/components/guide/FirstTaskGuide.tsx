@@ -17,6 +17,7 @@ import {
   type GuideView,
 } from '../../lib/firstTaskGuide';
 import { FailureNotice } from '../failure/FailureNotice';
+import { useNarrowMain } from '../shell/TwoViewShell';
 import { GlossaryTerm } from './GlossaryTerm';
 import {
   type SendChoice,
@@ -70,7 +71,8 @@ interface FirstTaskGuideProps {
   provider: GuideProvider | null;
   sendOptions: SendToAgentOptions;
   sendError: string | null;
-  collapsed: boolean;
+  /** The person's explicit choice; null follows the window (collapsed when narrow). */
+  collapsed: boolean | null;
   onCollapsedChange: (collapsed: boolean) => void;
   actions: GuideActions;
 }
@@ -429,11 +431,13 @@ function DoneBody({ actions }: BodyProps) {
  * sentence to landed, five steps, while the person uses the real screens.
  */
 export function FirstTaskGuide({
-  collapsed,
+  collapsed: chosen,
   onCollapsedChange,
   ...body
 }: FirstTaskGuideProps) {
   const { view, actions } = body;
+  const narrow = useNarrowMain();
+  const collapsed = chosen ?? narrow;
   const done = view.stage === 'done';
   // Past Describe, closing ends the guide for this project, so it asks first.
   const [confirmClose, setConfirmClose] = useState(false);

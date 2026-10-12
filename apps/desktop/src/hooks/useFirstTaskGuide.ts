@@ -33,7 +33,8 @@ export interface FirstTaskGuideState {
   /** The guide is following a task right now, so new drafts and tasks link to it. */
   active: boolean;
   draftId: string | undefined;
-  collapsed: boolean;
+  /** The person's own choice this session; null until they toggle, so the card picks by window width. */
+  collapsed: boolean | null;
   setCollapsed: (collapsed: boolean) => void;
   /** The last guided Send to agent that failed, shown on the card until the next send. */
   sendError: string | null;
@@ -65,7 +66,7 @@ export function useFirstTaskGuide({
     readFor(projectPath)
   );
   const [celebration, setCelebration] = useState<GuideView | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState<boolean | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   // Restart was used in this session, so the guide shows even on a project with tasks.
   const [restarted, setRestarted] = useState(false);
@@ -74,7 +75,7 @@ export function useFirstTaskGuide({
     setPath(projectPath);
     setRecord(readFor(projectPath));
     setCelebration(null);
-    setCollapsed(false);
+    setCollapsed(null);
     setSendError(null);
     setRestarted(false);
   }
@@ -149,7 +150,7 @@ export function useFirstTaskGuide({
     restart: () => {
       save({ status: 'active' });
       setCelebration(null);
-      setCollapsed(false);
+      setCollapsed(null);
       setSendError(null);
       setRestarted(true);
     },

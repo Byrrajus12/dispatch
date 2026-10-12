@@ -108,7 +108,7 @@ test('a linked draft and task, collapsed and send error stay with their own proj
   expect(result.current.draftId).toBe('d-1');
   rerender(props({ projectPath: '/p/b' }));
   expect(result.current.draftId).toBeUndefined();
-  expect(result.current.collapsed).toBe(false);
+  expect(result.current.collapsed).toBeNull();
   expect(result.current.sendError).toBeNull();
   expect(readGuide('/p/b')).toEqual({ status: 'active' });
   rerender(props());
