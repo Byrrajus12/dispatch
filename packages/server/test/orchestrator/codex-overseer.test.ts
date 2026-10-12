@@ -1,0 +1,764 @@
+import { describe, expect, it } from 'bun:test';
+import { z } from 'zod';
+
+import { CODEX_STOPPED_MESSAGE } from '../../src/orchestrator/codexTurn.js';
+import type {
+  OverseerToolRequest,
+  OverseerToolResult,
+  OverseerToolset,
+} from '../../src/orchestrator/overseerBackend.js';
+import { EMPTY_REPLY_MESSAGE } from '../../src/orchestrator/overseerPrompt.js';
+import {
+  CodexOverseer,
+  overseerPermission,
+} from '../../src/orchestrator/overseers/codex.js';
+import type { ApprovalDecision } from '../../src/orchestrator/types.js';
+import {
+  FakeCodexProcess,
+  finishTurn,
+  scriptedCodex,
+  waitFor,
+} from './fakeCodex.js';
+
+const ROOT = '/work/shop';
+
+function stubToolset(result?: OverseerToolResult): {
+  toolset: OverseerToolset;
+  calls: { name: string; input: unknown }[];
+} {
+  const calls: { name: string; input: unknown }[] = [];
+  const toolset: OverseerToolset = {
+    tools: [
+      {
+        name: 'list_runs',
+        description: 'Live and recent runs.',
+        inputSchema: z.object({ limit: z.number().optional() }),
+        mutating: false,
+      },
+      {
+        name: 'cancel_run',
+        description: 'Stop a live run.',
+        inputSchema: z.object({ runId: z.string() }),
+        mutating: true,
+      },
+    ],
+    call: (name, input) => {
+      calls.push({ name, input });
+      return Promise.resolve(
+        result ?? { content: { ok: true }, isError: false }
+      );
+    },
+  };
+  return { toolset, calls };
+}
+
+function overseerOver(
+  codex: FakeCodexProcess,
+  extra: ConstructorParameters<typeof CodexOverseer>[1] = {}
+): CodexOverseer {
+  return new CodexOverseer(ROOT, {
+    spawnProcess: () => codex,
+    cartoSpec: () => null,
+    userMcpServers: () => [],
+    pricing: () => undefined,
+    env: {},
+    ...extra,
+  });
+}
+
+// A Codex `item/commandExecution/requestApproval` for `command` (a string, or argv to test).
+function commandAsk(threadId: string, itemId: string, command: unknown) {
+  return {
+    threadId,
+    turnId: 'turn-1',
+    itemId,
+    startedAtMs: 0,
+    environmentId: null,
+    command,
+    cwd: ROOT,
+  };
+}
+
+// An authorizeTool that records each request and answers from `answers` in order.
+function recorder(answers: ApprovalDecision[]) {
+  const seen: OverseerToolRequest[] = [];
+  return {
+    seen,
+    authorizeTool: (request: OverseerToolRequest) => {
+      seen.push(request);
+      return Promise.resolve(answers.shift() ?? { allow: false });
+    },
+  };
+}
+
+describe('CodexOverseer session', () => {
+  it('starts a Codex thread in the checkout with the registry as dynamic tools', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) => finishTurn(c, t, 'all quiet'),
+    });
+    const turn = await overseerOver(codex, {
+      cartoSpec: () => ({ command: 'carto', args: ['mcp'], env: {} }),
+      userMcpServers: () => ['stripe'],
+    }).start('what is going on?', stubToolset().toolset, {
+      permissionMode: 'default',
+      model: 'gpt-5.5',
+      effort: 'max',
+    });
+
+    expect(turn).toEqual({ reply: 'all quiet', sessionId: 'thread-1' });
+    expect(codex.paramsOf('initialize')?.capabilities).toEqual({
+      experimentalApi: true,
+      requestAttestation: false,
+    });
+    const start = codex.paramsOf('thread/start');
+    expect(start).toMatchObject({
+      cwd: ROOT,
+      model: 'gpt-5.5',
+      approvalPolicy: 'untrusted',
+      approvalsReviewer: 'user',
+      sandbox: 'workspace-write',
+      config: {
+        mcp_servers: {
+          carto: { command: 'carto', args: ['mcp'], env: {}, required: true },
+          stripe: { enabled: false },
+        },
+      },
+    });
+    expect(start?.developerInstructions).toEqual(
+      expect.stringContaining('a full Codex session in the project checkout')
+    );
+    const tools = start?.dynamicTools as {
+      type: string;
+      name: string;
+      description: string;
+      inputSchema: Record<string, unknown>;
+    }[];
+    expect(tools.map((t) => [t.type, t.name])).toEqual([
+      ['function', 'list_runs'],
+      ['function', 'cancel_run'],
+    ]);
+    expect(tools[0].description).toBe('Live and recent runs.');
+    expect(tools[1].description).toContain('QUEUES this action');
+    expect(tools[1].inputSchema).toMatchObject({
+      type: 'object',
+      properties: { runId: { type: 'string' } },
+      required: ['runId'],
+    });
+    expect(tools[1].inputSchema.$schema).toBeUndefined();
+    expect(codex.paramsOf('turn/start')?.effort).toBe('xhigh');
+  });
+
+  it.each([
+    ['default', 'untrusted', 'workspace-write'],
+    ['acceptEdits', 'untrusted', 'workspace-write'],
+    ['auto', 'untrusted', 'workspace-write'],
+    ['dontAsk', 'untrusted', 'workspace-write'],
+    ['bypassPermissions', 'untrusted', 'danger-full-access'],
+    ['plan', 'never', 'read-only'],
+  ])(
+    'maps permissionMode %p to Codex %p with %p',
+    (mode, approvalPolicy, sandbox) => {
+      expect(overseerPermission(mode) as unknown).toEqual({
+        approvalPolicy,
+        approvalsReviewer: 'user',
+        sandbox,
+      });
+    }
+  );
+
+  it('resumes the thread without re-declaring tools and reports cost and context', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) =>
+        finishTurn(c, t, 'second answer', {
+          usage: {
+            total: {
+              totalTokens: 3_000_000,
+              inputTokens: 2_000_000,
+              cachedInputTokens: 1_000_000,
+              cacheWriteInputTokens: 0,
+              outputTokens: 1_000_000,
+              reasoningOutputTokens: 0,
+            },
+            last: {
+              totalTokens: 50_000,
+              inputTokens: 40_000,
+              cachedInputTokens: 0,
+              cacheWriteInputTokens: 0,
+              outputTokens: 10_000,
+              reasoningOutputTokens: 0,
+            },
+          },
+        }),
+    });
+    const turn = await overseerOver(codex, {
+      pricing: () => ({ input: 1, cachedInput: 0.1, output: 10 }),
+    }).sendMessage('thread-7', 'and now?', stubToolset().toolset, {});
+
+    expect(turn.reply).toBe('second answer');
+    expect(turn.sessionId).toBe('thread-7');
+    expect(turn.costUsd).toBeCloseTo(11.1, 6);
+    expect(turn.contextTokens).toBe(40_000);
+    expect(codex.paramsOf('thread/resume')).toMatchObject({
+      threadId: 'thread-7',
+      developerInstructions: expect.stringContaining('overseer'),
+    });
+    expect(codex.paramsOf('thread/resume')?.dynamicTools).toBeUndefined();
+    expect(codex.paramsOf('thread/start')).toBeUndefined();
+  });
+
+  it('stands in a readable line for a turn that says nothing', async () => {
+    const codex = scriptedCodex({ onTurn: (c, t) => finishTurn(c, t, '   ') });
+    const turn = await overseerOver(codex).start(
+      'hi',
+      stubToolset().toolset,
+      {}
+    );
+    expect(turn.reply).toBe(EMPTY_REPLY_MESSAGE);
+  });
+
+  it('ends the turn on Stop', async () => {
+    const controller = new AbortController();
+    const codex = scriptedCodex({
+      onTurn: () => queueMicrotask(() => controller.abort()),
+    });
+    await expect(
+      overseerOver(codex).start('hi', stubToolset().toolset, {
+        abortController: controller,
+      })
+    ).rejects.toThrow(CODEX_STOPPED_MESSAGE);
+    expect(codex.killed).toBe(true);
+  });
+});
+
+describe('CodexOverseer registry tools', () => {
+  it('answers a registry call through the toolset, tool errors included', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) =>
+        c.serverRequest('item/tool/call', 'call-1', {
+          threadId: t,
+          turnId: 'turn-1',
+          callId: 'c1',
+          namespace: null,
+          tool: 'list_runs',
+          arguments: { limit: 2 },
+        }),
+    });
+    const { toolset, calls } = stubToolset({
+      content: { error: 'run not found: r-9' },
+      isError: true,
+    });
+    const pending = overseerOver(codex).start('runs?', toolset, {});
+    await waitFor(() => codex.responseTo('call-1') !== undefined);
+
+    expect(calls).toEqual([{ name: 'list_runs', input: { limit: 2 } }]);
+    expect(codex.responseTo('call-1')?.result).toEqual({
+      contentItems: [
+        { type: 'inputText', text: '{"error":"run not found: r-9"}' },
+      ],
+      success: false,
+    });
+    finishTurn(codex, 'thread-1', 'r-9 is gone');
+    expect((await pending).reply).toBe('r-9 is gone');
+  });
+
+  it('reports built-in calls to the transcript, not registry calls', async () => {
+    const used: [string, unknown][] = [];
+    const codex = scriptedCodex({
+      onTurn: (c, t) => {
+        c.notify('item/started', {
+          threadId: t,
+          turnId: 'turn-1',
+          item: {
+            type: 'commandExecution',
+            id: 'c1',
+            command: 'git status',
+            cwd: ROOT,
+            status: 'inProgress',
+          },
+        });
+        c.notify('item/started', {
+          threadId: t,
+          turnId: 'turn-1',
+          item: {
+            type: 'dynamicToolCall',
+            id: 'd1',
+            tool: 'list_runs',
+            arguments: {},
+            status: 'inProgress',
+          },
+        });
+        finishTurn(c, t, 'clean');
+      },
+    });
+    await overseerOver(codex).start('status?', stubToolset().toolset, {
+      onToolUse: (name, input) => used.push([name, input]),
+    });
+    expect(used).toEqual([
+      ['codex.commandExecution', { command: 'git status', cwd: ROOT }],
+    ]);
+  });
+});
+
+describe('CodexOverseer approvals', () => {
+  it('asks authorizeTool about each command, answers once, and passes a refusal reason back', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) => {
+        c.serverRequest(
+          'item/commandExecution/requestApproval',
+          'ask-1',
+          commandAsk(t, 'cmd-1', 'moonx desktop:test')
+        );
+        c.serverRequest(
+          'item/commandExecution/requestApproval',
+          'ask-2',
+          commandAsk(t, 'cmd-2', 'rm -rf build')
+        );
+      },
+    });
+    const gate = recorder([
+      { allow: true, scope: 'session' },
+      { allow: false, reason: 'not on main, thanks' },
+    ]);
+    const pending = overseerOver(codex).start(
+      'test it',
+      stubToolset().toolset,
+      {
+        permissionMode: 'default',
+        authorizeTool: gate.authorizeTool,
+      }
+    );
+    await waitFor(
+      () =>
+        codex.responseTo('ask-2') !== undefined &&
+        codex.paramsOf('turn/steer') !== undefined
+    );
+
+    expect(gate.seen).toEqual([
+      {
+        requestId: expect.stringMatching(/^codex-approval-/),
+        toolName: 'codex.commandExecution',
+        input: { command: 'moonx desktop:test', cwd: ROOT },
+      },
+      {
+        requestId: expect.stringMatching(/^codex-approval-/),
+        toolName: 'codex.commandExecution',
+        input: { command: 'rm -rf build', cwd: ROOT },
+      },
+    ]);
+    // The manager parks calls from every conversation in one map by this id.
+    expect(gate.seen[0].requestId).not.toBe(gate.seen[1].requestId);
+    // Never acceptForSession: Dispatch's own grants decide the next one.
+    expect(codex.responseTo('ask-1')?.result).toEqual({ decision: 'accept' });
+    expect(codex.responseTo('ask-2')?.result).toEqual({ decision: 'decline' });
+    expect(codex.paramsOf('turn/steer')).toMatchObject({
+      threadId: 'thread-1',
+      expectedTurnId: 'turn-1',
+      input: [
+        {
+          type: 'text',
+          text: 'Dispatch did not run that: not on main, thanks',
+          text_elements: [],
+        },
+      ],
+    });
+    finishTurn(codex, 'thread-1', 'tests pass');
+    await pending;
+  });
+
+  it('declines every ask when no one can authorize', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) =>
+        c.serverRequest(
+          'item/commandExecution/requestApproval',
+          'ask-1',
+          commandAsk(t, 'cmd-1', 'ls')
+        ),
+    });
+    const pending = overseerOver(codex).start('x', stubToolset().toolset, {});
+    await waitFor(() => codex.responseTo('ask-1') !== undefined);
+    expect(codex.responseTo('ask-1')?.result).toEqual({ decision: 'decline' });
+    finishTurn(codex, 'thread-1', 'ok');
+    await pending;
+  });
+
+  it('asks Dispatch about every command under auto, the project default', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) =>
+        c.serverRequest(
+          'item/commandExecution/requestApproval',
+          'ask-1',
+          commandAsk(t, 'cmd-1', 'ls')
+        ),
+    });
+    const gate = recorder([{ allow: true }]);
+    const pending = overseerOver(codex).start('x', stubToolset().toolset, {
+      permissionMode: 'auto',
+      authorizeTool: gate.authorizeTool,
+    });
+    await waitFor(() => codex.responseTo('ask-1') !== undefined);
+    expect(codex.paramsOf('thread/start')).toMatchObject({
+      approvalPolicy: 'untrusted',
+      sandbox: 'workspace-write',
+    });
+    expect(gate.seen.map((r) => r.toolName)).toEqual([
+      'codex.commandExecution',
+    ]);
+    expect(codex.responseTo('ask-1')?.result).toEqual({ decision: 'accept' });
+    finishTurn(codex, 'thread-1', 'ok');
+    await pending;
+  });
+
+  it('allows a command with no hold itself under bypassPermissions but still asks about floor and Dispatch calls', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) => {
+        c.serverRequest(
+          'item/commandExecution/requestApproval',
+          'ask-1',
+          commandAsk(t, 'cmd-1', 'git status')
+        );
+        c.serverRequest(
+          'item/commandExecution/requestApproval',
+          'ask-2',
+          commandAsk(t, 'cmd-2', 'gh release create v2.0.0')
+        );
+        c.serverRequest(
+          'item/commandExecution/requestApproval',
+          'ask-3',
+          commandAsk(t, 'cmd-3', 'dispatch task list')
+        );
+      },
+    });
+    const gate = recorder([{ allow: true }, { allow: false }]);
+    const pending = overseerOver(codex).start('x', stubToolset().toolset, {
+      permissionMode: 'bypassPermissions',
+      authorizeTool: gate.authorizeTool,
+    });
+    await waitFor(() => codex.responseTo('ask-3') !== undefined);
+
+    expect(codex.responseTo('ask-1')?.result).toEqual({ decision: 'accept' });
+    expect(gate.seen.map((r) => [r.input, r.check])).toEqual([
+      [{ command: 'gh release create v2.0.0', cwd: ROOT }, 'publish'],
+      [{ command: 'dispatch task list', cwd: ROOT }, 'dispatch-cli'],
+    ]);
+    expect(codex.responseTo('ask-2')?.result).toEqual({ decision: 'accept' });
+    expect(codex.responseTo('ask-3')?.result).toEqual({ decision: 'decline' });
+    finishTurn(codex, 'thread-1', 'ok');
+    await pending;
+  });
+
+  it('allows an edit inside the checkout itself under acceptEdits and holds a .dispatch write', async () => {
+    const edit = (c: FakeCodexProcess, t: string, id: string, path: string) =>
+      c.notify('item/started', {
+        threadId: t,
+        turnId: 'turn-1',
+        item: {
+          type: 'fileChange',
+          id,
+          status: 'inProgress',
+          changes: [{ path, kind: { type: 'update' }, diff: '' }],
+        },
+      });
+    const codex = scriptedCodex({
+      onTurn: (c, t) => {
+        edit(c, t, 'edit-1', `${ROOT}/src/a.ts`);
+        edit(c, t, 'edit-2', `${ROOT}/.dispatch/config.yml`);
+        c.serverRequest('item/fileChange/requestApproval', 'ask-1', {
+          threadId: t,
+          turnId: 'turn-1',
+          itemId: 'edit-1',
+          startedAtMs: 0,
+        });
+        c.serverRequest('item/fileChange/requestApproval', 'ask-2', {
+          threadId: t,
+          turnId: 'turn-1',
+          itemId: 'edit-2',
+          startedAtMs: 0,
+        });
+      },
+    });
+    const gate = recorder([{ allow: false }]);
+    const used: [string, unknown][] = [];
+    const pending = overseerOver(codex).start('x', stubToolset().toolset, {
+      permissionMode: 'acceptEdits',
+      authorizeTool: gate.authorizeTool,
+      onToolUse: (name, input) => used.push([name, input]),
+    });
+    await waitFor(() => codex.responseTo('ask-2') !== undefined);
+
+    expect(codex.responseTo('ask-1')?.result).toEqual({ decision: 'accept' });
+    expect(gate.seen).toEqual([
+      {
+        requestId: expect.stringMatching(/^codex-approval-/),
+        toolName: 'codex.fileChange',
+        input: { paths: [`${ROOT}/.dispatch/config.yml`] },
+        check: 'dispatch-files',
+      },
+    ]);
+    expect(codex.responseTo('ask-2')?.result).toEqual({ decision: 'decline' });
+    expect(used.map(([name]) => name)).toEqual([
+      'codex.fileChange',
+      'codex.fileChange',
+    ]);
+    finishTurn(codex, 'thread-1', 'ok');
+    await pending;
+  });
+});
+
+describe('CodexOverseer floor backstop', () => {
+  it('fails the turn when Codex ran a floor command without asking', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) =>
+        c.notify('item/completed', {
+          threadId: t,
+          turnId: 'turn-1',
+          item: {
+            type: 'commandExecution',
+            id: 'cmd-9',
+            status: 'completed',
+            command: 'git push --force origin main',
+            cwd: ROOT,
+            aggregatedOutput: '',
+            exitCode: 0,
+          },
+        }),
+    });
+    await expect(
+      overseerOver(codex).start('x', stubToolset().toolset, {})
+    ).rejects.toThrow(
+      'Codex ran a floor command (force-push) without asking Dispatch'
+    );
+  });
+
+  it('fails the turn when a floor command is typed into a shell', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) =>
+        c.notify('item/commandExecution/terminalInteraction', {
+          threadId: t,
+          turnId: 'turn-1',
+          itemId: 'sh-1',
+          processId: 'p-1',
+          stdin: 'gh release create v1.0.0\n',
+        }),
+    });
+    await expect(
+      overseerOver(codex).start('x', stubToolset().toolset, {})
+    ).rejects.toThrow('Codex typed a floor command (publish) into a shell');
+  });
+});
+
+describe('CodexOverseer command shapes', () => {
+  // Asks about `command` under bypassPermissions, where only a floor check or a
+  // hold reaches authorizeTool; resolves with what the gate saw and Codex's answer.
+  async function bypassAsk(command: unknown) {
+    const codex = scriptedCodex({
+      onTurn: (c, t) =>
+        c.serverRequest(
+          'item/commandExecution/requestApproval',
+          'ask-1',
+          commandAsk(t, 'cmd-1', command)
+        ),
+    });
+    const gate = recorder([{ allow: false }]);
+    const pending = overseerOver(codex).start('x', stubToolset().toolset, {
+      permissionMode: 'bypassPermissions',
+      authorizeTool: gate.authorizeTool,
+    });
+    await waitFor(() => codex.responseTo('ask-1') !== undefined);
+    finishTurn(codex, 'thread-1', 'ok');
+    await pending;
+    return { seen: gate.seen, answer: codex.responseTo('ask-1')?.result };
+  }
+
+  it('holds a dispatch CLI call wrapped in a shell, as Codex reports commands', async () => {
+    const { seen, answer } = await bypassAsk(
+      "/bin/zsh -lc 'dispatch task list'"
+    );
+    expect(seen.map((r) => [r.input, r.check])).toEqual([
+      [{ command: 'dispatch task list', cwd: ROOT }, 'dispatch-cli'],
+    ]);
+    expect(answer).toEqual({ decision: 'decline' });
+  });
+
+  it('holds a dispatch CLI call sent as an argv array', async () => {
+    const { seen, answer } = await bypassAsk([
+      'bash',
+      '-lc',
+      'dispatch task list',
+    ]);
+    expect(seen.map((r) => [r.input, r.check])).toEqual([
+      [{ command: 'dispatch task list', cwd: ROOT }, 'dispatch-cli'],
+    ]);
+    expect(answer).toEqual({ decision: 'decline' });
+  });
+
+  it('unwraps nested shells and keeps compound scripts whole', async () => {
+    const nested = await bypassAsk(
+      `bash -lc "sh -c 'dispatch run cancel r-1'"`
+    );
+    expect(nested.seen.map((r) => [r.input, r.check])).toEqual([
+      [{ command: 'dispatch run cancel r-1', cwd: ROOT }, 'dispatch-cli'],
+    ]);
+    const compound = await bypassAsk(
+      "/bin/zsh -lc 'cd app && curl -s localhost:4000/api/runs'"
+    );
+    expect(compound.seen.map((r) => [r.input, r.check])).toEqual([
+      [
+        { command: 'cd app && curl -s localhost:4000/api/runs', cwd: ROOT },
+        'daemon-api',
+      ],
+    ]);
+  });
+
+  it('floor-checks a plain argv array', async () => {
+    const { seen } = await bypassAsk([
+      'git',
+      'push',
+      '--force',
+      'origin',
+      'main',
+    ]);
+    expect(seen.map((r) => [r.input, r.check])).toEqual([
+      [{ command: 'git push --force origin main', cwd: ROOT }, 'force-push'],
+    ]);
+  });
+
+  it('asks about a command it cannot read instead of allowing it', async () => {
+    const missing = await bypassAsk(null);
+    expect(missing.seen.map((r) => r.input)).toEqual([
+      { command: null, cwd: ROOT },
+    ]);
+    expect(missing.answer).toEqual({ decision: 'decline' });
+    const mixed = await bypassAsk(['bash', 7]);
+    expect(mixed.seen).toHaveLength(1);
+  });
+
+  it('shows the human the script, so a grant covers its program and not the shell', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) =>
+        c.serverRequest(
+          'item/commandExecution/requestApproval',
+          'ask-1',
+          commandAsk(t, 'cmd-1', "/bin/zsh -lc 'moonx desktop:test'")
+        ),
+    });
+    const gate = recorder([{ allow: true }]);
+    const pending = overseerOver(codex).start('x', stubToolset().toolset, {
+      permissionMode: 'default',
+      authorizeTool: gate.authorizeTool,
+    });
+    await waitFor(() => codex.responseTo('ask-1') !== undefined);
+    expect(gate.seen.map((r) => [r.input, r.check])).toEqual([
+      [{ command: 'moonx desktop:test', cwd: ROOT }, undefined],
+    ]);
+    finishTurn(codex, 'thread-1', 'ok');
+    await pending;
+  });
+
+  it('floor-checks a wrapped command Codex ran without asking', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) =>
+        c.notify('item/completed', {
+          threadId: t,
+          turnId: 'turn-1',
+          item: {
+            type: 'commandExecution',
+            id: 'cmd-9',
+            status: 'completed',
+            command: ['bash', '-lc', 'gh release create v3.0.0'],
+            cwd: ROOT,
+            exitCode: 0,
+          },
+        }),
+    });
+    await expect(
+      overseerOver(codex).start('x', stubToolset().toolset, {})
+    ).rejects.toThrow(
+      'Codex ran a floor command (publish) without asking Dispatch'
+    );
+  });
+});
+
+describe('CodexOverseer edits with unknown paths', () => {
+  it.each([
+    ['no announced item', undefined],
+    ['an item with no changes', []],
+    ['an item whose change has no path', [{ kind: { type: 'add' }, diff: '' }]],
+  ])(
+    'holds an edit with %s under bypassPermissions and acceptEdits',
+    async (_label, changes) => {
+      for (const mode of ['bypassPermissions', 'acceptEdits']) {
+        const codex = scriptedCodex({
+          onTurn: (c, t) => {
+            if (changes !== undefined) {
+              c.notify('item/started', {
+                threadId: t,
+                turnId: 'turn-1',
+                item: {
+                  type: 'fileChange',
+                  id: 'edit-1',
+                  status: 'inProgress',
+                  changes,
+                },
+              });
+            }
+            c.serverRequest('item/fileChange/requestApproval', 'ask-1', {
+              threadId: t,
+              turnId: 'turn-1',
+              itemId: 'edit-1',
+              startedAtMs: 0,
+            });
+          },
+        });
+        const gate = recorder([{ allow: false }]);
+        const pending = overseerOver(codex).start('x', stubToolset().toolset, {
+          permissionMode: mode,
+          authorizeTool: gate.authorizeTool,
+        });
+        await waitFor(() => codex.responseTo('ask-1') !== undefined);
+        expect(gate.seen.map((r) => [r.toolName, r.input, r.check])).toEqual([
+          ['codex.fileChange', { paths: [] }, 'dispatch-files'],
+        ]);
+        expect(codex.responseTo('ask-1')?.result).toEqual({
+          decision: 'decline',
+        });
+        finishTurn(codex, 'thread-1', 'ok');
+        await pending;
+      }
+    }
+  );
+
+  it('holds an edit asking for a write root under .dispatch', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) => {
+        c.notify('item/started', {
+          threadId: t,
+          turnId: 'turn-1',
+          item: {
+            type: 'fileChange',
+            id: 'edit-1',
+            status: 'inProgress',
+            changes: [
+              { path: `${ROOT}/src/a.ts`, kind: { type: 'update' }, diff: '' },
+            ],
+          },
+        });
+        c.serverRequest('item/fileChange/requestApproval', 'ask-1', {
+          threadId: t,
+          turnId: 'turn-1',
+          itemId: 'edit-1',
+          startedAtMs: 0,
+          grantRoot: `${ROOT}/.dispatch`,
+        });
+      },
+    });
+    const gate = recorder([{ allow: false }]);
+    const pending = overseerOver(codex).start('x', stubToolset().toolset, {
+      permissionMode: 'bypassPermissions',
+      authorizeTool: gate.authorizeTool,
+    });
+    await waitFor(() => codex.responseTo('ask-1') !== undefined);
+    expect(gate.seen.map((r) => r.check)).toEqual(['dispatch-files']);
+    finishTurn(codex, 'thread-1', 'ok');
+    await pending;
+  });
+});
