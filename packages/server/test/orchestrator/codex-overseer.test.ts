@@ -147,8 +147,12 @@ describe('CodexOverseer session', () => {
           carto: { command: 'carto', args: ['mcp'], env: {}, required: true },
           stripe: { enabled: false },
         },
+        // No sub-agents outside the gate; the shell stays on.
+        features: { multi_agent: false },
       },
     });
+    // Exactly that flag, so shell_tool and unified_exec stay on.
+    expect(start?.config).toHaveProperty('features', { multi_agent: false });
     expect(start?.developerInstructions).toEqual(
       expect.stringContaining('a full Codex session in the project checkout')
     );
@@ -239,6 +243,7 @@ describe('CodexOverseer session', () => {
     expect(codex.paramsOf('thread/resume')).toMatchObject({
       threadId: 'thread-7',
       developerInstructions: expect.stringContaining('overseer'),
+      config: { features: { multi_agent: false } },
     });
     expect(codex.paramsOf('thread/resume')?.dynamicTools).toBeUndefined();
     expect(codex.paramsOf('thread/start')).toBeUndefined();

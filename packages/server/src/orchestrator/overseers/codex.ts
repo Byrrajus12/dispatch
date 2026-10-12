@@ -45,6 +45,10 @@ import type { ApprovalDecision } from '../types.js';
 // Codex runs known-safe reads (cat, ls) without an approval Dispatch could hold.
 const INSTRUCTIONS = overseerInstructions('Codex', { ungatedReads: true });
 
+// Sent with the thread config on start and resume: no sub-agents, whose own
+// commands and tools would sit outside this Overseer's gate. The shell stays.
+const OVERSEER_FEATURES = { multi_agent: false };
+
 // Asks Dispatch about every non-read-only command; where a mode Codex can't honour lands.
 const ASK_EVERY_COMMAND: CodexPermission = {
   approvalPolicy: 'untrusted',
@@ -379,7 +383,10 @@ export class CodexOverseer implements OverseerBackend {
       model: opts.model,
       effort: codexEffort(opts.effort),
       permission: overseerPermission(opts.permissionMode),
-      config: codexMcpConfig(carto === null ? {} : { carto }, userServers),
+      config: {
+        ...codexMcpConfig(carto === null ? {} : { carto }, userServers),
+        features: OVERSEER_FEATURES,
+      },
       developerInstructions: INSTRUCTIONS,
       dynamicTools: toolset.tools.map(dynamicTool),
       experimentalApi: true,
