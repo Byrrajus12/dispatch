@@ -4,14 +4,18 @@ import { z } from 'zod';
 
 import { CLAUDE_INSTALL_HINT } from '../../src/orchestrator/claudeCli.js';
 import { floorGuard } from '../../src/orchestrator/floorHook.js';
+import { toolDescriptionForModel } from '../../src/orchestrator/overseerBackend.js';
 import type {
   OverseerToolResult,
   OverseerToolset,
   OverseerTurnOptions,
 } from '../../src/orchestrator/overseerBackend.js';
 import {
-  ClaudeOverseer,
   EMPTY_REPLY_MESSAGE,
+  overseerInstructions,
+} from '../../src/orchestrator/overseerPrompt.js';
+import {
+  ClaudeOverseer,
   OVERSEER_TOOL_PREFIX,
   overseerSdkTools,
 } from '../../src/orchestrator/overseers/claude.js';
@@ -479,5 +483,38 @@ describe('overseerSdkTools', () => {
     expect(Object.keys(cancelRun.inputSchema)).toEqual(['runId']);
     expect(listRuns.description).not.toContain('QUEUES');
     expect(cancelRun.description).toContain('QUEUES this action');
+  });
+});
+
+describe('shared overseer pieces', () => {
+  it('words the instructions for whichever agent runs the session', () => {
+    expect(overseerInstructions('Claude Code')).toContain(
+      'a full Claude Code session in the project checkout'
+    );
+    expect(overseerInstructions('Codex')).toContain(
+      'a full Codex session in the project checkout'
+    );
+    expect(overseerInstructions('Codex').replace('Codex', 'Claude Code')).toBe(
+      overseerInstructions('Claude Code')
+    );
+  });
+
+  it('tells the model a mutating tool only queues', () => {
+    const { toolset } = stubToolset();
+    const [listRuns, cancelRun] = toolset.tools;
+    expect(toolDescriptionForModel(listRuns)).toBe('Live and recent runs.');
+    expect(toolDescriptionForModel(cancelRun)).toBe(
+      'Stop a live run. QUEUES this action for human confirmation — calling it does not perform it.'
+    );
+  });
+
+  it('appends the Claude-worded instructions to the claude_code preset', async () => {
+    const { toolset } = stubToolset();
+    const { captured } = await runTurn(successStream(), toolset);
+    expect(captured?.systemPrompt).toEqual({
+      type: 'preset',
+      preset: 'claude_code',
+      append: overseerInstructions('Claude Code'),
+    });
   });
 });

@@ -157,3 +157,12 @@ export interface OverseerBackend {
     options?: OverseerTurnOptions
   ): Promise<OverseerTurn>;
 }
+
+/** A tool's description as the model reads it: a mutating tool says it only queues. */
+export function toolDescriptionForModel(
+  descriptor: OverseerToolDescriptor
+): string {
+  return descriptor.mutating
+    ? `${descriptor.description} QUEUES this action for human confirmation — calling it does not perform it.`
+    : descriptor.description;
+}

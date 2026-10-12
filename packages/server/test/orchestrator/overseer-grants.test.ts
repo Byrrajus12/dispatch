@@ -7,6 +7,15 @@ import {
 } from '../../src/orchestrator/overseerGrants.js';
 
 describe('grantKey', () => {
+  test('a Codex command is scoped to its program, like Bash', () => {
+    expect(
+      grantKey('codex.commandExecution', { command: 'git status', cwd: '/w' })
+    ).toBe('codex.commandExecution:git');
+    expect(grantKey('codex.fileChange', { paths: ['/w/a.ts'] })).toBe(
+      'codex.fileChange'
+    );
+  });
+
   test('Bash is scoped to the program it runs', () => {
     expect(grantKey('Bash', { command: 'moonx desktop:test' })).toBe(
       'Bash:moonx'

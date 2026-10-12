@@ -100,3 +100,33 @@ describe('.dispatch/ files', () => {
     ).toBeNull();
   });
 });
+
+describe('Codex calls', () => {
+  test('a Codex edit inside .dispatch is held, any other runs', () => {
+    expect(
+      overseerHoldFor(
+        'codex.fileChange',
+        { paths: ['/work/shop/src/a.ts', '/work/shop/.dispatch/config.yml'] },
+        ROOT
+      )
+    ).toBe('dispatch-files');
+    expect(
+      overseerHoldFor(
+        'codex.fileChange',
+        { paths: ['/work/shop/src/a.ts'] },
+        ROOT
+      )
+    ).toBeNull();
+    expect(overseerHoldFor('codex.fileChange', {}, ROOT)).toBeNull();
+  });
+
+  test('a Codex command reaching the Dispatch CLI is held', () => {
+    expect(
+      overseerHoldFor(
+        'codex.commandExecution',
+        { command: 'dispatch task list', cwd: ROOT },
+        ROOT
+      )
+    ).toBe('dispatch-cli');
+  });
+});

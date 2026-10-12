@@ -9,9 +9,11 @@ function programOf(command: string): string | null {
   return first.slice(first.lastIndexOf('/') + 1);
 }
 
-/** What a grant covers: a Bash grant is one program's (`Bash:moonx`), any other tool's is the tool. */
+/** What a grant covers: a shell grant (Bash, a Codex command) is one program's, any other tool's is the tool. */
 export function grantKey(toolName: string, input: unknown): string {
-  if (toolName !== 'Bash') return toolName;
+  if (toolName !== 'Bash' && toolName !== 'codex.commandExecution') {
+    return toolName;
+  }
   const command =
     typeof input === 'object' && input !== null
       ? (input as { command?: unknown }).command

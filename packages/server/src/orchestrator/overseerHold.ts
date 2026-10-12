@@ -37,6 +37,15 @@ function pathOf(input: unknown): string | null {
   return typeof path === 'string' ? path : null;
 }
 
+// The paths a Codex file change writes, as the Codex Overseer reports them.
+function pathsOf(input: unknown): string[] {
+  if (typeof input !== 'object' || input === null) return [];
+  const paths = (input as { paths?: unknown }).paths;
+  return Array.isArray(paths)
+    ? paths.filter((path): path is string => typeof path === 'string')
+    : [];
+}
+
 // Whether a path, resolved against the checkout, sits inside a `.dispatch` directory.
 function inDispatchDir(path: string, rootDir: string): boolean {
   const full = normalize(isAbsolute(path) ? path : resolve(rootDir, path));
@@ -49,6 +58,11 @@ export function overseerHoldFor(
   input: unknown,
   rootDir: string
 ): OverseerHold | null {
+  if (toolName === 'codex.fileChange') {
+    return pathsOf(input).some((path) => inDispatchDir(path, rootDir))
+      ? 'dispatch-files'
+      : null;
+  }
   if (EDIT_TOOLS.has(toolName)) {
     const path = pathOf(input);
     return path !== null && inDispatchDir(path, rootDir)
