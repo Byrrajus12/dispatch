@@ -1,6 +1,7 @@
 import { loadConfig } from '@dispatch-foo/core';
 
 import type { SpawnCodexAppServer } from '../codexAppServer.js';
+import { claimCodexToolCall } from '../codexDynamicTools.js';
 import { codexEffort, codexMcpConfig, runCodexTurn } from '../codexTurn.js';
 import {
   approvalResult,
@@ -9,6 +10,7 @@ import {
 } from '../executors/codex.js';
 import type { CodexPermission } from '../executors/codex.js';
 import type { Planner, PlannerMode, PlannerTurn } from '../planner.js';
+import { plannerReadTools } from './codexReadTools.js';
 import {
   CODEX_TURN_JSON_SCHEMA,
   EMPTY_TURN_MESSAGE,
@@ -25,8 +27,9 @@ const PLANNER_PERMISSION: CodexPermission = {
   sandbox: 'read-only',
 };
 
-// No shell (as ClaudePlanner has no Bash) and no sub-agents that could have one.
-// apply_patch has no switch; Codex itself rejects it under read-only + never.
+// No shell (as ClaudePlanner has no Bash) and no sub-agents that could have one;
+// the repo is read through plannerReadTools instead. apply_patch has no switch;
+// Codex itself rejects it under read-only + never.
 export const PLANNER_FEATURES = {
   shell_tool: false,
   unified_exec: false,
@@ -106,6 +109,8 @@ export class CodexPlanner implements Planner {
     const userServers = (
       this.options.userMcpServers ?? codexUserMcpServerNames
     )();
+    // Declared on thread/start; Codex keeps a thread's tools across resumes.
+    const readTools = plannerReadTools(this.rootDir);
     const result = await runCodexTurn({
       cwd: this.rootDir,
       prompt,
@@ -117,11 +122,15 @@ export class CodexPlanner implements Planner {
         ...codexMcpConfig({}, userServers),
         features: PLANNER_FEATURES,
       },
+      dynamicTools: readTools.tools,
+      experimentalApi: true,
       timeoutMs: PLANNER_TURN_TIMEOUT_MS,
       outputSchema: CODEX_TURN_JSON_SCHEMA,
       spawnProcess: this.options.spawnProcess,
       env: this.options.env,
       onServerRequest: (request, respond) => {
+        if (claimCodexToolCall(readTools.handler, request, respond))
+          return true;
         if (!isCodexApprovalMethod(request.method)) return false;
         respond(
           approvalResult(

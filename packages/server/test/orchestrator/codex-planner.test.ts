@@ -9,8 +9,14 @@ import {
   CodexPlanner,
   PLANNER_FEATURES,
 } from '../../src/orchestrator/planners/codex.js';
+import { PLANNER_READ_TOOL_NAMES } from '../../src/orchestrator/planners/codexReadTools.js';
 import { EMPTY_TURN_MESSAGE } from '../../src/orchestrator/planners/prompts.js';
-import { FakeCodexProcess, finishTurn, scriptedCodex } from './fakeCodex.js';
+import {
+  FakeCodexProcess,
+  finishTurn,
+  scriptedCodex,
+  waitFor,
+} from './fakeCodex.js';
 
 const PROPOSAL: PlanProposal = {
   tasks: [
@@ -94,7 +100,9 @@ describe('CodexPlanner', () => {
       { id: 'q1', question: 'Which page?', options: ['Home'] },
     ]);
 
-    expect(codex.paramsOf('initialize')?.capabilities).toBeNull();
+    expect(codex.paramsOf('initialize')?.capabilities).toMatchObject({
+      experimentalApi: true,
+    });
     const start = codex.paramsOf('thread/start');
     expect(start).toMatchObject({
       cwd: '/work/shop',
@@ -107,7 +115,11 @@ describe('CodexPlanner', () => {
         features: { shell_tool: false, unified_exec: false },
       },
     });
-    expect(start?.dynamicTools).toBeUndefined();
+    // Reading the repo goes through Dispatch's confined tools, not a shell.
+    const tools = (start?.dynamicTools ?? []) as { name: string }[];
+    expect(tools.map((tool) => tool.name)).toEqual([
+      ...PLANNER_READ_TOOL_NAMES,
+    ]);
     const schema = codex.paramsOf('turn/start')?.outputSchema as {
       required: string[];
       properties: { proposal: { anyOf: { required?: string[] }[] } };
@@ -268,5 +280,60 @@ describe('CodexPlanner', () => {
       permissions: {},
       scope: 'turn',
     });
+  });
+
+  it('answers a read_file call with the file, and refuses one outside the root', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dispatch-codex-planner-read-'));
+    writeFileSync(join(root, 'notes.md'), 'the footer lives in Footer.tsx\n');
+    try {
+      const codex = scriptedCodex({
+        onTurn: (c, t) => {
+          c.serverRequest('item/tool/call', 'call-1', {
+            threadId: t,
+            turnId: 'turn-1',
+            callId: 'c1',
+            namespace: null,
+            tool: 'read_file',
+            arguments: { path: 'notes.md' },
+          });
+          c.serverRequest('item/tool/call', 'call-2', {
+            threadId: t,
+            turnId: 'turn-1',
+            callId: 'c2',
+            namespace: null,
+            tool: 'read_file',
+            arguments: { path: '../../etc/hosts' },
+          });
+          void waitFor(
+            () =>
+              c.responseTo('call-1') !== undefined &&
+              c.responseTo('call-2') !== undefined
+          ).then(() =>
+            finishTurn(
+              c,
+              t,
+              JSON.stringify({
+                message: 'ok',
+                proposal: PROPOSAL,
+                questions: [],
+              })
+            )
+          );
+        },
+      });
+      const turn = await plannerOver([codex], root).start('fix the footer');
+      expect(turn.reply).toBe('ok');
+      expect(codex.responseTo('call-1')?.result).toEqual({
+        contentItems: [
+          { type: 'inputText', text: '1\tthe footer lives in Footer.tsx' },
+        ],
+        success: true,
+      });
+      expect(codex.responseTo('call-2')?.result).toMatchObject({
+        success: false,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
