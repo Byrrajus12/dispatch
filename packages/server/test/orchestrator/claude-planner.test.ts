@@ -10,10 +10,8 @@ import {
 } from '../../src/orchestrator/claudeCli.js';
 import { floorGuard } from '../../src/orchestrator/floorHook.js';
 import type { PlanProposal } from '../../src/orchestrator/planner.js';
-import {
-  ClaudePlanner,
-  EMPTY_TURN_MESSAGE,
-} from '../../src/orchestrator/planners/claude.js';
+import { ClaudePlanner } from '../../src/orchestrator/planners/claude.js';
+import { EMPTY_TURN_MESSAGE } from '../../src/orchestrator/planners/prompts.js';
 import { floorDecision } from './helpers.js';
 
 // The exact text the Agent SDK throws when it can't resolve its own bundled

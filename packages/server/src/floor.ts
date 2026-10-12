@@ -244,7 +244,63 @@ const COMMAND_CHECKS: readonly {
   { check: 'delete-outside-writes', matches: (c) => REMOTE_REF_DELETE.test(c) },
 ];
 
-/** The floor check a shell command trips, or null when it trips none. */
+/** The programs the command floor's patterns name; a hidden one of these may be a floor act. */
+export const FLOOR_PROGRAMS: ReadonlySet<string> = new Set([
+  'git',
+  'gh',
+  'npm',
+  'pnpm',
+  'yarn',
+  'bun',
+  'npx',
+  'cargo',
+]);
+
+const ANSI_C_ESCAPES: Record<string, string> = {
+  a: '\x07',
+  b: '\b',
+  e: '\x1b',
+  E: '\x1b',
+  f: '\f',
+  n: '\n',
+  r: '\r',
+  t: '\t',
+  v: '\v',
+};
+
+/** The text of a bash/zsh `$'…'` string body: `\x67`, `\147`, `\u0067` and the letter escapes decoded. */
+export function decodeAnsiC(body: string): string {
+  return body.replace(
+    /\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{1,4}|U[0-9a-fA-F]{1,8}|[0-7]{1,3}|c.|[\s\S])/g,
+    (_match, code: string) => {
+      const kind = code[0];
+      if (kind === 'x' || kind === 'u' || kind === 'U') {
+        const point = Number.parseInt(code.slice(1), 16);
+        return point <= 0x10ffff ? String.fromCodePoint(point) : '';
+      }
+      if (/[0-7]/.test(kind))
+        return String.fromCharCode(Number.parseInt(code, 8));
+      if (kind === 'c') return String.fromCharCode(code.charCodeAt(1) & 0x1f);
+      return ANSI_C_ESCAPES[kind] ?? code;
+    }
+  );
+}
+
+/**
+ * A command as the shell would spell its words: `$'…'` strings decoded, then
+ * quotes, escapes and line continuations removed, so `g""h` and `$'\x67'h` read `gh`.
+ */
+export function dequotedCommand(command: string): string {
+  return command
+    .replace(/\$'((?:[^'\\]|\\[\s\S])*)'/g, (_m, body: string) =>
+      decodeAnsiC(body)
+    )
+    .replace(/\\\r?\n/g, '')
+    .replace(/\$"/g, '"')
+    .replace(/['"\\]/g, '');
+}
+
+/** The floor check a shell command trips as written, or null when it trips none. */
 export function floorCheckForCommand(command: string): FloorCheck | null {
   for (const { check, matches } of COMMAND_CHECKS) {
     if (matches(command)) return check;
@@ -261,7 +317,14 @@ export function floorCheckForToolInput(input: unknown): FloorCheck | null {
   if (typeof input !== 'object' || input === null) return null;
   const { command } = input as { command?: unknown };
   if (typeof command !== 'string') return null;
-  return floorCheckForCommand(command);
+  // Quoting can split a name the patterns look for (`g""h release`), and a
+  // case-insensitive filesystem runs `GH` as `gh`, so those forms are checked too.
+  const plain = dequotedCommand(command);
+  return (
+    floorCheckForCommand(command) ??
+    floorCheckForCommand(plain) ??
+    floorCheckForCommand(plain.toLowerCase())
+  );
 }
 
 /**

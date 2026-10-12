@@ -13,7 +13,10 @@ import { errorResponse, jsonResponse, readJsonBody } from './http.js';
 // The routes under /api/setup: what this machine still needs before an agent can
 // run, saving an agent API key, and picking up agents installed since boot.
 
-type SetupRouteContext = Pick<ApiContext, 'rootDir' | 'orchestrator'>;
+type SetupRouteContext = Pick<
+  ApiContext,
+  'rootDir' | 'orchestrator' | 'planManager' | 'overseerManager'
+>;
 
 let depsFactory: () => SetupCheckDeps = defaultSetupCheckDeps;
 
@@ -66,7 +69,7 @@ export async function handleSetupRoute(
 
   if (segments.length === 2 && segments[1] === 'refresh' && method === 'POST') {
     return jsonResponse({
-      added: refreshExecutors(ctx.orchestrator, ctx.rootDir),
+      added: refreshExecutors(ctx.orchestrator, ctx.rootDir, ctx),
     });
   }
   return null;

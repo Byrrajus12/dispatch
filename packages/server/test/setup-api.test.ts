@@ -15,6 +15,10 @@ import { setSetupCheckDepsForTest } from '../src/api/setup.js';
 import type { ServerHandle } from '../src/index.js';
 import { startServer } from '../src/index.js';
 import { FakeExecutor } from '../src/orchestrator/executors/fake.js';
+import type { OverseerManager } from '../src/orchestrator/overseer.js';
+import { ClaudeOverseer } from '../src/orchestrator/overseers/claude.js';
+import type { PlanManager } from '../src/orchestrator/plan.js';
+import { ClaudePlanner } from '../src/orchestrator/planners/claude.js';
 import { rawFetch, useTestAuth } from './testAuth.js';
 
 let root: string;
@@ -23,6 +27,8 @@ let handle: ServerHandle;
 let baseUrl: string;
 // Names passed to registerExecutor after boot, to prove refresh never re-registers a live one.
 let lateRegistrations: string[];
+let planManager: PlanManager;
+let overseerManager: OverseerManager;
 const originalHome = process.env.DISPATCH_HOME;
 
 beforeEach(async () => {
@@ -57,6 +63,15 @@ beforeEach(async () => {
     rootDir: root,
     port: 0,
     writeDaemonFile: false,
+    // Claude's planner and Overseer only, whether or not this machine has codex.
+    registerPlanners: (manager) => {
+      planManager = manager;
+      manager.registerPlanner('claude', new ClaudePlanner(root));
+    },
+    registerOverseers: (manager) => {
+      overseerManager = manager;
+      manager.registerBackend('claude', new ClaudeOverseer(root));
+    },
     registerExecutors: (o) => {
       lateRegistrations = [];
       o.registerExecutor(
@@ -163,6 +178,32 @@ describe('/api/setup', () => {
         expect.arrayContaining(['claude', 'gemini'])
       );
       expect(lateRegistrations).not.toContain('claude');
+    } finally {
+      process.env.PATH = originalPath;
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  it('refresh brings up the Codex planner and Overseer once codex is installed', async () => {
+    const bin = mkdtempSync(join(tmpdir(), 'dispatch-setup-bin-'));
+    const originalPath = process.env.PATH;
+    expect(planManager.registeredPlannerNames()).toEqual(['claude']);
+    expect(overseerManager.registeredBackendNames()).toEqual(['claude']);
+    try {
+      writeFileSync(join(bin, 'codex'), '#!/bin/sh\nexit 0\n');
+      chmodSync(join(bin, 'codex'), 0o755);
+      process.env.PATH = `${bin}:${originalPath ?? ''}`;
+      expect((await post('/api/setup/refresh', {})).status).toBe(200);
+      expect((await post('/api/setup/refresh', {})).status).toBe(200);
+
+      const res = await post('/api/plan', { prompt: 'x', planner: 'nope' });
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(await res.json())).toContain('codex');
+      expect(planManager.registeredPlannerNames()).toEqual(['claude', 'codex']);
+      expect(overseerManager.registeredBackendNames()).toEqual([
+        'claude',
+        'codex',
+      ]);
     } finally {
       process.env.PATH = originalPath;
       rmSync(bin, { recursive: true, force: true });

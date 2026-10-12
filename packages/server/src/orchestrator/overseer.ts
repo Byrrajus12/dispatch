@@ -1,4 +1,8 @@
-import { loadConfig, untrustedInline } from '@dispatch-foo/core';
+import {
+  DEFAULT_EXECUTOR_NAME,
+  loadConfig,
+  untrustedInline,
+} from '@dispatch-foo/core';
 import type { EffortLevel } from '@dispatch-foo/core';
 import type { Message, Sender } from '@dispatch-foo/protocol';
 import { SYSTEM_ADDRESS } from '@dispatch-foo/protocol';
@@ -7,6 +11,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { EventBus } from '../events.js';
 import { floorCheckForToolInput } from '../floor.js';
 import type { OverseerBus } from '../messaging/overseerBus.js';
+import { backendModel, pickAgentBackend } from './agentBackends.js';
 import type {
   OverseerBackend,
   OverseerCommand,
@@ -337,6 +342,8 @@ export class OverseerManager {
 
   // The running turn's abort handle, per conversation; Stop fires it.
   private readonly turns = new Map<string, AbortController>();
+  // Set by shutdown(): turns still settling write nothing more.
+  private shuttingDown = false;
   // Who typed each conversation's queued messages, for posting them when they go.
   private readonly queuedBy = new Map<string, Sender | null>();
   // Ids of queued entries that already went out in a turn, so a late edit or
@@ -404,7 +411,13 @@ export class OverseerManager {
     const config = loadConfig(this.ctx.rootDir);
     const record = this.conversations.get(conversationId);
     return {
-      model: record?.model ?? config.models.overseer,
+      model: backendModel(
+        config,
+        record?.backendName ?? DEFAULT_EXECUTOR_NAME,
+        'execute',
+        config.models.overseer,
+        record?.model
+      ),
       effort: record?.effort ?? config.effort?.overseer,
       permissionMode: config.orchestrator.permissionMode,
       ...(config.orchestrator.maxTurns !== undefined
@@ -426,6 +439,14 @@ export class OverseerManager {
           text: describeToolCall(toolName, input),
         }),
     };
+  }
+
+  /** The backend a conversation opened with none named runs on: the default agent's, else Claude's. */
+  defaultBackendName(): string {
+    return pickAgentBackend(
+      this.registeredBackendNames(),
+      loadConfig(this.ctx.rootDir).orchestrator.executor
+    );
   }
 
   private requireBackend(name: string): OverseerBackend {
@@ -456,19 +477,20 @@ export class OverseerManager {
    */
   start(
     prompt: string,
-    backendName = 'claude',
+    backendName?: string,
     model?: string,
     effort?: EffortLevel,
     speaker: Sender | null = null
   ): OverseerRecord {
-    const backend = this.requireBackend(backendName);
+    const name = backendName ?? this.defaultBackendName();
+    const backend = this.requireBackend(name);
     this.refuseIfRevoked();
     const now = new Date().toISOString();
     const record: OverseerRecord = {
       id: generateOverseerId(now),
       ...(speaker !== null ? { owner: speaker.address } : {}),
       prompt,
-      backendName,
+      backendName: name,
       ...(model !== undefined ? { model } : {}),
       ...(effort !== undefined ? { effort } : {}),
       state: 'running',
@@ -666,6 +688,15 @@ export class OverseerManager {
   }
 
   /**
+   * Daemon stop: aborts every running turn so no agent process outlives the
+   * daemon. Records stay `running`, so the next boot marks them restarted.
+   */
+  shutdown(): void {
+    this.shuttingDown = true;
+    for (const abort of this.turns.values()) abort.abort();
+  }
+
+  /**
    * Stops the running turn. Its parked calls are denied, the decisions it
    * carried go back on the record, and anything queued waits for the next send.
    */
@@ -700,6 +731,7 @@ export class OverseerManager {
         rejectOnAbort(abort.signal),
       ]);
       if (abort.signal.aborted) throw new Error('stopped');
+      if (this.shuttingDown) return;
       const current = this.conversations.get(conversationId);
       if (current === undefined) return;
       this.updateRecord(conversationId, {
@@ -729,6 +761,7 @@ export class OverseerManager {
         from.line
       );
     } catch (err) {
+      if (this.shuttingDown) return;
       const current = this.conversations.get(conversationId);
       // Oldest first: anything decided *during* the turn comes after.
       const undeliveredDecisions = [
@@ -760,9 +793,11 @@ export class OverseerManager {
       this.turns.delete(conversationId);
       // A turn that is over has no tool call left to run: anything still
       // parked would otherwise sit on the record forever, undecidable in any
-      // way that could matter.
-      this.sweepApprovals(conversationId);
-      if (!abort.signal.aborted) this.sendQueued(conversationId);
+      // way that could matter. Past shutdown the next boot clears them instead.
+      if (!this.shuttingDown) {
+        this.sweepApprovals(conversationId);
+        if (!abort.signal.aborted) this.sendQueued(conversationId);
+      }
     }
   }
 
@@ -963,7 +998,7 @@ export class OverseerManager {
     if (granted) {
       this.grants.grant(
         conversationId,
-        grantKey(approval.toolName, approval.input),
+        grantKey(approval.toolName, approval.input, this.ctx.rootDir),
         Date.now(),
         record.sessionId
       );
@@ -975,7 +1010,7 @@ export class OverseerManager {
       requestId,
       outcome: decision.allow ? 'allowed' : 'denied',
       text: decision.allow
-        ? `Allowed${granted ? ` ${grantKey(approval.toolName, approval.input)} for this conversation (up to 4 hours)` : ''}: ${approval.summary}`
+        ? `Allowed${granted ? ` ${grantKey(approval.toolName, approval.input, this.ctx.rootDir)} for this conversation (up to 4 hours)` : ''}: ${approval.summary}`
         : `Denied: ${approval.summary}${reason !== undefined && reason !== '' ? ` — ${reason}` : ''}`,
     });
     this.ctx.bus?.closeGate(
@@ -1018,7 +1053,7 @@ export class OverseerManager {
       if (
         this.grants.allows(
           conversationId,
-          grantKey(toolName, input),
+          grantKey(toolName, input, this.ctx.rootDir),
           Date.now(),
           record?.sessionId
         )

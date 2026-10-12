@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path';
 import type { TaskCache } from '../cache.js';
 import type { EventBus } from '../events.js';
 import { statusModelFor } from '../statuses.js';
+import { backendModel, pickAgentBackend } from './agentBackends.js';
 import type {
   PlannedTask,
   Planner,
@@ -267,6 +268,8 @@ export class PlanManager {
   private readonly planners = new Map<string, Planner>();
   private readonly drafts = new Map<string, DraftRecord>();
   private readonly recordStore: PlanRecordStore;
+  // Set by shutdown(): a plan turn still settling writes nothing more.
+  private shuttingDown = false;
 
   constructor(private readonly ctx: PlanManagerContext) {
     this.recordStore = new PlanRecordStore(ctx.rootDir);
@@ -308,40 +311,66 @@ export class PlanManager {
     this.planners.set(name, planner);
   }
 
+  /**
+   * Daemon stop: ends every planner turn in flight. A plan left `running`
+   * boots as failed, as it would had the daemon died mid-turn.
+   */
+  shutdown(): void {
+    this.shuttingDown = true;
+    for (const planner of this.planners.values()) planner.shutdown?.();
+  }
+
   // api.ts derives its "is this planner name even valid" 400 message from
   // exactly what's registered here, same as Orchestrator.registeredExecutorNames().
   registeredPlannerNames(): string[] {
     return [...this.planners.keys()];
   }
 
-  // Fresh per-call read of `config.models`, so a settings change takes effect
-  // on the very next call with no daemon restart — unless the plan was opened
-  // on a chosen model, which wins for every turn of that plan.
-  private resolveModel(role: 'plan' | 'enrich', chosen?: string): string {
-    if (chosen !== undefined) return chosen;
-    const { models } = loadConfig(this.ctx.rootDir);
-    return role === 'enrich' ? models.enrich : models.plan;
+  // Fresh per-call read of `config.models`, so a settings change applies on the
+  // next call; a plan opened on a chosen model keeps it. Codex gets its own model.
+  private resolveModel(
+    plannerName: string,
+    role: 'plan' | 'enrich' | 'draft',
+    chosen?: string
+  ): string | undefined {
+    const config = loadConfig(this.ctx.rootDir);
+    return backendModel(
+      config,
+      plannerName,
+      'plan',
+      config.models[role],
+      chosen
+    );
+  }
+
+  /** The planner a caller that names none gets: the default agent's, else Claude's. */
+  defaultPlannerName(): string {
+    return pickAgentBackend(
+      this.registeredPlannerNames(),
+      loadConfig(this.ctx.rootDir).orchestrator.executor
+    );
   }
 
   // Opens a plan conversation and returns its id immediately; the Planner call
   // is fire-and-forget, landing via runTurn()'s `plan.changed` broadcast.
   startPlan(
     prompt: string,
-    plannerName = 'claude',
+    plannerName?: string,
     sourceNoteId?: string,
     role: 'plan' | 'enrich' = 'plan',
     subject?: string,
     model?: string
   ): PlanRecord {
-    const planner = this.planners.get(plannerName);
+    const name = plannerName ?? this.defaultPlannerName();
+    const planner = this.planners.get(name);
     if (planner === undefined) {
-      throw new OrchestratorClientError(`unknown planner: ${plannerName}`);
+      throw new OrchestratorClientError(`unknown planner: ${name}`);
     }
     const now = new Date().toISOString();
     const record: PlanRecord = {
       id: generatePlanId(now),
       prompt,
-      plannerName,
+      plannerName: name,
       role,
       ...(model !== undefined ? { model } : {}),
       state: 'running',
@@ -358,7 +387,7 @@ export class PlanManager {
     // settles) so history lists — this window's and any other's — show the
     // running plan right away.
     this.ctx.events.broadcast({ type: 'plan.changed', planId: record.id });
-    const resolved = this.resolveModel(role, model);
+    const resolved = this.resolveModel(name, role, model);
     void this.runTurn(record.id, () => planner.start(prompt, resolved, 'plan'));
     return record;
   }
@@ -367,18 +396,19 @@ export class PlanManager {
   // the DraftRecord immediately at `running`; no busy-guard between drafts.
   startDraft(
     prompt: string,
-    plannerName = 'claude',
+    plannerName?: string,
     parent: string | null = null
   ): DraftRecord {
-    const planner = this.planners.get(plannerName);
+    const name = plannerName ?? this.defaultPlannerName();
+    const planner = this.planners.get(name);
     if (planner === undefined) {
-      throw new OrchestratorClientError(`unknown planner: ${plannerName}`);
+      throw new OrchestratorClientError(`unknown planner: ${name}`);
     }
     const now = new Date().toISOString();
     const record: DraftRecord = {
       id: generateDraftId(now),
       prompt,
-      plannerName,
+      plannerName: name,
       state: 'running',
       message: '',
       proposal: null,
@@ -390,7 +420,7 @@ export class PlanManager {
     };
     this.drafts.set(record.id, record);
     this.evictOldDrafts();
-    const model = loadConfig(this.ctx.rootDir).models.draft;
+    const model = this.resolveModel(name, 'draft');
     void this.runDraftTurn(record.id, () =>
       planner.start(prompt, model, 'draft')
     );
@@ -416,7 +446,7 @@ export class PlanManager {
     // failed turn leaves the user's answers on screen to re-send.
     this.updateDraftRecord(draftId, { state: 'running', error: null });
     const sessionId = record.sessionId;
-    const model = loadConfig(this.ctx.rootDir).models.draft;
+    const model = this.resolveModel(record.plannerName, 'draft');
     void this.runDraftTurn(draftId, () =>
       planner.sendMessage(sessionId, message, model, 'draft')
     );
@@ -547,7 +577,11 @@ export class PlanManager {
     this.recordStore.append(updated);
     this.ctx.events.broadcast({ type: 'plan.changed', planId });
     const sessionId = record.sessionId;
-    const model = this.resolveModel(record.role, record.model);
+    const model = this.resolveModel(
+      record.plannerName,
+      record.role,
+      record.model
+    );
     void this.runTurn(planId, () =>
       planner.sendMessage(sessionId, message, model, 'plan')
     );
@@ -583,6 +617,7 @@ export class PlanManager {
         ],
       });
     } catch (err) {
+      if (this.shuttingDown) return;
       this.updateRecord(planId, {
         state: 'failed',
         error: (err as Error).message,

@@ -8,17 +8,19 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative } from 'node:path';
 
-import {
-  FLOOR_COMMAND_ACTIONS,
-  floorCheckForCommand,
-  floorCheckForToolInput,
-} from '../../floor.js';
+import { FLOOR_COMMAND_ACTIONS, floorCheckForToolInput } from '../../floor.js';
 import {
   CodexAppServer,
   type CodexAppServerMessage,
   type CodexAppServerRequest,
   type SpawnCodexAppServer,
 } from '../codexAppServer.js';
+import {
+  codexApprovalNeedsHuman,
+  codexCommandFloor,
+  codexCommandNeedsHuman,
+  readCodexCommand,
+} from '../codexCommand.js';
 import type { StdioServerSpec } from '../dispatchMcp.js';
 import { cartoMcpSpec, dispatchMcpSpec } from '../dispatchMcp.js';
 import type {
@@ -35,7 +37,7 @@ import type { RunUsage } from '../usage.js';
 const STOP_MESSAGE =
   'The user asked this run to stop. Finish the current operation, start no new work, summarize what is complete and what remains, then end the turn.';
 
-const CODEX_APPROVAL_TOOL_NAMES = {
+export const CODEX_APPROVAL_TOOL_NAMES = {
   'item/commandExecution/requestApproval': 'codex.commandExecution',
   'item/fileChange/requestApproval': 'codex.fileChange',
   'item/permissions/requestApproval': 'codex.permissions',
@@ -43,7 +45,7 @@ const CODEX_APPROVAL_TOOL_NAMES = {
 
 type CodexApprovalMethod = keyof typeof CODEX_APPROVAL_TOOL_NAMES;
 
-interface PendingCodexApproval {
+export interface PendingCodexApproval {
   method: CodexApprovalMethod;
   params: unknown;
   providerRequestId: CodexAppServerRequest['id'];
@@ -57,10 +59,11 @@ interface CodexTurnResponse {
   turn?: { id?: unknown };
 }
 
-interface CodexItem {
+export interface CodexItem {
   type?: unknown;
   id?: unknown;
   text?: unknown;
+  phase?: unknown;
   summary?: unknown;
   command?: unknown;
   cwd?: unknown;
@@ -75,7 +78,7 @@ interface CodexItem {
 }
 
 // Codex's `mcp_servers` table entry for one provider-neutral spec.
-function toCodexMcp(
+export function toCodexMcp(
   spec: StdioServerSpec,
   extra: Record<string, unknown> = {}
 ): Record<string, unknown> {
@@ -110,14 +113,14 @@ export function codexUserMcpServerNames(): string[] {
   }
 }
 
-interface CodexTokenTotal {
+export interface CodexTokenTotal {
   totalTokens: number;
   inputTokens: number;
   cachedInputTokens: number;
   outputTokens: number;
 }
 
-function tokenTotal(value: unknown): CodexTokenTotal | undefined {
+export function tokenTotal(value: unknown): CodexTokenTotal | undefined {
   const total = objectValue(value);
   if (total === undefined) return undefined;
   const count = (key: string): number =>
@@ -146,7 +149,7 @@ function codexRunUsage(total: CodexTokenTotal): RunUsage {
 
 // Codex reports tokens, never dollars; the project's configured per-million
 // rates turn them into a cost. Codex counts cached input inside inputTokens.
-function codexCostUsd(
+export function codexCostUsd(
   total: CodexTokenTotal,
   pricing: ExecutorPricing
 ): number {
@@ -162,7 +165,9 @@ function codexCostUsd(
 }
 
 // The project's pricing for Codex, if configured; unreadable config means none.
-function codexPricingFor(projectRoot: string): ExecutorPricing | undefined {
+export function codexPricingFor(
+  projectRoot: string
+): ExecutorPricing | undefined {
   try {
     return loadConfig(projectRoot).executors?.codex?.pricing;
   } catch {
@@ -203,21 +208,25 @@ function buildCodexMcpServers(
   return { config: { mcp_servers: mcpServers }, disabled };
 }
 
-function textInput(text: string): object[] {
+export function textInput(text: string): object[] {
   return [{ type: 'text', text, text_elements: [] }];
 }
 
-function objectValue(value: unknown): Record<string, unknown> | undefined {
+export function objectValue(
+  value: unknown
+): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null
     ? (value as Record<string, unknown>)
     : undefined;
 }
 
-function isCodexApprovalMethod(method: string): method is CodexApprovalMethod {
+export function isCodexApprovalMethod(
+  method: string
+): method is CodexApprovalMethod {
   return Object.hasOwn(CODEX_APPROVAL_TOOL_NAMES, method);
 }
 
-function approvalResult(
+export function approvalResult(
   approval: PendingCodexApproval,
   decision: ApprovalDecision
 ): Record<string, unknown> {
@@ -307,7 +316,7 @@ function entryForItem(
   return undefined;
 }
 
-function closeDescription(close: {
+export function closeDescription(close: {
   code: number | null;
   signal: NodeJS.Signals | null;
   error?: Error;
@@ -397,13 +406,15 @@ function selfAnswer(
   const params = objectValue(approval.params);
   if (approval.method === 'item/commandExecution/requestApproval') {
     // Accepting may lift a sandbox the model asked to leave, which looks
-    // like any other ask, so only a mode with no sandbox answers here.
-    const readable =
+    // like any other ask, so only a mode with no sandbox answers here, and
+    // only a command whose script it can read.
+    const plainCommand =
       typeof params?.command === 'string' &&
       (params.kind ?? 'command') === 'command';
     return permissionMode === 'bypassPermissions' &&
-      readable &&
-      floorCheckForToolInput(params) === null
+      plainCommand &&
+      floorCheckForToolInput(params) === null &&
+      !codexCommandNeedsHuman(params.command)
       ? { allow: true }
       : undefined;
   }
@@ -424,6 +435,25 @@ function selfAnswer(
   return undefined;
 }
 
+// Codex keeps a session answer for that exact command, so only a plain
+// command it can read and that clears the floor may get one; others answer once.
+function sessionScopeFor(
+  approval: PendingCodexApproval,
+  decision: ApprovalDecision
+): ApprovalDecision {
+  if (
+    decision.scope !== 'session' ||
+    approval.method !== 'item/commandExecution/requestApproval'
+  ) {
+    return decision;
+  }
+  const params = objectValue(approval.params);
+  const plain =
+    floorCheckForToolInput(params) === null &&
+    !codexApprovalNeedsHuman('codex.commandExecution', params);
+  return plain ? decision : { ...decision, scope: 'once' };
+}
+
 function isInside(root: string, path: string): boolean {
   const rel = relative(root, path);
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
@@ -431,7 +461,7 @@ function isInside(root: string, path: string): boolean {
 
 // Every path a fileChange item writes, a move's destination included, or
 // undefined when any entry is unreadable so a partial list never passes.
-function fileChangePaths(item: CodexItem): string[] | undefined {
+export function fileChangePaths(item: CodexItem): string[] | undefined {
   if (!Array.isArray(item.changes) || item.changes.length === 0) {
     return undefined;
   }
@@ -458,9 +488,13 @@ function unaskedFloorCommand(
   if (typeof item.id !== 'string' || flooredAsks.has(`command:${item.id}`)) {
     return undefined;
   }
-  const check = floorCheckForToolInput(item);
+  const check = codexCommandFloor(item.command);
   if (check === null) return undefined;
-  return `Codex ran a floor command (${check}) without asking Dispatch, most likely under an allow rule in $CODEX_HOME/rules: ${String(item.command)}. The run is stopped so a human can review it.`;
+  const command =
+    typeof item.command === 'string'
+      ? item.command
+      : (readCodexCommand(item.command)?.text ?? String(item.command));
+  return `Codex ran a floor command (${check}) without asking Dispatch, most likely under an allow rule in $CODEX_HOME/rules: ${command}. The run is stopped so a human can review it.`;
 }
 
 /** One Codex App Server process, one persisted thread, and one Codex turn. */
@@ -524,7 +558,8 @@ export class CodexExecutor implements Executor {
       const asked = objectValue(request.params);
       if (
         typeof asked?.itemId === 'string' &&
-        floorCheckForToolInput(asked) !== null
+        (floorCheckForToolInput(asked) ?? codexCommandFloor(asked.command)) !==
+          null
       ) {
         const kind = typeof asked.kind === 'string' ? asked.kind : 'command';
         flooredAsks.add(`${kind}:${asked.itemId}`);
@@ -687,7 +722,7 @@ export class CodexExecutor implements Executor {
         stdinTails.set(itemId, lines.pop() ?? '');
         if (flooredAsks.has(`writeStdin:${itemId}`)) return;
         for (const line of lines) {
-          const check = floorCheckForCommand(line);
+          const check = codexCommandFloor(line);
           if (check === null) continue;
           stopForFloorBypass(
             `Codex typed a floor command (${check}) into a shell it started, and Codex does not ask about shell input: ${line.trim()}. The run is stopped so a human can review it.`
@@ -887,7 +922,7 @@ export class CodexExecutor implements Executor {
         try {
           server.respond(
             approval.providerRequestId,
-            approvalResult(approval, decision)
+            approvalResult(approval, sessionScopeFor(approval, decision))
           );
         } catch (error) {
           finish({ state: 'failed', error: (error as Error).message });

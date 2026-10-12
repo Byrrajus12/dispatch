@@ -25,6 +25,10 @@ const LIMIT = new RegExp(
 const NO_FIRST_COMMIT =
   /invalid reference: \S+|not a valid object name:? '?HEAD'?|ambiguous argument 'HEAD'|does not have any commits yet/i;
 
+/** What a Codex planner or Overseer turn says when Codex is signed out; mapped below. */
+export const CODEX_SIGNED_OUT_MESSAGE =
+  'Codex is not logged in. Sign in to Codex in Settings → Setup, then try again.';
+
 // The agent a spawn failure names: a bare binary (`spawn gemini ENOENT`) or a path
 // under a package directory (`.../@openai/codex/vendor/.../codex ENOENT`).
 function spawnedProvider(text: string): { id: string; broken: boolean } | null {
@@ -52,6 +56,13 @@ export function explainFailure(
       reason: "Claude Code isn't installed, or Dispatch can't find it.",
       fix: 'setup-agent',
       providerId: 'claude',
+    };
+  }
+  if (text.includes(CODEX_SIGNED_OUT_MESSAGE)) {
+    return {
+      reason: 'Codex needs you to sign in again.',
+      fix: 'setup-agent',
+      providerId: 'codex',
     };
   }
   if (/spawn git ENOENT/.test(text)) {

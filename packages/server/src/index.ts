@@ -130,6 +130,12 @@ import {
 import type { Messaging } from './messaging/service.js';
 import { openMessaging } from './messaging/service.js';
 import { NoteStore } from './notes.js';
+import {
+  codexInstalled,
+  registerCodexOverseer,
+  registerCodexPlanner,
+} from './orchestrator/agentBackends.js';
+import { codexApprovalNeedsHuman } from './orchestrator/codexCommand.js';
 import { EpicEngine } from './orchestrator/epic.js';
 import { ClaudeExecutor } from './orchestrator/executors/claude.js';
 import { CliExecutor } from './orchestrator/executors/cli.js';
@@ -304,7 +310,7 @@ export interface StartServerOptions {
   registerExecutors?: (orchestrator: Orchestrator) => void;
   // Phase 5 P1, revised Phase 7: overrides which planners get registered on
   // the PlanManager, in place of the production default (ClaudePlanner as
-  // 'claude' only). Tests override with a FakePlanner (see
+  // 'claude', CodexPlanner as 'codex' when installed). Tests override with a FakePlanner (see
   // orchestrator/planners/fake.ts) registered under 'claude' so nothing
   // outside a DISPATCH_CLAUDE_SMOKE-style gate ever calls the real Agent
   // SDK's plan mode; bin.ts's DISPATCH_ENABLE_FAKES gate additionally
@@ -316,7 +322,7 @@ export interface StartServerOptions {
   // daemon never bills a model for a filter; route tests pass it directly.
   aiTaskFilter?: AiTaskFilterPort;
   // Same seam again for the overseer's chat backends, in place of the
-  // production default (ClaudeOverseer as 'claude' only). Tests register a
+  // production default (ClaudeOverseer as 'claude', CodexOverseer as 'codex' when installed). Tests register a
   // FakeOverseer (see orchestrator/overseers/fake.ts) under 'claude' so no
   // endpoint test ever drives a real Agent SDK conversation.
   registerOverseers?: (overseerManager: OverseerManager) => void;
@@ -470,8 +476,7 @@ const DESKTOP_DIST_DIR = join(
 // Codex is offered only when its CLI is actually installed, so no picker ever
 // lists an executor whose first run would die on spawn.
 export function registerCodexIfInstalled(orchestrator: Orchestrator): void {
-  // Bun.which snapshots PATH at startup, so pass the live one (boot widens it).
-  if (Bun.which('codex', { PATH: process.env.PATH }) === null) return;
+  if (!codexInstalled()) return;
   orchestrator.registerExecutor('codex', new CodexExecutor());
 }
 
@@ -519,10 +524,15 @@ export function registerCliExecutors(
 // executors alone. Returns the names it added.
 export function refreshExecutors(
   orchestrator: Orchestrator,
-  rootDir: string
+  rootDir: string,
+  agents?: { planManager: PlanManager; overseerManager: OverseerManager }
 ): string[] {
   const before = new Set(orchestrator.registeredExecutorNames());
   if (!before.has('codex')) registerCodexIfInstalled(orchestrator);
+  if (agents !== undefined) {
+    registerCodexPlanner(agents.planManager, rootDir);
+    registerCodexOverseer(agents.overseerManager, rootDir);
+  }
   registerCliExecutors(orchestrator, rootDir, before);
   return orchestrator
     .registeredExecutorNames()
@@ -1873,6 +1883,7 @@ async function bootServer(
     opts.registerPlanners(planManager);
   } else {
     planManager.registerPlanner('claude', new ClaudePlanner(rootDir));
+    registerCodexPlanner(planManager, rootDir);
   }
   const taskAuthorship = new TaskAuthorship(taskAuthorshipPath(rootDir));
   const epicEngine = new EpicEngine({
@@ -2089,6 +2100,7 @@ async function bootServer(
     opts.registerOverseers(overseerManager);
   } else {
     overseerManager.registerBackend('claude', new ClaudeOverseer(rootDir));
+    registerCodexOverseer(overseerManager, rootDir);
   }
   messaging.bindOverseer(overseerManager);
 
@@ -2232,9 +2244,11 @@ async function bootServer(
   // The irreversibility floor's answer for the approval gate (floor.ts): a
   // force-push, a registry publish, a release-tag push or a repo-settings
   // change is never auto-allowed, at any rung. Any tool whose input carries a
-  // shell command is covered, so the tool's name is not what decides.
-  const approvalFloor: ApprovalFloor = (_toolName, input) =>
-    floorCheckForToolInput(input) !== null;
+  // shell command is covered, so the tool's name is not what decides. A Codex
+  // command whose script cannot be read is never auto-allowed either.
+  const approvalFloor: ApprovalFloor = (toolName, input) =>
+    floorCheckForToolInput(input) !== null ||
+    codexApprovalNeedsHuman(toolName, input);
 
   // Chromium instances the daemon drives. Nothing is launched at boot; this
   // only holds the ones a request asks for, so shutdown can kill them.
@@ -2808,6 +2822,9 @@ async function bootServer(
       // starting an agent (see Orchestrator.shutdown).
       orchestrator.shutdown();
       epicEngine.shutdown();
+      // So no Overseer or planner agent process (a Codex App Server) outlives the daemon.
+      overseerManager.shutdown();
+      planManager.shutdown();
       watcher?.close();
       sourceWatcher.close();
       prManager.stopPolling();

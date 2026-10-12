@@ -1039,7 +1039,7 @@ describe('who an overseer conversation belongs to', () => {
     const grants = await fetch(`${baseUrl}/api/overseer/${record.id}/grants`);
     expect(await json(grants)).toEqual({ grants: [] });
     const revoked = await fetch(
-      `${baseUrl}/api/overseer/${record.id}/grants/${encodeURIComponent('Bash:moonx')}`,
+      `${baseUrl}/api/overseer/${record.id}/grants/${encodeURIComponent('Bash program "moonx"')}`,
       { method: 'DELETE' }
     );
     expect(await json(revoked)).toEqual({ revoked: false });

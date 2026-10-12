@@ -347,6 +347,15 @@ describe('floorCheckForCommand, rewritten for linear time', () => {
 });
 
 describe('floorCheckForToolInput', () => {
+  it.each([
+    ['g""h release create v1', 'publish'],
+    ["git push --'force' origin main", 'force-push'],
+    ['np\\m publish', 'publish'],
+    ['gh release \\\ncreate v1', 'publish'],
+  ])('sees through the quoting in %p', (command, check) => {
+    expect(floorCheckForToolInput({ command }) as string | null).toBe(check);
+  });
+
   it('reads the command of any shell-shaped tool input', () => {
     expect(floorCheckForToolInput({ command: 'npm publish' })).toBe('publish');
     expect(floorCheckForToolInput({ command: 'ls' })).toBeNull();

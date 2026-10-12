@@ -63,6 +63,8 @@ export interface Planner {
     model?: string,
     mode?: PlannerMode
   ): Promise<PlannerTurn>;
+  /** Daemon stop: ends every turn in flight, so no planner process outlives it. */
+  shutdown?(): void;
 }
 
 // Validates and normalizes an arbitrary JSON value into a PlanProposal,

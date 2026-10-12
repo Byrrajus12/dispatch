@@ -1,23 +1,111 @@
+import { resolve } from 'node:path';
+
+import { commandCwd, hintsAtHeldTarget } from './overseerHold.js';
+import { isSimpleCommand, programName, shellWords } from './shellCommand.js';
+
 /** How long "Allow for this conversation" lasts at most. */
 export const GRANT_TTL_MS = 4 * 60 * 60 * 1000;
 
-// The program a shell command runs, past env assignments and a path.
-function programOf(command: string): string | null {
-  const words = command.trim().split(/\s+/);
-  const first = words.find((w) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
-  if (first === undefined || first === '') return null;
-  return first.slice(first.lastIndexOf('/') + 1);
+// Plain JSON with object keys sorted, so the same request always gives the same key.
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (typeof value === 'object' && value !== null) {
+    const entries = Object.entries(value).sort(([a], [b]) =>
+      a.localeCompare(b)
+    );
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
 }
 
-/** What a grant covers: a Bash grant is one program's (`Bash:moonx`), any other tool's is the tool. */
-export function grantKey(toolName: string, input: unknown): string {
-  if (toolName !== 'Bash') return toolName;
+// A command line with runs of spaces and tabs outside quotes folded to one
+// space and trimmed; quoted text, escapes and newlines stay as written.
+function foldBlanks(command: string): string {
+  let out = '';
+  let blank = false;
+  let i = 0;
+  while (i < command.length) {
+    const char = command[i];
+    if (char === ' ' || char === '\t') {
+      blank = true;
+      i += 1;
+      continue;
+    }
+    let end = i + 1;
+    if (char === '\\') end = i + 2;
+    else if (char === "'") {
+      const close = command.indexOf("'", i + 1);
+      end = close === -1 ? command.length : close + 1;
+    } else if (char === '"' || (char === '$' && command[i + 1] === "'")) {
+      // Double quotes and `$'…'` both honour backslash escapes.
+      const quote = char === '"' ? '"' : "'";
+      let j = char === '"' ? i + 1 : i + 2;
+      while (j < command.length && command[j] !== quote) {
+        j += command[j] === '\\' ? 2 : 1;
+      }
+      end = j + 1;
+    }
+    if (blank && out !== '') out += ' ';
+    blank = false;
+    out += command.slice(i, end);
+    i = end;
+  }
+  return out;
+}
+
+// A tool name with no blanks, quotes or colons stands as its own key.
+const PLAIN_TOOL_NAME = /^[\w.-]+$/;
+
+/**
+ * What a grant covers. A simple shell command (isSimpleCommand: one program,
+ * plain arguments) grants its program, named as written when it is a path;
+ * any other command line, or a simple one that hints at what a hold guards
+ * (hintsAtHeldTarget, past `rootDir`), grants only that exact text, with runs
+ * of blanks outside quotes folded. A command run anywhere but the checkout
+ * root carries its directory in the key. A Codex permissions ask grants exactly
+ * what it requested; any other tool's grant is the tool. Each free-text part is
+ * JSON-quoted after a fixed kind word, so no two kinds of key can collide.
+ */
+export function grantKey(
+  toolName: string,
+  input: unknown,
+  rootDir?: string
+): string {
+  if (toolName === 'codex.permissions') {
+    const permissions =
+      typeof input === 'object' && input !== null
+        ? (input as { permissions?: unknown }).permissions
+        : undefined;
+    return `${toolName} ${stableJson(permissions ?? null)}`;
+  }
+  if (toolName !== 'Bash' && toolName !== 'codex.commandExecution') {
+    return PLAIN_TOOL_NAME.test(toolName) ? toolName : JSON.stringify(toolName);
+  }
   const command =
     typeof input === 'object' && input !== null
       ? (input as { command?: unknown }).command
       : undefined;
-  const program = typeof command === 'string' ? programOf(command) : null;
-  return program === null ? toolName : `${toolName}:${program}`;
+  if (typeof command !== 'string') return toolName;
+  const rawCwd =
+    typeof input === 'object' && input !== null
+      ? (input as { cwd?: unknown }).cwd
+      : undefined;
+  const cwd =
+    typeof rawCwd === 'string' && rawCwd !== ''
+      ? commandCwd(input, rootDir ?? '/')
+      : undefined;
+  const first =
+    isSimpleCommand(command) && !hintsAtHeldTarget(command, rootDir, cwd)
+      ? shellWords(command)?.[0]
+      : undefined;
+  const key =
+    first !== undefined
+      ? `${toolName} program ${JSON.stringify(first.includes('/') ? first : programName(first))}`
+      : `${toolName} command ${JSON.stringify(foldBlanks(command))}`;
+  // A grant made in one directory never covers a command run in another.
+  const elsewhere =
+    cwd !== undefined && (rootDir === undefined || cwd !== resolve(rootDir));
+  return elsewhere ? `${key} in ${JSON.stringify(cwd)}` : key;
 }
 
 interface Grant {

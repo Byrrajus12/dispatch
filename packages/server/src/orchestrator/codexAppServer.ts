@@ -146,8 +146,8 @@ export class CodexAppServer {
   }
 
   close(): void {
-    if (this.settled) return;
-    this.process.stdin.end();
+    if (!this.settled) this.process.stdin.end();
+    // Kill even once settled: a stdin error settles the server with the child alive.
     this.process.kill();
   }
 

@@ -27,11 +27,16 @@ describe('provider catalog', () => {
     }
   });
 
-  it('marks only claude as able to plan and oversee', () => {
+  it('marks claude and codex as able to plan and oversee, every CLI agent as execute-only', () => {
     const planners = PROVIDERS.filter((p) => p.capabilities.plan).map(
       (p) => p.id
     );
-    expect(planners).toEqual(['claude']);
+    const overseers = PROVIDERS.filter((p) => p.capabilities.oversee).map(
+      (p) => p.id
+    );
+    expect(planners).toEqual(['claude', 'codex']);
+    expect(overseers).toEqual(['claude', 'codex']);
+    for (const p of PROVIDERS) expect(p.capabilities.execute).toBe(true);
   });
 
   it('parses claude auth status json', () => {

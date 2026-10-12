@@ -794,7 +794,7 @@ describe('OverseerManager built-in tool gate', () => {
         .get(started.id)
         .messages.find((m) => m.role === 'approval' && m.outcome === 'allowed')
     ).toMatchObject({
-      text: 'Allowed Bash:ls for this conversation (up to 4 hours): Bash: ls',
+      text: 'Allowed Bash program "ls" for this conversation (up to 4 hours): Bash: ls',
     });
     h.manager.decideApproval(started.id, 'req-3', { allow: false });
     await waitFor(() => h.manager.get(started.id).state === 'ready');
@@ -816,7 +816,7 @@ describe('OverseerManager built-in tool gate', () => {
       () => h.manager.get(started.id).pendingApprovals[0]?.requestId === 'req-2'
     );
     expect(h.manager.listGrants(started.id).map((g) => g.key)).toEqual([
-      'Bash:moonx',
+      'Bash program "moonx"',
     ]);
     h.manager.decideApproval(started.id, 'req-2', { allow: false });
     await waitFor(() => h.manager.get(started.id).state === 'ready');
@@ -1030,6 +1030,38 @@ describe('OverseerManager turn options', () => {
     expect(chosen.effort).toBe('max');
     await waitFor(() => h.manager.get(chosen.id).state === 'ready');
     expect(h.gated.options?.effort).toBe('max');
+  });
+});
+
+describe('OverseerManager backend choice', () => {
+  it('opens a conversation with no backend named on the default agent', async () => {
+    const h = makeManager({ ok: true, reply: 'unused' });
+    h.manager.registerBackend('claude', new GatedBackend([]));
+    h.manager.registerBackend('codex', new GatedBackend([]));
+
+    const onClaude = h.manager.start('hi');
+    expect(onClaude.backendName).toBe('claude');
+    await waitFor(() => h.manager.get(onClaude.id).state === 'ready');
+
+    updateConfig(repo, { executor: 'codex' });
+    const onCodex = h.manager.start('hi');
+    expect(onCodex.backendName).toBe('codex');
+    await waitFor(() => h.manager.get(onCodex.id).state === 'ready');
+  });
+
+  it('a Codex conversation never runs on a Claude model', async () => {
+    updateConfig(repo, {
+      models: { overseer: 'claude-fable-5-1' },
+      executors: { codex: { models: { execute: 'gpt-5.5' } } },
+    });
+    const h = makeManager({ ok: true, reply: 'unused' });
+    const codex = new GatedBackend([]);
+    h.manager.registerBackend('codex', codex);
+
+    const started = h.manager.start('hi', 'codex', 'claude-opus-5-5');
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(started.model).toBe('claude-opus-5-5');
+    expect(codex.options?.model).toBe('gpt-5.5');
   });
 });
 
@@ -1597,6 +1629,20 @@ describe('one durable conversation', () => {
     expect(loaded.pendingApprovals).toEqual([]);
     expect(loaded.messages.at(-1)).toMatchObject({
       role: 'notice',
+      notice: 'restarted',
+    });
+  });
+
+  it('daemon shutdown aborts the running turn and leaves it for the next boot', async () => {
+    const h = heldManager();
+    const started = h.manager.start('do a long thing', 'held');
+    h.manager.shutdown();
+    await tick();
+    // The backend saw the abort (its child dies with the daemon), but nothing
+    // is written past shutdown: the next boot marks the turn restarted.
+    expect(h.manager.get(started.id).state).toBe('running');
+    const again = heldManager(h.store);
+    expect(again.manager.get(started.id).messages.at(-1)).toMatchObject({
       notice: 'restarted',
     });
   });

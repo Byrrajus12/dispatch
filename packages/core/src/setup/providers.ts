@@ -61,7 +61,7 @@ export const PROVIDERS: readonly ProviderSpec[] = [
     signIn: ['codex', 'login'],
     authCheck: { args: ['login', 'status'], parse: parseExitCode },
     apiKeyEnv: 'OPENAI_API_KEY',
-    capabilities: EXECUTE_ONLY,
+    capabilities: { execute: true, plan: true, oversee: true },
   },
   {
     id: 'gemini',
