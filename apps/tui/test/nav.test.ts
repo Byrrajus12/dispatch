@@ -20,7 +20,7 @@ const ctx = (over: Partial<NavContext> = {}): NavContext => ({
   wide: true,
   cards: 0,
   canCompose: true,
-  lengths: { in: 3, out: 2, list: 5 },
+  lengths: { in: 3, out: 2, list: 5, projects: 0 },
   ...over,
 });
 
@@ -41,9 +41,38 @@ describe('views', () => {
     expect(run([key('3'), key('1')]).view).toBe('overseer');
   });
 
-  test('phase-3 views say so instead of doing nothing', () => {
-    expect(run([key('4')]).notice).toContain('phase 3');
-    expect(run([key('p', { ctrl: true })]).notice).toContain('phase 3');
+  test('4, 5 and 6 open docs, threads and pull requests', () => {
+    expect(run([key('4')]).view).toBe('docs');
+    expect(run([key('5')]).view).toBe('threads');
+    expect(run([key('6')]).view).toBe('prs');
+  });
+
+  test('ctrl+p opens the project picker; j moves in it and esc closes it', () => {
+    const picker = run(
+      [key('p', { ctrl: true })],
+      ctx({ lengths: { in: 0, out: 0, list: 0, projects: 3 } })
+    );
+    expect(picker.overlay).toBe('projects');
+    expect(
+      run(
+        [key('p', { ctrl: true }), key('j')],
+        ctx({ lengths: { in: 0, out: 0, list: 0, projects: 3 } })
+      ).cursor.projects
+    ).toBe(1);
+    expect(run([key('p', { ctrl: true }), key('escape')]).overlay).toBeNull();
+  });
+
+  test('enter in the picker picks the project under the cursor', () => {
+    const c = ctx({ lengths: { in: 0, out: 0, list: 0, projects: 3 } });
+    const at = run([key('p', { ctrl: true }), key('j')], c);
+    expect(resolveKey(at, key('return'), c)).toEqual({
+      type: 'pick-project',
+      index: 1,
+    });
+  });
+
+  test('d opens the diff in pull requests too', () => {
+    expect(run([key('6'), key('d')]).diff).toBe(true);
   });
 });
 

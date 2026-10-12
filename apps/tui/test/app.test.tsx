@@ -129,6 +129,116 @@ function fakeClient(over: Partial<Record<keyof ApiClient, unknown>> = {}) {
       sent.push({ id, text });
       return Promise.resolve(record);
     },
+    listDocs: () =>
+      Promise.resolve({
+        docs: [
+          {
+            id: 'doc-1',
+            handle: 'tui-spec',
+            title: 'TUI spec',
+            status: 'accepted',
+            scope: 'team',
+          },
+          {
+            id: 'doc-2',
+            handle: 'runbook',
+            title: 'Release runbook',
+            status: 'draft',
+            scope: 'team',
+          },
+        ],
+        total: 2,
+      }),
+    getDoc: (ref: string) =>
+      Promise.resolve({
+        doc: {
+          id: ref,
+          title: ref === 'doc-1' ? 'TUI spec' : 'Release runbook',
+        },
+        text:
+          ref === 'doc-1'
+            ? '# TUI spec\n\nRun Dispatch from a terminal.'
+            : '# Runbook',
+      }),
+    listRecentThreads: () =>
+      Promise.resolve({
+        threads: [
+          {
+            thread: 'm-t1',
+            root: {
+              ...runAsk,
+              id: 'm-t1',
+              thread: 'm-t1',
+              body: 'Redis is not provisioned in staging',
+            },
+            last: {
+              ...runAsk,
+              id: 'm-t2',
+              thread: 'm-t1',
+              body: 'Use the shared cluster',
+              from: 'human:wyat',
+            },
+            count: 2,
+          },
+        ],
+      }),
+    getThread: () =>
+      Promise.resolve({
+        messages: [
+          {
+            ...runAsk,
+            id: 'm-t1',
+            thread: 'm-t1',
+            body: 'Redis is not provisioned in staging',
+          },
+          {
+            ...runAsk,
+            id: 'm-t2',
+            thread: 'm-t1',
+            body: 'Use the shared cluster',
+            from: 'human:wyat',
+          },
+        ],
+        deliveries: [],
+      }),
+    fetchRepoPrs: () =>
+      Promise.resolve([
+        {
+          number: 42,
+          title: 'Add address autocomplete',
+          author: 'agent',
+          isDraft: false,
+          updatedAt: '2026-10-12T09:00:00Z',
+          headRefName: 'dispatch/r-1',
+          baseRefName: 'main',
+          url: 'u',
+        },
+      ]),
+    fetchRepoPrDetail: () =>
+      Promise.resolve({
+        status: {
+          number: 42,
+          title: 'Add address autocomplete',
+          state: 'OPEN',
+          isDraft: false,
+          reviewDecision: 'REVIEW_REQUIRED',
+          mergeable: 'MERGEABLE',
+          checks: { passed: 3, failed: 0, pending: 1, total: 4, runs: [] },
+        },
+        conversation: [
+          {
+            kind: 'comment',
+            author: 'ana',
+            body: 'Looks right to me',
+            createdAt: '2026-10-12T09:05:00Z',
+          },
+        ],
+      }),
+    fetchRepoPrDiff: () =>
+      Promise.resolve({
+        patch: 'diff --git a/x b/x\n+autocomplete()',
+        files: [],
+      }),
     connectEvents: () => () => {},
     ...over,
   } as unknown as ApiClient;
@@ -397,4 +507,123 @@ test('control sequences in daemon text never reach the terminal', async () => {
   expect(f).toContain('evil title');
   expect(f).not.toContain('pwned');
   expect(f).not.toContain('ZXZpbA');
+});
+
+test('4 opens Docs with the selected doc beside the list', async () => {
+  const { frame, press } = await mount(120, 40, fakeClient().client);
+  await frame();
+  const f = await press('4');
+  expect(f).toContain('Release runbook');
+  expect(f).toContain('Run Dispatch from a terminal.');
+});
+
+test('5 opens Threads with the selected thread', async () => {
+  const { frame, press } = await mount(120, 40, fakeClient().client);
+  await frame();
+  const f = await press('5');
+  expect(f).toContain('Redis is not provisioned in staging');
+  expect(f).toContain('Use the shared cluster');
+});
+
+test('6 opens pull requests with checks and conversation; d shows the diff', async () => {
+  const { frame, press } = await mount(120, 40, fakeClient().client);
+  await frame();
+  const f = await press('6');
+  expect(f).toContain('#42');
+  expect(f).toContain('3/4 checks');
+  expect(f).toContain('Looks right to me');
+  expect(await press('d')).toContain('autocomplete()');
+});
+
+test('ctrl+p lists running projects and enter switches to one, read-only', async () => {
+  const other = fakeClient({ fetchTasks: () => Promise.resolve([]) });
+  const t = await testRender(
+    <TuiRoot
+      client={fakeClient().client}
+      port={PORT}
+      root="/repo/storefront"
+      storage={memoryStorage()}
+      canDecide
+      projects={() => [
+        {
+          name: 'billing',
+          root: '/repo/billing',
+          port: 5001,
+          agentToken: 'tb',
+        },
+        {
+          name: 'storefront',
+          root: '/repo/storefront',
+          port: PORT,
+          agentToken: 'ts',
+        },
+      ]}
+      clientFor={() => other.client}
+      onQuit={() => {}}
+    />,
+    { width: 120, height: 40 }
+  );
+  destroy = () => t.renderer.destroy();
+  const frame = async () => {
+    for (let i = 0; i < 5; i++) {
+      await settle();
+      await t.renderOnce();
+    }
+    return t.captureCharFrame();
+  };
+  await frame();
+  t.mockInput.pressKey('p', { ctrl: true });
+  const picker = await frame();
+  expect(picker).toContain('billing');
+  t.mockInput.pressKey('RETURN');
+  const switched = await frame();
+  expect(switched).toContain('dispatch · billing');
+  expect(switched).toContain('read-only');
+});
+
+test('control sequences in PR comments, docs and threads never reach the terminal', async () => {
+  const { client } = fakeClient({
+    fetchRepoPrDetail: () =>
+      Promise.resolve({
+        status: {
+          number: 42,
+          title: 'pr \x1b]0;owned\x07title',
+          state: 'OPEN',
+          isDraft: false,
+          reviewDecision: null,
+          mergeable: 'MERGEABLE',
+          checks: { passed: 1, failed: 0, pending: 0, total: 1, runs: [] },
+        },
+        conversation: [
+          {
+            kind: 'comment',
+            author: 'x \x1b[2J',
+            body: 'hi \x1b]52;c;ZXZpbA==\x07there',
+            createdAt: '',
+          },
+        ],
+      }),
+    getDoc: () =>
+      Promise.resolve({ doc: {}, text: 'doc \x1b]0;injected\x07body' }),
+    getThread: () =>
+      Promise.resolve({
+        messages: [
+          { ...runAsk, id: 'm-t1', body: 'msg \x1b]0;injected\x07body' },
+        ],
+        deliveries: [],
+      }),
+  });
+  const { frame, press } = await mount(120, 40, client);
+  await frame();
+  const prs = await press('6');
+  expect(prs).toContain('hi there');
+  expect(prs).toContain('pr title');
+  expect(prs).not.toContain('ZXZpbA');
+  expect(prs).not.toContain('owned');
+  const docs = await press('4');
+  expect(docs).toContain('doc body');
+  expect(docs).not.toContain('injected');
+  const threads = await press('5');
+  expect(threads).toContain('msg body');
+  expect(threads).not.toContain('injected');
 });

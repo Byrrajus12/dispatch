@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { TuiRoot } from './App';
 import { parseArgs } from './args';
 import { fileStorage } from './fileStorage';
+import { listProjects } from './projects';
 
 const args = parseArgs(process.argv.slice(2), process.env);
 if (!args.ok) {
@@ -16,6 +17,11 @@ if (!args.ok) {
 
 const client = createApiClient(`http://127.0.0.1:${args.port}`, args.token);
 const storage = fileStorage(join(homedir(), '.config', 'dispatch', 'tui.json'));
+// Daemon files live under DISPATCH_HOME when set, exactly as dispatchd writes them.
+const daemonHome =
+  process.env.DISPATCH_HOME !== undefined && process.env.DISPATCH_HOME !== ''
+    ? process.env.DISPATCH_HOME
+    : homedir();
 // ctrl+c goes through the keymap like q, so both leave the terminal the same way.
 const renderer = await createCliRenderer({ exitOnCtrlC: false });
 
@@ -31,6 +37,7 @@ createRoot(renderer).render(
     root={args.root}
     storage={storage}
     canDecide={args.canDecide}
+    projects={() => listProjects(daemonHome)}
     fakeBackend={process.env.DISPATCH_TUI_FAKE_OVERSEER === '1'}
     onQuit={quit}
   />
