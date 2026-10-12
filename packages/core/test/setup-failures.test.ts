@@ -100,7 +100,61 @@ const CASES: [string, string | undefined, ReturnType<typeof explainFailure>][] =
         providerId: 'claude',
       },
     ],
+    [
+      // A zero-commit repo: the base is the unborn current branch, not HEAD.
+      'git worktree add failed: fatal: invalid reference: main',
+      undefined,
+      {
+        reason:
+          'Your project needs a first saved snapshot before an agent can work on it.',
+        fix: 'setup-project',
+      },
+    ],
+    [
+      "git worktree add failed: fatal: a branch named 'dispatch/t-1a2b' already exists\nHEAD is now at 1a2b3c4 Add files",
+      undefined,
+      {
+        reason:
+          "Dispatch couldn't make a working copy of your project for the agent.",
+        fix: 'retry',
+      },
+    ],
+    [
+      'spawn git ENOENT',
+      undefined,
+      {
+        reason: "Git isn't installed, or Dispatch can't find it.",
+        fix: 'setup-git',
+      },
+    ],
+    [
+      'unexpected status 401 Unauthorized: Missing bearer or basic authentication in header',
+      'codex',
+      {
+        reason: 'Codex needs you to sign in again.',
+        fix: 'setup-agent',
+        providerId: 'codex',
+      },
+    ],
+    [
+      'API Error: 401 Unauthorized from https://api.anthropic.com/v1/messages',
+      'claude',
+      {
+        reason: 'Claude Code needs you to sign in again.',
+        fix: 'setup-agent',
+        providerId: 'claude',
+      },
+    ],
   ];
+
+// Auth- and limit-sounding failures that are not the agent's: they must stay raw.
+const NOT_AGENT_FAILURES = [
+  'HttpError: 401 Unauthorized - https://api.github.com/repos/acme/web/pulls',
+  'You are not logged into any GitHub hosts. To log in, run: gh auth login',
+  'MCP server "linear" failed: 401 Unauthorized',
+  "API rate limit exceeded for 203.0.113.7. (But here's the good news: Authenticated requests get a higher rate limit.)",
+  "remote: Invalid username or password.\nfatal: Authentication failed for 'https://github.com/acme/web.git/'",
+];
 
 describe('explainFailure', () => {
   for (const [text, providerId, expected] of CASES) {
@@ -108,6 +162,12 @@ describe('explainFailure', () => {
       expect(
         explainFailure(text, providerId === undefined ? {} : { providerId })
       ).toEqual(expected);
+    });
+  }
+
+  for (const text of NOT_AGENT_FAILURES) {
+    it(`leaves alone: ${text.slice(0, 50)}`, () => {
+      expect(explainFailure(text, { providerId: 'claude' })).toBeNull();
     });
   }
 

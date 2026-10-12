@@ -6,9 +6,17 @@ export interface FailureExplanation {
   providerId?: string;
 }
 
+// Sign-in failures as agent CLIs print them; `\b` keeps gh's "not logged into" out.
 const AUTH =
-  /not logged in|please run \/login|invalid api key|authentication_error|oauth token has expired|login required|unauthorized/i;
-const LIMIT = /usage limit|rate limit|429 too many/i;
+  /not logged in\b|please run \/login|invalid api key|authentication_error|oauth token has expired|login required/i;
+// A 401 is the agent's only from a model provider; GitHub and MCP servers send them too.
+const PROVIDER_401 =
+  /unexpected status 401|401 unauthorized[^\n]*(?:api\.anthropic\.com|api\.openai\.com|chatgpt\.com|generativelanguage\.googleapis\.com)/i;
+// Plan limits as agents report them; GitHub's "API rate limit exceeded" is not one.
+const LIMIT = /usage limit|rate_limit_error|429 too many requests/i;
+// `git worktree add` in a repo with no commit yet: the base branch doesn't exist.
+const NO_FIRST_COMMIT =
+  /invalid reference: \S+|not a valid object name:? '?HEAD'?|ambiguous argument 'HEAD'|does not have any commits yet/i;
 
 // The agent a spawn failure names: a bare binary (`spawn gemini ENOENT`) or a path
 // under a package directory (`.../@openai/codex/vendor/.../codex ENOENT`).
@@ -39,6 +47,12 @@ export function explainFailure(
       providerId: 'claude',
     };
   }
+  if (/spawn git ENOENT/.test(text)) {
+    return {
+      reason: "Git isn't installed, or Dispatch can't find it.",
+      fix: 'setup-git',
+    };
+  }
   const spawned = spawnedProvider(text);
   if (spawned !== null) {
     const name = providerById(spawned.id)!.name;
@@ -62,7 +76,7 @@ export function explainFailure(
     };
   }
   if (/git worktree add failed/.test(text)) {
-    if (/invalid reference|not a valid object name|HEAD/.test(text)) {
+    if (NO_FIRST_COMMIT.test(text)) {
       return {
         reason:
           'Your project needs a first saved snapshot before an agent can work on it.',
@@ -89,7 +103,7 @@ export function explainFailure(
       ...(named === undefined ? {} : { providerId: named.id }),
     };
   }
-  if (AUTH.test(text)) {
+  if (AUTH.test(text) || PROVIDER_401.test(text)) {
     const who = named?.name ?? 'Your AI agent';
     return {
       reason: `${who} needs you to sign in again.`,
