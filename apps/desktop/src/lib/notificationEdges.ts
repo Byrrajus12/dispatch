@@ -4,7 +4,6 @@ import type {
   MergeQueueEntry,
   MergeQueueEntryState,
   PlannerQuestion,
-  PlanRecord,
   RunMeta,
   RunState,
 } from '@dispatch/client';
@@ -165,12 +164,11 @@ export function emptyQuestionTracking(): QuestionTracking {
   return { askers: new Map(), runQuestionIds: new Set() };
 }
 
-/** Pure edge-detector for questions waiting on the user, across drafts, the open plan,
+/** Pure edge-detector for questions waiting on the user, across drafts
  * and run agents. An already-open question set notifies on the first call too. */
 export function diffQuestionNotifications(
   previous: QuestionTracking,
   drafts: readonly DraftRecord[],
-  planRecord: PlanRecord | undefined,
   openQuestions: ReadonlyMap<string, RunQuestion[]>
 ): { notifications: PendingNotification[]; next: QuestionTracking } {
   const next = emptyQuestionTracking();
@@ -190,17 +188,6 @@ export function diffQuestionNotifications(
       body: d.prompt,
       target: { kind: 'draft' as const, draftId: d.id },
     })),
-    ...(planRecord === undefined
-      ? []
-      : [
-          {
-            key: `plan:${planRecord.id}`,
-            questions: planRecord.questions,
-            title: 'The planner needs your answer',
-            body: planRecord.prompt,
-            target: { kind: 'plan' as const, planId: planRecord.id },
-          },
-        ]),
   ];
 
   for (const asker of askers) {

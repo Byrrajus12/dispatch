@@ -18,7 +18,7 @@ import { Skeleton } from '@/ui/skeleton';
  * run state. Both a plan's still-unconfirmed drafts and real TaskDocs project onto this, so
  * the plan review, the inbox and the task page render the same spec.
  */
-export interface TaskSpec {
+interface TaskSpec {
   title: string;
   /** A canonical or custom status string — 'draft' for plan proposals. */
   status: string;

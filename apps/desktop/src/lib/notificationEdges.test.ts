@@ -2,7 +2,6 @@ import type {
   DraftRecord,
   MergeQueueEntry,
   PlannerQuestion,
-  PlanRecord,
   RunMeta,
 } from '@dispatch/client';
 import { describe, expect, test } from 'bun:test';
@@ -293,7 +292,6 @@ describe('diffQuestionNotifications', () => {
     const { notifications, next } = diffQuestionNotifications(
       emptyQuestionTracking(),
       [draft('d-1', [Q1])],
-      undefined,
       new Map()
     );
     expect(notifications).toHaveLength(1);
@@ -307,7 +305,6 @@ describe('diffQuestionNotifications', () => {
     const { notifications } = diffQuestionNotifications(
       emptyQuestionTracking(),
       [draft('d-1', [])],
-      undefined,
       new Map()
     );
     expect(notifications).toHaveLength(0);
@@ -317,13 +314,11 @@ describe('diffQuestionNotifications', () => {
     const first = diffQuestionNotifications(
       emptyQuestionTracking(),
       [draft('d-1', [])],
-      undefined,
       new Map()
     );
     const { notifications } = diffQuestionNotifications(
       first.next,
       [draft('d-1', [Q1])],
-      undefined,
       new Map()
     );
     expect(notifications).toHaveLength(1);
@@ -334,20 +329,17 @@ describe('diffQuestionNotifications', () => {
     const first = diffQuestionNotifications(
       emptyQuestionTracking(),
       [draft('d-1', [])],
-      undefined,
       new Map()
     );
     const second = diffQuestionNotifications(
       first.next,
       [draft('d-1', [Q1])],
-      undefined,
       new Map()
     );
     expect(second.notifications).toHaveLength(1);
     const third = diffQuestionNotifications(
       second.next,
       [draft('d-1', [Q1])],
-      undefined,
       new Map()
     );
     expect(third.notifications).toHaveLength(0);
@@ -359,13 +351,11 @@ describe('diffQuestionNotifications', () => {
     const first = diffQuestionNotifications(
       emptyQuestionTracking(),
       [draft('d-1', [Q1])],
-      undefined,
       new Map()
     );
     const { notifications } = diffQuestionNotifications(
       first.next,
       [draft('d-1', [Q1_AGAIN])],
-      undefined,
       new Map()
     );
     expect(notifications).toHaveLength(1);
@@ -379,13 +369,11 @@ describe('diffQuestionNotifications', () => {
     const first = diffQuestionNotifications(
       emptyQuestionTracking(),
       [draft('d-1', [collideA])],
-      undefined,
       new Map()
     );
     const { notifications } = diffQuestionNotifications(
       first.next,
       [draft('d-1', [collideB])],
-      undefined,
       new Map()
     );
     expect(notifications).toHaveLength(1);
@@ -395,13 +383,11 @@ describe('diffQuestionNotifications', () => {
     const first = diffQuestionNotifications(
       emptyQuestionTracking(),
       [draft('d-1', [Q1])],
-      undefined,
       new Map()
     );
     const { notifications } = diffQuestionNotifications(
       first.next,
       [draft('d-1', [])],
-      undefined,
       new Map()
     );
     expect(notifications).toHaveLength(0);
@@ -422,13 +408,11 @@ describe('diffQuestionNotifications', () => {
     const first = diffQuestionNotifications(
       emptyQuestionTracking(),
       [],
-      undefined,
       new Map()
     );
     const second = diffQuestionNotifications(
       first.next,
       [],
-      undefined,
       new Map([['r-1', [question]]])
     );
     expect(second.notifications).toHaveLength(1);
@@ -439,38 +423,9 @@ describe('diffQuestionNotifications', () => {
     const third = diffQuestionNotifications(
       second.next,
       [],
-      undefined,
       new Map([['r-1', [question]]])
     );
     expect(third.notifications).toHaveLength(0);
-  });
-
-  test('a plan that gains questions notifies with a plan target', () => {
-    const base: PlanRecord = {
-      id: 'plan-1',
-      prompt: 'build the thing',
-      plannerName: 'claude',
-      role: 'plan',
-      state: 'ready',
-      messages: [],
-      questions: [],
-      createdAt: '2026-08-03T00:00:00.000Z',
-      updatedAt: '2026-08-03T00:00:00.000Z',
-    };
-    const first = diffQuestionNotifications(
-      emptyQuestionTracking(),
-      [],
-      base,
-      new Map()
-    );
-    const { notifications } = diffQuestionNotifications(
-      first.next,
-      [],
-      { ...base, questions: [Q1] },
-      new Map()
-    );
-    expect(notifications).toHaveLength(1);
-    expect(notifications[0].target).toEqual({ kind: 'plan', planId: 'plan-1' });
   });
 });
 

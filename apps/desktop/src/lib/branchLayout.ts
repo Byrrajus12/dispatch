@@ -24,7 +24,7 @@ export interface BranchEdge {
   toRow: number;
 }
 
-export interface BranchPathSummary {
+interface BranchPathSummary {
   /** Unfinished tasks on the critical path — `path.length`. */
   remaining: number;
   /** The whole trunk: the done chain that led into the path plus the path itself. */

@@ -25,7 +25,6 @@ import type {
   AgentSummary,
   ApiClient,
   AuthTier,
-  ConfirmResult,
   DraftRecord,
   EpicProgress,
   ExecutorsResponse,
@@ -147,7 +146,6 @@ import {
 } from '../lib/taskListCache';
 import { ensureDispatchd, restartDispatchd } from '../lib/tauri';
 import { applyDocsEvent } from './useDocs';
-import { gitQueryRootKey } from './useGit';
 import { useOptimisticDispatch } from './useOptimisticDispatch';
 import {
   findingsQueryRootKey,
@@ -318,10 +316,8 @@ function readStoredInbox(root: string | null): InboxState {
 
 /**
  * `GET /api/plan/:id` as a reusable query, because this hook exposes two independent plan
- * slots: the Plans view's own plan, and the AI task draft the Notes hub starts off a note.
- * They must not share one `planId` — starting a note draft would otherwise replace whatever
- * proposal the Plans view had open — but they poll identically, so the query itself is
- * written once here and instantiated per slot.
+ * slots: the AI task draft started off a note, and the "Add detail" draft on a task. They
+ * poll identically, so the query is written once here and instantiated per slot.
  *
  * `retry: false`: a stale `planId` mid project-switch (cleared by an effect below, but not
  * instantly re-rendered) should never retry against the wrong daemon — see I5.
@@ -518,21 +514,10 @@ export interface DispatchProjectData {
   // Every dispatch worktree/branch on disk, joined with whatever run claims it
   // — the Branches surface's data. See BranchEntry in @dispatch/client.
   branches: import('@dispatch/client').BranchEntry[];
-  branchesLoading: boolean;
-  handleRefreshBranches: () => Promise<void>;
-  handleFreeBranchDisk: (branch: string) => Promise<void>;
-  handleDeleteBranch: (
-    branch: string,
-    opts?: { force?: boolean }
-  ) => Promise<void>;
   /** The brain-dump inbox — captured, not committed. */
   inbox: import('@dispatch/client').InboxItem[];
   /** Splits `text` server-side into one item per non-empty line. */
   handleCaptureInbox: (text: string) => Promise<void>;
-  handleUpdateInboxItem: (
-    id: string,
-    patch: { kind?: import('@dispatch/client').InboxKind; text?: string }
-  ) => Promise<void>;
   handleDismissInbox: (ids: string[]) => Promise<void>;
   /**
    * Starts an AI draft that adds the context an under-specified task is missing. Its own slot,
@@ -545,25 +530,9 @@ export interface DispatchProjectData {
   enrichPlanRecord: PlanRecord | undefined;
   /** Drops the open draft — Discard, and the cleanup after it's been applied. */
   handleDismissEnrich: () => void;
-  /** Model-backed grouping of related captures, run in the background by
-   * BrainDumpView. Always resolves — `error` carries a failed model call. */
-  handleClusterInbox: () => Promise<{
-    groups: import('@dispatch/client').InboxClusterGroup[];
-    error: string | null;
-  }>;
-  /** The persisted result of the last clustering pass — rendered on load so a
-   * page visit never bills a model call of its own. Null until fetched or when
-   * no pass has ever run. */
-  inboxClusters: import('@dispatch/client').InboxClusterSnapshot | null;
-  /** The persisted result of the last triage pass — kind, epic and possible
-   * duplicates per capture. Null until fetched or when no pass has run. */
-  inboxTriage: import('@dispatch/client').InboxTriageSnapshot | null;
   /** Readiness readings by task id, for the tasks the daemon has judged
    * (ready ones only — it judges as it serves `/api/tasks/ready`). */
   readinessById: ReadonlyMap<string, ReadinessReading>;
-  /** Every plan's summary, newest activity first — the Plans page's history,
-   * persisted server-side so it survives restarts and spans windows. */
-  plans: import('@dispatch/client').PlanSummary[];
 
   /** Line-level review comments on the selected run's diff. */
   reviewComments: import('@dispatch/client').ReviewComment[];
@@ -706,10 +675,6 @@ export interface DispatchProjectData {
     answer: string
   ) => Promise<void>;
 
-  planId: string | null;
-  setPlanId: (planId: string | null) => void;
-  planRecord: PlanRecord | undefined;
-
   handleUpdate: (id: string, patch: UpdatePatch) => Promise<void>;
   moveTaskStatus: (id: string, status: string) => Promise<void>;
   /** Resolves with the created doc (the create dialog attaches pending files to its id);
@@ -790,18 +755,6 @@ export interface DispatchProjectData {
   /** Lands a finished epic branch on the default base — one PR or one local
    * merge, decided server-side off the project's `pr` capability. */
   handleLandEpic: (epicId: string) => Promise<void>;
-  /** Opens a plan. `model` is the composer's pick for it, over the configured
-   * `plan` role's model; the plan keeps it for every follow-up. */
-  handleSubmitPrompt: (prompt: string, model?: string) => Promise<string>;
-  /** Post a follow-up message onto the active plan conversation. Returns the
-   * 202 record (already flipped back to `running`); the assistant's reply +
-   * refined proposal land via the `plan.changed` broadcast and refetch. */
-  handleSendPlanMessage: (
-    text: string
-  ) => Promise<import('@dispatch/client').PlanRecord>;
-  /** Turns a proposal into tasks. Resolves to the created epic's id (when the
-   * plan had one) and the task ids, so the caller can open the milestone. */
-  handleConfirmPlan: (proposal: PlanProposal) => Promise<ConfirmResult>;
   // Task 6: enqueue/dequeue a run in the merge queue. Both let the server's
   // 404/409 (unknown run, not terminal, already reviewed, already queued, or
   // "can't remove the actively-processing entry") propagate as a thrown
@@ -860,9 +813,7 @@ export function useDispatchProject(
   { selectedRunId, onRunDispatched }: UseDispatchProjectOptions
 ): DispatchProjectData {
   const queryClient = useQueryClient();
-  const [planId, setPlanId] = useState<string | null>(null);
-  // The Notes hub's own plan slot: the AI task draft started off a single note, kept apart
-  // from `planId` so the two views never overwrite each other's in-flight proposal.
+  // The Notes hub's own plan slot: the AI task draft started off a single note.
   const [notePlanId, setNotePlanId] = useState<string | null>(null);
   // The "Add detail" slot, carrying the task it was started from. Separate from `notePlanId`
   // because those proposals get confirmed into new tasks and these get patched onto one.
@@ -888,7 +839,7 @@ export function useDispatchProject(
 
   // Task 10: the notification inbox — one per project root, loaded lazily on mount and
   // reloaded whenever the active project switches (this hook's `projectPath` swaps in place
-  // rather than remounting on a project switch, same as `planId` below).
+  // rather than remounting on a project switch).
   const [notificationInbox, setNotificationInboxState] = useState<InboxState>(
     () => readStoredInbox(projectPath)
   );
@@ -934,12 +885,9 @@ export function useDispatchProject(
     [updateNotificationInbox]
   );
 
-  // A plan started against one project's dispatchd must never leak into another project's
-  // Plans view — without this, switching projects while a plan was mid-flight (or just left
-  // `ready`) would carry the old `planId` over and immediately try to `fetchPlan` it against
-  // the *new* project's port, 404ing (see I5 in the phase-8 fix report).
+  // A note draft started against one project's dispatchd must never leak into another
+  // project: its id would be fetched against the new project's port and 404.
   useEffect(() => {
-    setPlanId(null);
     setNotePlanId(null);
   }, [projectPath]);
 
@@ -984,14 +932,6 @@ export function useDispatchProject(
   const healthQueryKey = useMemo(() => ['dispatch-health', port], [port]);
   const notesQueryKey = useMemo(() => ['dispatch-notes', port], [port]);
   const inboxQueryKey = useMemo(() => ['dispatch-inbox', port], [port]);
-  const inboxClustersQueryKey = useMemo(
-    () => ['dispatch-inbox-clusters', port],
-    [port]
-  );
-  const inboxTriageQueryKey = useMemo(
-    () => ['dispatch-inbox-triage', port],
-    [port]
-  );
   // The drafts list (`GET /api/tasks/drafts`) query key, invalidated below
   // on `draft.changed`.
   const draftsQueryKey = useMemo(() => ['dispatch-drafts', port], [port]);
@@ -1416,38 +1356,6 @@ export function useDispatchProject(
     enabled: afterList,
   });
 
-  // Every plan's summary — the Plans page's server-backed history.
-  const { data: plans } = useQuery({
-    queryKey: ['dispatch-plans', port],
-    queryFn: () => {
-      if (client === null) throw new Error('dispatchd client not ready');
-      return client.fetchPlans();
-    },
-    enabled: afterList,
-  });
-
-  // The persisted last clustering pass — what BrainDumpView renders on load
-  // instead of billing a fresh model call per visit (see handleClusterInbox).
-  const { data: inboxClusters } = useQuery({
-    queryKey: inboxClustersQueryKey,
-    queryFn: () => {
-      if (client === null) throw new Error('dispatchd client not ready');
-      return client.fetchInboxClusters();
-    },
-    enabled: afterList,
-  });
-
-  // The last triage pass (kind, epic, duplicates per capture) — written by
-  // the same cluster call, so it shares that call's invalidation.
-  const { data: inboxTriage } = useQuery({
-    queryKey: inboxTriageQueryKey,
-    queryFn: () => {
-      if (client === null) throw new Error('dispatchd client not ready');
-      return client.fetchInboxTriage();
-    },
-    enabled: afterList,
-  });
-
   // The ready set from the cached list under the project's status model — what
   // `/api/tasks/ready` computes server-side, without re-sending every ready body
   // whenever one task changes. Empty until config says which statuses are ready.
@@ -1467,11 +1375,9 @@ export function useDispatchProject(
   );
 
   // Every dispatch worktree/branch on disk. Each row costs several `git`
-  // shell-outs on the server (ahead count, merged check, dirty check), so this
-  // deliberately has no `refetchInterval` — it refreshes on `run.changed` (see
-  // the WS effect below) and on the view's manual refresh, which together cover
-  // everything short of the user running git in their own terminal.
-  const { data: branches, isLoading: branchesLoading } = useQuery({
+  // shell-outs on the server, so this deliberately has no `refetchInterval` —
+  // it refreshes on `run.changed` and `git.changed` (see the WS effect below).
+  const { data: branches } = useQuery({
     queryKey: branchesQueryKey,
     queryFn: () => {
       if (client === null) throw new Error('dispatchd client not ready');
@@ -1489,7 +1395,6 @@ export function useDispatchProject(
     enabled: afterList,
   });
 
-  const planRecord = usePlanRecord(client, port, planId);
   const notePlanRecord = usePlanRecord(client, port, notePlanId);
   const enrichPlanRecord = usePlanRecord(
     client,
@@ -1856,11 +1761,6 @@ export function useDispatchProject(
           void queryClient.invalidateQueries({
             queryKey: ['dispatch-plan', port, event.planId],
           });
-          // The history list carries every plan's state — refresh it with
-          // the record so the two never disagree.
-          void queryClient.invalidateQueries({
-            queryKey: ['dispatch-plans', port],
-          });
           void queryClient.invalidateQueries({
             queryKey: agentSessionsQueryKey,
           });
@@ -1900,16 +1800,8 @@ export function useDispatchProject(
           });
         } else if (event.type === 'inbox.changed') {
           void queryClient.invalidateQueries({ queryKey: inboxQueryKey });
-          // The daemon triages captures in the background and announces
-          // the result on the same event, so the hints refresh with the rows.
-          void queryClient.invalidateQueries({
-            queryKey: inboxTriageQueryKey,
-          });
         } else if (event.type === 'git.changed') {
-          // Prefix match: invalidates every query useGit.ts builds in one call.
-          void queryClient.invalidateQueries({ queryKey: gitQueryRootKey });
-          // A git-level mutation can change dispatch's own worktree bookkeeping too, so
-          // the Branches panel's GitSummary chips don't go stale until a manual refresh.
+          // A git-level mutation can change dispatch's own worktree bookkeeping too.
           void queryClient.invalidateQueries({ queryKey: branchesQueryKey });
           // A pull can rewrite config.yml, which broadcasts no `config.changed`.
           refetchConfig();
@@ -2136,7 +2028,6 @@ export function useDispatchProject(
     draftsQueryKey,
     agentSessionsQueryKey,
     inboxQueryKey,
-    inboxTriageQueryKey,
     epicProgressKeyPrefix,
     mergeQueueQueryKey,
     landingQueryKey,
@@ -2363,45 +2254,6 @@ export function useDispatchProject(
       void queryClient.invalidateQueries({ queryKey: notesQueryKey });
     },
     [client, queryClient, notesQueryKey]
-  );
-
-  // Manual refetch for the Branches and Landed views. This surface has no
-  // polling (each row costs several git shell-outs), and git state can change
-  // entirely outside the app — the user's own terminal — so an explicit
-  // refresh is the only way to pick that up. Runs are invalidated too: both
-  // views join branch refs with run data (Landed's merged rows are run rows).
-  const handleRefreshBranches = useCallback(async (): Promise<void> => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: branchesQueryKey }),
-      queryClient.invalidateQueries({ queryKey: runsQueryKey }),
-    ]);
-  }, [queryClient, branchesQueryKey, runsQueryKey]);
-
-  // Reclaims a branch's worktree directory, keeping the branch ref so the work
-  // stays recoverable. Errors are deliberately allowed to propagate: the server
-  // 409s with a specific reason (live run, open PR, stacked dependent) that the
-  // Branches view surfaces verbatim rather than swallowing.
-  const handleFreeBranchDisk = useCallback(
-    async (branch: string): Promise<void> => {
-      if (client === null) return;
-      await client.freeBranchDisk(branch);
-      void queryClient.invalidateQueries({ queryKey: branchesQueryKey });
-    },
-    [client, queryClient, branchesQueryKey]
-  );
-
-  // Deletes a branch ref and any worktree it still has. `force` is required by
-  // the server for a branch whose commits never landed on its base — the one
-  // action here that destroys work irreversibly. Also refetches runs, since a
-  // deleted branch changes what the run list can still offer actions on.
-  const handleDeleteBranch = useCallback(
-    async (branch: string, opts?: { force?: boolean }): Promise<void> => {
-      if (client === null) return;
-      await client.deleteBranch(branch, opts);
-      void queryClient.invalidateQueries({ queryKey: branchesQueryKey });
-      void queryClient.invalidateQueries({ queryKey: runsQueryKey });
-    },
-    [client, queryClient, branchesQueryKey, runsQueryKey]
   );
 
   // Promoting a note into a task refetches the note (it gains its linked-task
@@ -2767,60 +2619,6 @@ export function useDispatchProject(
     [client, queryClient, tasksQueryKey, epicProgressKeyPrefix]
   );
 
-  // Returns the new plan's id so PlansView can add it to its local session history
-  // immediately, without waiting on a refetch.
-  const handleSubmitPrompt = useCallback(
-    async (prompt: string, model?: string): Promise<string> => {
-      if (client === null) throw new Error('dispatchd client not ready');
-      const { planId: newPlanId } = await client.startPlan(
-        prompt,
-        model !== undefined ? { model } : {}
-      );
-      setPlanId(newPlanId);
-      return newPlanId;
-    },
-    [client]
-  );
-
-  // Refine the active plan across turns: post the follow-up, then seed the plan query with
-  // the 202's record — already carrying the user's message and back in `running` — so the
-  // thread shows the turn the instant it's accepted instead of after a round trip. The
-  // invalidate right after re-syncs with the server (and restarts the `running` poll), and
-  // the assistant's reply arrives via `plan.changed` the same way the opening turn does.
-  const handleSendPlanMessage = useCallback(
-    async (text: string): Promise<import('@dispatch/client').PlanRecord> => {
-      if (client === null || planId === null) {
-        throw new Error('no plan in progress');
-      }
-      const record = await client.sendPlanMessage(planId, text);
-      // usePlanRecord keys the plan query as ['dispatch-plan', port, planId]
-      // (see the helper above). Seed that key with the 202's record first so the
-      // thread shows the user's turn immediately — which is what the comment
-      // above promises — then invalidate to re-sync and restart the `running`
-      // poll. The incoming side used a `planQueryKey` local that no longer
-      // exists here, so this keeps its optimistic behaviour on main's key form.
-      const planKey = ['dispatch-plan', port, planId];
-      queryClient.setQueryData(planKey, record);
-      void queryClient.invalidateQueries({ queryKey: planKey });
-      return record;
-    },
-    [client, planId, queryClient, port]
-  );
-
-  const handleConfirmPlan = useCallback(
-    async (proposal: PlanProposal): Promise<ConfirmResult> => {
-      if (client === null || planId === null) {
-        throw new Error('no plan open to confirm');
-      }
-      const result = await client.confirmPlan(planId, proposal);
-      void queryClient.invalidateQueries({ queryKey: tasksQueryKey });
-      // The new epic shows up in the bulk progress list on the next fetch.
-      void queryClient.invalidateQueries({ queryKey: epicProgressKeyPrefix });
-      return result;
-    },
-    [client, planId, queryClient, tasksQueryKey, epicProgressKeyPrefix]
-  );
-
   // Task 6: enqueue a terminal, unreviewed run into the merge queue. The
   // server 409s (unknown run, non-terminal, already reviewed, already
   // queued) surface to the caller as a thrown Error with the server's own
@@ -2893,18 +2691,6 @@ export function useDispatchProject(
     async (text: string): Promise<void> => {
       if (client === null) return;
       await client.addInbox({ text });
-      invalidateInbox();
-    },
-    [client, invalidateInbox]
-  );
-
-  const handleUpdateInboxItem = useCallback(
-    async (
-      id: string,
-      patch: { kind?: import('@dispatch/client').InboxKind; text?: string }
-    ): Promise<void> => {
-      if (client === null) return;
-      await client.updateInbox(id, patch);
       invalidateInbox();
     },
     [client, invalidateInbox]
@@ -3157,16 +2943,6 @@ export function useDispatchProject(
       tasksQueryKey,
     ]);
 
-  const handleClusterInbox = useCallback(async () => {
-    if (client === null) return { groups: [], error: null };
-    const res = await client.clusterInbox();
-    // A successful pass was persisted server-side; refetch the snapshot so
-    // every consumer renders the same result the call returned.
-    void queryClient.invalidateQueries({ queryKey: inboxClustersQueryKey });
-    void queryClient.invalidateQueries({ queryKey: inboxTriageQueryKey });
-    return res;
-  }, [client, queryClient, inboxClustersQueryKey, inboxTriageQueryKey]);
-
   // Retries every entry the queue is holding on a `blocked-environment` (a dirty checkout, a
   // staged index, the wrong branch). Deliberately queue-wide rather than per-entry, because the
   // server's endpoint is: the block is a property of the shared checkout, not of one entry, so
@@ -3190,7 +2966,6 @@ export function useDispatchProject(
     runs ?? [],
     mergeQueue ?? null,
     drafts ?? [],
-    planRecord,
     openQuestions,
     onRecordInbox
   );
@@ -3262,10 +3037,6 @@ export function useDispatchProject(
       diffLoading,
       diffError,
       branches: branches ?? [],
-      branchesLoading,
-      handleRefreshBranches,
-      handleFreeBranchDisk,
-      handleDeleteBranch,
       notes: notes ?? [],
       handleCreateNote,
       handleUpdateNote,
@@ -3286,10 +3057,6 @@ export function useDispatchProject(
       asksMe,
       decisions: decisionList ?? [],
       handleAnswerQuestion,
-
-      planId,
-      setPlanId,
-      planRecord,
 
       handleUpdate,
       moveTaskStatus,
@@ -3317,9 +3084,6 @@ export function useDispatchProject(
       handleResumeEpic,
       handleStopEpic,
       handleLandEpic,
-      handleSubmitPrompt,
-      handleSendPlanMessage,
-      handleConfirmPlan,
       handleEnqueueMerge,
       handleEnqueueMergeStack,
       handleDequeueMerge,
@@ -3335,18 +3099,13 @@ export function useDispatchProject(
 
       inbox: inbox ?? [],
       handleCaptureInbox,
-      handleUpdateInboxItem,
       handleDismissInbox,
       handleConvertInbox,
       handleEnrichTask,
       enrichTaskId: enrichPlan?.taskId ?? null,
       enrichPlanRecord,
       handleDismissEnrich,
-      handleClusterInbox,
-      inboxClusters: inboxClusters ?? null,
-      inboxTriage: inboxTriage ?? null,
       readinessById,
-      plans: plans ?? [],
       reviewComments: reviewComments ?? [],
       handleAddReviewComment,
       handleApplySuggestion,
@@ -3411,10 +3170,6 @@ export function useDispatchProject(
       diffLoading,
       diffError,
       branches,
-      branchesLoading,
-      handleRefreshBranches,
-      handleFreeBranchDisk,
-      handleDeleteBranch,
       notes,
       handleCreateNote,
       handleUpdateNote,
@@ -3435,9 +3190,6 @@ export function useDispatchProject(
       asksMe,
       decisionList,
       handleAnswerQuestion,
-      planId,
-      setPlanId,
-      planRecord,
       handleUpdate,
       moveTaskStatus,
       handleCreate,
@@ -3464,9 +3216,6 @@ export function useDispatchProject(
       handleResumeEpic,
       handleStopEpic,
       handleLandEpic,
-      handleSubmitPrompt,
-      handleSendPlanMessage,
-      handleConfirmPlan,
       handleEnqueueMerge,
       handleEnqueueMergeStack,
       handleDequeueMerge,
@@ -3480,18 +3229,13 @@ export function useDispatchProject(
       markNotificationRead,
       inbox,
       handleCaptureInbox,
-      handleUpdateInboxItem,
       handleDismissInbox,
       handleConvertInbox,
       handleEnrichTask,
       enrichPlan,
       enrichPlanRecord,
       handleDismissEnrich,
-      handleClusterInbox,
-      inboxClusters,
-      inboxTriage,
       readinessById,
-      plans,
       reviewComments,
       handleAddReviewComment,
       handleApplySuggestion,
