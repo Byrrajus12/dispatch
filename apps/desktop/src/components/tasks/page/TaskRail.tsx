@@ -17,12 +17,14 @@ import {
 import { isTerminalRunState } from '../../../lib/runState';
 import { formatShortDate } from '../../../lib/taskDates';
 import { assigneeLabel, kindLabel } from '../../../lib/taskDisplay';
+import { pendingEnrichQuestions } from '../../../lib/taskEnrich';
 import { ancestorsOf, parentCandidates } from '../../../lib/taskHierarchy';
 import { taskIndexOf } from '../../../lib/taskIndex';
 import { taskTimeline } from '../../../lib/taskTimeline';
 import { buildFlightPlan } from '../../flightplan/flightPlan';
 import { FlightPlanMini } from '../../flightplan/FlightPlanMini';
 import { usePeople } from '../../people/PeopleContext';
+import { PlanQuestionsForm } from '../../plans/PlanQuestionsForm';
 import { MergeLadderPill } from '../../runs/MergeLadderDot';
 import { RunStatePill } from '../../runs/RunStatePill';
 import { AssigneeAvatar } from '../AssigneeAvatar';
@@ -209,7 +211,38 @@ export interface TaskRailProps {
   /** Plan mode draws every sub-issue and a container's spec lists them, so there the
    * rail leaves its excerpt out. */
   showSubIssues: boolean;
+  /** Spec mode answers the task's planner questions above the spec, so there the rail
+   * leaves them out. */
+  showPlannerQuestions: boolean;
   className?: string;
+}
+
+/**
+ * The task's open planner questions (its "Add detail" pass stopped to ask), pinned to the
+ * top of the rail. The rail is the one surface that stays put across modes, so a question
+ * asked while you are watching a run or reviewing a diff is answered from there instead of
+ * waiting unseen in Spec mode.
+ */
+function PlannerQuestionsSection({ page }: { page: TaskPageModel }) {
+  const { project } = page;
+  const plan = pendingEnrichQuestions(
+    page.item.meta.id,
+    project.enrichTaskId,
+    project.enrichPlanRecord
+  );
+  const client = project.client;
+  if (plan === null || client === null) return null;
+  return (
+    <div data-slot="planner-questions">
+      <PlanQuestionsForm
+        questions={plan.questions}
+        disabled={plan.state === 'running'}
+        onSend={async (message) => {
+          await client.sendPlanMessage(plan.id, message);
+        }}
+      />
+    </div>
+  );
 }
 
 /**
@@ -228,6 +261,7 @@ export function TaskRail({
   showRelations,
   showActivity,
   showSubIssues,
+  showPlannerQuestions,
   className,
 }: TaskRailProps) {
   const { item, project } = page;
@@ -296,6 +330,7 @@ export function TaskRail({
         className
       )}
     >
+      {showPlannerQuestions && <PlannerQuestionsSection page={page} />}
       <RailSection title="Properties">
         {isContainerKind(meta.kind) && <ContainerRow meta={meta} />}
         <StatusControl

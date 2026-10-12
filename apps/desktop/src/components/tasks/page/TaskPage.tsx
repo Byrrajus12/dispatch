@@ -866,6 +866,7 @@ function TaskPageLoaded({
       showRelations={mode !== 'spec'}
       showActivity={mode !== 'summary'}
       showSubIssues={mode !== 'plan' && mode !== 'spec'}
+      showPlannerQuestions={mode !== 'spec'}
       className={cn(
         layout === 'split'
           ? 'bg-surface-panel shadow-overlay absolute inset-y-0 right-0 z-20 w-[300px]'

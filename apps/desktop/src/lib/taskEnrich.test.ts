@@ -5,6 +5,7 @@ import {
   enrichDraftFromPlan,
   enrichPatch,
   enrichPlanError,
+  pendingEnrichQuestions,
 } from './taskEnrich.js';
 
 function plannedTask(over: Partial<PlannedTask> = {}): PlannedTask {
@@ -178,5 +179,27 @@ describe('enrichPatch', () => {
     });
     expect(patch).toEqual({ acceptanceCriteria: '- only criteria' });
     expect('description' in patch).toBe(false);
+  });
+});
+
+describe('pendingEnrichQuestions', () => {
+  const question = { id: 'q1', question: 'Which file?', options: [] };
+
+  it("returns this task's enrich plan when it is asking", () => {
+    const record = planRecord({ questions: [question] });
+    expect(pendingEnrichQuestions('t-1', 't-1', record)).toBe(record);
+  });
+
+  it("ignores another task's enrich plan", () => {
+    const record = planRecord({ questions: [question] });
+    expect(pendingEnrichQuestions('t-1', 't-2', record)).toBeNull();
+  });
+
+  it('is null when the plan has no open questions', () => {
+    expect(pendingEnrichQuestions('t-1', 't-1', planRecord())).toBeNull();
+  });
+
+  it('is null with no enrich plan at all', () => {
+    expect(pendingEnrichQuestions('t-1', null, undefined)).toBeNull();
   });
 });

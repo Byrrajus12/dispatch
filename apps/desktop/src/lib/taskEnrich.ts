@@ -32,6 +32,20 @@ export function enrichDraftFromPlan(
 }
 
 /**
+ * The enrich plan `taskId` is waiting on a human for, or `null`. The app keeps one enrich
+ * thread at a time (`enrichTaskId` names its task), so another task's questions never count,
+ * and a plan with no open questions isn't waiting on anyone.
+ */
+export function pendingEnrichQuestions(
+  taskId: string,
+  enrichTaskId: string | null,
+  record: PlanRecord | undefined
+): PlanRecord | null {
+  if (enrichTaskId !== taskId || record === undefined) return null;
+  return record.questions.length > 0 ? record : null;
+}
+
+/**
  * Why an enrich pass ended with nothing to review, or `null` while running / when a draft is
  * waiting. A `ready` plan with an empty proposal counts: silence would read as a dead button.
  */
