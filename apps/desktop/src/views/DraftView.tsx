@@ -104,6 +104,7 @@ export function DraftView({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [discarding, setDiscarding] = useState(false);
+  const [sendingToAgent, setSendingToAgent] = useState(false);
 
   // Selection actions over the original prompt (the one piece of text on this page that
   // is plain rendered prose rather than an `<input>`/`<textarea>` — the Selection API this
@@ -217,7 +218,11 @@ export function DraftView({
       ? [projectName, 'Drafts', 'Draft']
       : ['Drafts', 'Draft'];
   const canCreate =
-    !saving && !discarding && task !== undefined && isDraftSaveable(editable);
+    !saving &&
+    !discarding &&
+    !sendingToAgent &&
+    task !== undefined &&
+    isDraftSaveable(editable);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -406,7 +411,7 @@ export function DraftView({
         )}
         <PillButton
           onClick={() => void discard()}
-          disabled={saving || discarding}
+          disabled={saving || discarding || sendingToAgent}
         >
           {discarding && <Spinner className="size-3.5" />}
           Discard
@@ -415,17 +420,22 @@ export function DraftView({
           <SendToAgent
             options={send.options}
             disabled={!canCreate}
-            onSend={(choice) =>
-              send.onSend(
-                {
-                  ...editableDraftToCreateInput(editable),
-                  ...(choice.writes.length > 0
-                    ? { writes: choice.writes }
-                    : {}),
-                },
-                choice
-              )
-            }
+            onSend={async (choice) => {
+              setSendingToAgent(true);
+              try {
+                await send.onSend(
+                  {
+                    ...editableDraftToCreateInput(editable),
+                    ...(choice.writes.length > 0
+                      ? { writes: choice.writes }
+                      : {}),
+                  },
+                  choice
+                );
+              } finally {
+                setSendingToAgent(false);
+              }
+            }}
             extra={
               <Button
                 variant="ghost"

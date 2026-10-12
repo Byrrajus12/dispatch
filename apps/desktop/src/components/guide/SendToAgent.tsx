@@ -1,6 +1,6 @@
 import type { EffortLevel } from '@dispatch-foo/core/browser';
 import { Send, SlidersHorizontal } from 'lucide-react';
-import { type ReactNode, useId, useState } from 'react';
+import { type ReactNode, useId, useRef, useState } from 'react';
 
 import {
   DEFAULT_EFFORT_ID,
@@ -60,10 +60,14 @@ export function SendToAgent({
   const [effortId, setEffortId] = useState(DEFAULT_EFFORT_ID);
   const [writes, setWrites] = useState('');
   const [sending, setSending] = useState(false);
+  // Set synchronously so a second click or retry before re-render cannot send twice.
+  const inFlight = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const defaultName = modelLabel(options.defaultModel);
 
   async function send() {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setSending(true);
     setError(null);
     const effort = options.modelChoice ? effortFromId(effortId) : undefined;
@@ -76,6 +80,7 @@ export function SendToAgent({
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
+      inFlight.current = false;
       setSending(false);
     }
   }

@@ -70,3 +70,12 @@ test('a refused send explains itself', async () => {
 test('declared files are one per line, trimmed', () => {
   expect(parseWrites(' a\n\n  b/** \n')).toEqual(['a', 'b/**']);
 });
+
+test('two quick clicks send once', () => {
+  const onSend = mock(() => new Promise<void>(() => {}));
+  render(<SendToAgent options={{ modelChoice: false }} onSend={onSend} />);
+  const button = screen.getByRole('button', { name: 'Send to agent' });
+  fireEvent.click(button);
+  fireEvent.click(button);
+  expect(onSend).toHaveBeenCalledTimes(1);
+});

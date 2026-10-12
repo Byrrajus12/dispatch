@@ -217,6 +217,7 @@ test('a failed draft offers Try again', async () => {
   });
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await Promise.resolve();
   });
   expect(retried).toBe(1);
 });
@@ -238,6 +239,7 @@ test('the guided draft sends to the agent with the edited task', async () => {
   });
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send to agent' }));
+    await Promise.resolve();
   });
   expect(sent[0]?.title).toBe('Cache it');
 });
@@ -252,7 +254,29 @@ test('Just create the task waits behind More options', async () => {
   });
   await act(async () => {
     fireEvent.click(justCreate);
+    await Promise.resolve();
   });
   expect(created).toHaveLength(1);
   expect(dismissed).toEqual(['d-1']);
+});
+
+test('Discard and Just create the task are disabled while a send is pending', async () => {
+  mount({
+    send: {
+      options: { modelChoice: false },
+      onSend: () => new Promise<void>(() => {}),
+    },
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Send to agent' }));
+    await Promise.resolve();
+  });
+  expect(
+    screen.getByRole<HTMLButtonElement>('button', { name: 'Discard' }).disabled
+  ).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'More options' }));
+  const justCreate = await screen.findByRole<HTMLButtonElement>('button', {
+    name: 'Just create the task',
+  });
+  expect(justCreate.disabled).toBe(true);
 });
