@@ -145,6 +145,26 @@ const CASES: [string, string | undefined, ReturnType<typeof explainFailure>][] =
         providerId: 'claude',
       },
     ],
+    [
+      'stream disconnected before completion: exceeded retry limit, last status: 429 Too Many Requests',
+      'codex',
+      {
+        reason:
+          "You've reached your plan's usage limit. Try again once it resets.",
+        fix: 'retry',
+        providerId: 'codex',
+      },
+    ],
+    [
+      'API Error: 429 Too Many Requests from https://api.anthropic.com/v1/messages',
+      'claude',
+      {
+        reason:
+          "You've reached your plan's usage limit. Try again once it resets.",
+        fix: 'retry',
+        providerId: 'claude',
+      },
+    ],
   ];
 
 // Auth- and limit-sounding failures that are not the agent's: they must stay raw.
@@ -152,6 +172,8 @@ const NOT_AGENT_FAILURES = [
   'HttpError: 401 Unauthorized - https://api.github.com/repos/acme/web/pulls',
   'You are not logged into any GitHub hosts. To log in, run: gh auth login',
   'MCP server "linear" failed: 401 Unauthorized',
+  'HttpError: 429 Too Many Requests - https://api.github.com/repos/acme/web/pulls',
+  'MCP server "linear" failed: 429 Too Many Requests',
   "API rate limit exceeded for 203.0.113.7. (But here's the good news: Authenticated requests get a higher rate limit.)",
   "remote: Invalid username or password.\nfatal: Authentication failed for 'https://github.com/acme/web.git/'",
 ];

@@ -9,11 +9,18 @@ export interface FailureExplanation {
 // Sign-in failures as agent CLIs print them; `\b` keeps gh's "not logged into" out.
 const AUTH =
   /not logged in\b|please run \/login|invalid api key|authentication_error|oauth token has expired|login required/i;
-// A 401 is the agent's only from a model provider; GitHub and MCP servers send them too.
-const PROVIDER_401 =
-  /unexpected status 401|401 unauthorized[^\n]*(?:api\.anthropic\.com|api\.openai\.com|chatgpt\.com|generativelanguage\.googleapis\.com)/i;
-// Plan limits as agents report them; GitHub's "API rate limit exceeded" is not one.
-const LIMIT = /usage limit|rate_limit_error|429 too many requests/i;
+// Model-provider hosts: a 401 or 429 naming one is the agent's, not GitHub's or an MCP server's.
+const PROVIDER_HOST =
+  '(?:api\\.anthropic\\.com|api\\.openai\\.com|chatgpt\\.com|generativelanguage\\.googleapis\\.com)';
+const PROVIDER_401 = new RegExp(
+  `unexpected status 401|401 unauthorized[^\\n]*${PROVIDER_HOST}`,
+  'i'
+);
+// Plan limits as agents report them (Codex's "last status: 429"); GitHub's rate limit is not one.
+const LIMIT = new RegExp(
+  `usage limit|rate_limit_error|last status: 429|429 too many requests[^\\n]*${PROVIDER_HOST}`,
+  'i'
+);
 // `git worktree add` in a repo with no commit yet: the base branch doesn't exist.
 const NO_FIRST_COMMIT =
   /invalid reference: \S+|not a valid object name:? '?HEAD'?|ambiguous argument 'HEAD'|does not have any commits yet/i;
