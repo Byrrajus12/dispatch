@@ -1,5 +1,39 @@
+import { dequotedCommand } from '../floor.js';
+
 /** How long "Allow for this conversation" lasts at most. */
 export const GRANT_TTL_MS = 4 * 60 * 60 * 1000;
+
+// Shell syntax that lets one command line run more than its first program.
+const COMPOUND = /[;&|$`<>\n\r]/;
+
+// Programs that run another program, so their own name says nothing about what runs.
+const WRAPPER_PROGRAMS = new Set([
+  'env',
+  'exec',
+  'command',
+  'builtin',
+  'xargs',
+  'sudo',
+  'doas',
+  'su',
+  'nice',
+  'nohup',
+  'time',
+  'timeout',
+  'stdbuf',
+  'ionice',
+  'chroot',
+  'watch',
+  'eval',
+  'source',
+  '.',
+  'sh',
+  'bash',
+  'zsh',
+  'dash',
+  'ksh',
+  'fish',
+]);
 
 // The program a shell command runs, past env assignments and a path.
 function programOf(command: string): string | null {
@@ -9,8 +43,32 @@ function programOf(command: string): string | null {
   return first.slice(first.lastIndexOf('/') + 1);
 }
 
-/** What a grant covers: a shell grant (Bash, a Codex command) is one program's, any other tool's is the tool. */
+// Plain JSON with object keys sorted, so the same request always gives the same key.
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (typeof value === 'object' && value !== null) {
+    const entries = Object.entries(value).sort(([a], [b]) =>
+      a.localeCompare(b)
+    );
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+/**
+ * What a grant covers. A simple shell command (Bash, a Codex command) grants
+ * its program; one with operators, substitutions or a wrapper program grants
+ * only that exact command line. A Codex permissions ask grants exactly what it
+ * requested; any other tool's grant is the tool.
+ */
 export function grantKey(toolName: string, input: unknown): string {
+  if (toolName === 'codex.permissions') {
+    const permissions =
+      typeof input === 'object' && input !== null
+        ? (input as { permissions?: unknown }).permissions
+        : undefined;
+    return `${toolName}:${stableJson(permissions ?? null)}`;
+  }
   if (toolName !== 'Bash' && toolName !== 'codex.commandExecution') {
     return toolName;
   }
@@ -18,8 +76,13 @@ export function grantKey(toolName: string, input: unknown): string {
     typeof input === 'object' && input !== null
       ? (input as { command?: unknown }).command
       : undefined;
-  const program = typeof command === 'string' ? programOf(command) : null;
-  return program === null ? toolName : `${toolName}:${program}`;
+  if (typeof command !== 'string') return toolName;
+  const program = programOf(dequotedCommand(command));
+  if (program === null) return toolName;
+  if (COMPOUND.test(command) || WRAPPER_PROGRAMS.has(program)) {
+    return `${toolName}:${command.trim().replace(/\s+/g, ' ')}`;
+  }
+  return `${toolName}:${program}`;
 }
 
 interface Grant {

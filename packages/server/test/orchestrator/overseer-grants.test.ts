@@ -26,6 +26,51 @@ describe('grantKey', () => {
     expect(grantKey('Bash', { command: '  git status' })).toBe('Bash:git');
   });
 
+  // One grant for `cd` or `env` must not cover whatever runs after it.
+  test('a compound or wrapped command is scoped to its exact text', () => {
+    for (const command of [
+      'cd app && rm -rf build',
+      'git status; rm -rf /',
+      'ls | xargs rm',
+      'echo $(whoami)',
+      'echo `whoami`',
+      'cat a > b',
+      'env FOO=1 node x.js',
+      'xargs rm',
+      'sudo ls',
+      'timeout 5 node x.js',
+      "bash -c 'ls'",
+      'nice   -n 5   make',
+    ]) {
+      expect(grantKey('Bash', { command })).toBe(
+        `Bash:${command.trim().replace(/\s+/g, ' ')}`
+      );
+    }
+    expect(
+      grantKey('codex.commandExecution', { command: 'cd app && moonx test' })
+    ).toBe('codex.commandExecution:cd app && moonx test');
+  });
+
+  test('quoting does not disguise a wrapper program', () => {
+    expect(grantKey('Bash', { command: '"env" node x.js' })).toBe(
+      'Bash:"env" node x.js'
+    );
+  });
+
+  test('a Codex permissions grant names exactly what it requested', () => {
+    const write = (roots: string[]) =>
+      grantKey('codex.permissions', {
+        permissions: {
+          network: null,
+          fileSystem: { write: roots, read: null },
+        },
+      });
+    expect(write(['/w/build'])).toBe(
+      'codex.permissions:{"fileSystem":{"read":null,"write":["/w/build"]},"network":null}'
+    );
+    expect(write(['/w/build'])).not.toBe(write(['/w/dist']));
+  });
+
   test('other tools are scoped to the tool', () => {
     expect(grantKey('Edit', { file_path: 'a.ts' })).toBe('Edit');
   });

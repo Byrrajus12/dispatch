@@ -2,7 +2,7 @@ import type { ExecutorPricing } from '@dispatch-foo/core';
 import { randomUUID } from 'node:crypto';
 import { basename, isAbsolute, relative, resolve } from 'node:path';
 
-import { floorCheckForCommand, floorCheckForToolInput } from '../../floor.js';
+import { dequotedCommand, floorCheckForToolInput } from '../../floor.js';
 import type { SpawnCodexAppServer } from '../codexAppServer.js';
 import { claimCodexToolCall, codexDynamicTool } from '../codexDynamicTools.js';
 import { codexEffort, codexMcpConfig, runCodexTurn } from '../codexTurn.js';
@@ -55,6 +55,8 @@ export function overseerPermission(mode: string | undefined): CodexPermission {
   return codexPermission(mode ?? 'default') ?? ASK_EVERY_COMMAND;
 }
 
+// Declared on thread/start only: Codex fixes a thread's dynamic tools there and
+// ignores any sent with thread/resume.
 function dynamicTool(descriptor: OverseerToolDescriptor): CodexDynamicTool {
   return codexDynamicTool(
     descriptor.name,
@@ -64,8 +66,18 @@ function dynamicTool(descriptor: OverseerToolDescriptor): CodexDynamicTool {
 }
 
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
-const SHELL_FLAG = /^--?[A-Za-z][A-Za-z-]*$/;
-const COMMAND_FLAG = /^-[A-Za-z]*c[A-Za-z]*$/;
+// Short option clusters that take no argument (`-o`/`-O` take one); a long or
+// argument-taking option could change what runs, so it is never unwrapped.
+const SHELL_FLAG = /^-[a-np-zA-NP-Z]+$/;
+const COMMAND_FLAG = /^-[a-np-zA-NP-Z]*c[a-np-zA-NP-Z]*$/;
+const MAX_UNWRAP_DEPTH = 4;
+// What still hides the program that runs once the wrappers are off: a shell
+// `-c` anywhere, a substitution, a variable or a wrapper program in command position.
+const OPAQUE_COMMAND = [
+  /(?:^|[^\w.-])(?:sh|bash|zsh|dash|ksh|fish)(?:\s+\S+)*?\s+-[A-Za-z]*c[A-Za-z]*(?=\s|$)/,
+  /\$\(|`/,
+  /(?:^|[;&|(\n])\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:\$|(?:\S*\/)?(?:env|exec|command|builtin|xargs|sudo|doas|su|nice|nohup|time|timeout|stdbuf|ionice|chroot|watch|eval|source|\.)(?=\s|$))/,
+];
 const SHELL_OPERATOR = /[;&|<>()`$\n]/;
 const PLAIN_WORD = /^[\w@%+=:,./-]+$/;
 
@@ -90,8 +102,14 @@ function shellWords(command: string): string[] | undefined {
       let text = '';
       i += 1;
       while (i < command.length && command[i] !== '"') {
+        const next = command[i + 1] ?? '';
+        if (command[i] === '\\' && /["\\$`\n]/.test(next)) {
+          // A backslash-newline inside double quotes is a line continuation.
+          if (next !== '\n') text += next;
+          i += 2;
+          continue;
+        }
         if (/[$`]/.test(command[i])) return undefined;
-        if (command[i] === '\\' && /["\\]/.test(command[i + 1] ?? '')) i += 1;
         text += command[i];
         i += 1;
       }
@@ -100,7 +118,7 @@ function shellWords(command: string): string[] | undefined {
       i += 1;
     } else if (char === '\\') {
       if (i + 1 >= command.length) return undefined;
-      word = (word ?? '') + command[i + 1];
+      if (command[i + 1] !== '\n') word = (word ?? '') + command[i + 1];
       i += 2;
     } else if (SHELL_OPERATOR.test(char)) {
       return undefined;
@@ -127,12 +145,19 @@ function quoted(word: string): string {
   return PLAIN_WORD.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
 }
 
+/** A Codex command read for holds, floor checks and grants. */
+interface CommandReading {
+  text: string;
+  /** False when the text may still hide what runs; such a command always asks. */
+  known: boolean;
+}
+
 /**
  * A Codex command as the one string holds, floor checks and grants read: a
  * shell wrapper (string or argv) unwrapped to its script, an argv joined.
  * Undefined when there is no command to read, which callers treat as unknown.
  */
-function commandText(command: unknown): string | undefined {
+function readCommand(command: unknown): CommandReading | undefined {
   let current: string | undefined;
   if (typeof command === 'string') current = command;
   else if (
@@ -142,14 +167,25 @@ function commandText(command: unknown): string | undefined {
   ) {
     current = shellScript(command) ?? command.map(quoted).join(' ');
   }
+  if (current === undefined) return undefined;
   // Unwrap nested wrappers (`bash -lc "sh -c '…'"`) a few levels deep.
-  for (let depth = 0; depth < 4 && current !== undefined; depth += 1) {
+  let exhausted = true;
+  for (let depth = 0; depth < MAX_UNWRAP_DEPTH; depth += 1) {
     const words = shellWords(current);
     const script = words === undefined ? undefined : shellScript(words);
-    if (script === undefined) break;
+    if (script === undefined) {
+      exhausted = false;
+      break;
+    }
     current = script;
   }
-  return current === undefined || current.trim() === '' ? undefined : current;
+  if (current.trim() === '') return undefined;
+  const text = current;
+  const plain = dequotedCommand(text);
+  const opaque = OPAQUE_COMMAND.some(
+    (pattern) => pattern.test(text) || pattern.test(plain)
+  );
+  return { text, known: !exhausted && !opaque };
 }
 
 /** What an approval shows the human and what the floor and hold checks read. */
@@ -157,6 +193,8 @@ interface ApprovalView {
   input: Record<string, unknown>;
   /** False when the ask names no command or no edited path: it must reach a human. */
   known: boolean;
+  /** False for a command ask with no command text at all. */
+  readable: boolean;
 }
 
 function approvalView(
@@ -167,14 +205,15 @@ function approvalView(
   const reason =
     typeof params.reason === 'string' ? { reason: params.reason } : {};
   if (approval.method === 'item/commandExecution/requestApproval') {
-    const command = commandText(params.command);
+    const command = readCommand(params.command);
     return {
       input: {
-        command: command ?? params.command ?? null,
+        command: command?.text ?? params.command ?? null,
         cwd: params.cwd,
         ...reason,
       },
-      known: command !== undefined,
+      known: command?.known ?? false,
+      readable: command !== undefined,
     };
   }
   if (approval.method === 'item/fileChange/requestApproval') {
@@ -189,9 +228,14 @@ function approvalView(
         ...reason,
       },
       known: paths.length > 0,
+      readable: true,
     };
   }
-  return { input: { permissions: params.permissions, ...reason }, known: true };
+  return {
+    input: { permissions: params.permissions, ...reason },
+    known: true,
+    readable: true,
+  };
 }
 
 // The Overseer hold an ask needs. An edit with no paths Codex announced is held
@@ -201,6 +245,9 @@ function holdFor(
   view: ApprovalView,
   rootDir: string
 ): OverseerHold | null {
+  if (toolName === 'codex.commandExecution' && !view.readable) {
+    return 'unreadable';
+  }
   if (toolName !== 'codex.fileChange') {
     return overseerHoldFor(toolName, view.input, rootDir);
   }
@@ -247,16 +294,19 @@ function unaskedFloorCommand(
   item: CodexItem,
   flooredAsks: ReadonlySet<string>
 ): string | undefined {
+  // Anything but a declined command ran, a failed one included.
   if (
     item.type !== 'commandExecution' ||
-    item.status !== 'completed' ||
+    item.status === 'declined' ||
+    item.status === 'inProgress' ||
     typeof item.id !== 'string' ||
     flooredAsks.has(`command:${item.id}`)
   ) {
     return undefined;
   }
-  const command = commandText(item.command);
-  const check = command === undefined ? null : floorCheckForCommand(command);
+  const command = readCommand(item.command)?.text;
+  const check =
+    command === undefined ? null : floorCheckForToolInput({ command });
   if (check === null) return undefined;
   return `Codex ran a floor command (${check}) without asking Dispatch, most likely under an allow rule in $CODEX_HOME/rules: ${command ?? ''}. The Overseer turn is stopped so you can review it.`;
 }
@@ -349,7 +399,7 @@ class ApprovalGate {
     this.stdinTails.set(itemId, lines.pop() ?? '');
     if (this.flooredAsks.has(`writeStdin:${itemId}`)) return;
     for (const line of lines) {
-      const check = floorCheckForCommand(line);
+      const check = floorCheckForToolInput({ command: line });
       if (check === null) continue;
       controls.fail(
         `Codex typed a floor command (${check}) into a shell it started, and Codex does not ask about shell input: ${line.trim()}. The Overseer turn is stopped so you can review it.`
@@ -368,7 +418,7 @@ class ApprovalGate {
     }
     if (item.type === 'commandExecution') {
       this.opts.onToolUse?.('codex.commandExecution', {
-        command: commandText(item.command) ?? item.command,
+        command: readCommand(item.command)?.text ?? item.command,
         cwd: item.cwd,
       });
       return;
@@ -388,6 +438,8 @@ interface CodexOverseerOptions {
   userMcpServers?: () => string[];
   pricing?: (projectRoot: string) => ExecutorPricing | undefined;
   env?: Record<string, string>;
+  /** Ends a turn with an error after this long; runCodexTurn's default when absent. */
+  timeoutMs?: number;
 }
 
 // The overseer as a Codex thread in the checkout: registry tools are dynamic
@@ -444,6 +496,7 @@ export class CodexOverseer implements OverseerBackend {
       signal: opts.abortController?.signal,
       spawnProcess: this.options.spawnProcess,
       env: this.options.env,
+      timeoutMs: this.options.timeoutMs,
       onServerRequest: (request, respond, controls) => {
         if (claimCodexToolCall(callTool, request, respond)) return true;
         if (!isCodexApprovalMethod(request.method)) return false;
@@ -467,8 +520,9 @@ export class CodexOverseer implements OverseerBackend {
     return {
       reply: reply === '' ? EMPTY_REPLY_MESSAGE : reply,
       sessionId: result.threadId,
-      ...(pricing !== undefined && result.total !== undefined
-        ? { costUsd: codexCostUsd(result.total, pricing) }
+      // Bill this turn only: the thread's totals include every earlier turn.
+      ...(pricing !== undefined && result.turnUsage !== undefined
+        ? { costUsd: codexCostUsd(result.turnUsage, pricing) }
         : {}),
       ...(result.contextTokens === undefined
         ? {}

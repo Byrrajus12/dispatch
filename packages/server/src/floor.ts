@@ -244,7 +244,12 @@ const COMMAND_CHECKS: readonly {
   { check: 'delete-outside-writes', matches: (c) => REMOTE_REF_DELETE.test(c) },
 ];
 
-/** The floor check a shell command trips, or null when it trips none. */
+/** A command with shell quotes, escapes and line continuations removed, so `g""h` reads `gh`. */
+export function dequotedCommand(command: string): string {
+  return command.replace(/\\\r?\n/g, '').replace(/['"\\]/g, '');
+}
+
+/** The floor check a shell command trips as written, or null when it trips none. */
 export function floorCheckForCommand(command: string): FloorCheck | null {
   for (const { check, matches } of COMMAND_CHECKS) {
     if (matches(command)) return check;
@@ -261,7 +266,12 @@ export function floorCheckForToolInput(input: unknown): FloorCheck | null {
   if (typeof input !== 'object' || input === null) return null;
   const { command } = input as { command?: unknown };
   if (typeof command !== 'string') return null;
-  return floorCheckForCommand(command);
+  // Quoting can split a name the patterns look for (`g""h release`), so the
+  // dequoted form is checked too.
+  return (
+    floorCheckForCommand(command) ??
+    floorCheckForCommand(dequotedCommand(command))
+  );
 }
 
 /**

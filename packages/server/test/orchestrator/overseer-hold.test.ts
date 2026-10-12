@@ -130,3 +130,77 @@ describe('Codex calls', () => {
     ).toBe('dispatch-cli');
   });
 });
+
+describe('what hides a held command', () => {
+  test.each([
+    'env dispatch task list',
+    'env -i PATH=/bin dispatch task list',
+    'command dispatch task list',
+    'exec dispatch task list',
+    'nohup nice -n 5 dispatch run t-1',
+    'timeout 30 dispatch task list',
+    'sudo -E dispatch task list',
+    'xargs dispatch task drop < ids',
+    '"dispatch" task list',
+    "d'is'patch task list",
+    'dis\\patch task list',
+  ])('%p is held', (command) => {
+    expect(bash(command)).toBe('dispatch-cli');
+  });
+
+  test('letter case does not hide a .dispatch write or the daemon file', () => {
+    expect(bash('echo x > .DISPATCH/config.yml')).toBe('dispatch-files');
+    expect(bash('cat .Dispatch/daemons/d.json')).toBe('daemon-api');
+    expect(
+      overseerHoldFor('Write', { file_path: '.Dispatch/config.yml' }, ROOT)
+    ).toBe('dispatch-files');
+  });
+
+  test('quoting does not hide a .dispatch write', () => {
+    expect(bash(`echo x > ".dis""patch/config.yml"`)).toBe('dispatch-files');
+  });
+});
+
+describe('Codex permission asks', () => {
+  const ask = (fileSystem: unknown) =>
+    overseerHoldFor(
+      'codex.permissions',
+      { permissions: { network: null, fileSystem } },
+      ROOT
+    );
+
+  test('a write root under .dispatch is held', () => {
+    expect(ask({ read: null, write: ['.dispatch'] })).toBe('dispatch-files');
+    expect(
+      ask({
+        read: null,
+        write: null,
+        entries: [
+          {
+            path: { type: 'path', path: `${ROOT}/.dispatch/x` },
+            access: 'write',
+          },
+        ],
+      })
+    ).toBe('dispatch-files');
+  });
+
+  test('a write root outside the checkout, or one with no plain path, is held', () => {
+    expect(ask({ read: null, write: ['/etc'] })).toBe('outside-checkout');
+    expect(ask({ read: null, write: ['../other'] })).toBe('outside-checkout');
+    expect(
+      ask({
+        read: null,
+        write: null,
+        entries: [
+          { path: { type: 'glob_pattern', pattern: '**' }, access: 'write' },
+        ],
+      })
+    ).toBe('outside-checkout');
+  });
+
+  test('reads and writes inside the checkout are not held', () => {
+    expect(ask({ read: ['/etc'], write: [`${ROOT}/build`] })).toBeNull();
+    expect(ask(null)).toBeNull();
+  });
+});

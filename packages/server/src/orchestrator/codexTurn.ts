@@ -92,12 +92,68 @@ interface CodexTurnResult {
   reply: string;
   /** Cumulative thread token totals, when Codex reported them. */
   total?: CodexTokenTotal;
+  /** Tokens this turn alone used: what to bill, since `total` spans every turn of the thread. */
+  turnUsage?: CodexTokenTotal;
   /** Input tokens of the turn's last model call: how full the context is. */
   contextTokens?: number;
 }
 
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+interface UsageReport {
+  turnId: unknown;
+  total?: CodexTokenTotal;
+  last?: CodexTokenTotal;
+}
+
+function minus(a: CodexTokenTotal, b: CodexTokenTotal): CodexTokenTotal {
+  return {
+    totalTokens: Math.max(0, a.totalTokens - b.totalTokens),
+    inputTokens: Math.max(0, a.inputTokens - b.inputTokens),
+    cachedInputTokens: Math.max(0, a.cachedInputTokens - b.cachedInputTokens),
+    outputTokens: Math.max(0, a.outputTokens - b.outputTokens),
+  };
+}
+
+function plus(a: CodexTokenTotal, b: CodexTokenTotal): CodexTokenTotal {
+  return {
+    totalTokens: a.totalTokens + b.totalTokens,
+    inputTokens: a.inputTokens + b.inputTokens,
+    cachedInputTokens: a.cachedInputTokens + b.cachedInputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+  };
+}
+
+// This turn's tokens. A resumed thread first replays its old totals under the
+// previous turn's id; the turn is the latest total minus that baseline. With no
+// replay seen, a resumed turn sums its own per-call `last` reports instead.
+function turnUsageOf(
+  reports: readonly UsageReport[],
+  turnId: string | undefined,
+  resumed: boolean
+): CodexTokenTotal | undefined {
+  const ours = reports.filter(
+    (r) => turnId === undefined || r.turnId === turnId
+  );
+  const earlier = reports.filter(
+    (r) => turnId !== undefined && r.turnId !== turnId
+  );
+  const latest = ours.findLast((r) => r.total !== undefined)?.total;
+  if (latest === undefined) return undefined;
+  const baseline = earlier.findLast((r) => r.total !== undefined)?.total;
+  if (baseline !== undefined) return minus(latest, baseline);
+  if (!resumed) return latest;
+  const lasts = ours.flatMap((r) => (r.last === undefined ? [] : [r.last]));
+  return lasts.length === 0
+    ? undefined
+    : lasts.reduce(plus, {
+        totalTokens: 0,
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+      });
 }
 
 function describeMinutes(ms: number): string {
@@ -167,6 +223,7 @@ export async function runCodexTurn(
   let replyIsFinal = false;
   let total: CodexTokenTotal | undefined;
   let contextTokens: number | undefined;
+  const usageReports: UsageReport[] = [];
   let failure: Error | undefined;
   let settled = false;
   const queuedSteers: string[] = [];
@@ -274,6 +331,11 @@ export async function runCodexTurn(
     }
     if (message.method === 'thread/tokenUsage/updated') {
       const usage = objectValue(params?.tokenUsage);
+      usageReports.push({
+        turnId: params?.turnId,
+        total: tokenTotal(usage?.total),
+        last: tokenTotal(usage?.last),
+      });
       total = tokenTotal(usage?.total) ?? total;
       contextTokens = tokenTotal(usage?.last)?.inputTokens ?? contextTokens;
       return;
@@ -281,6 +343,8 @@ export async function runCodexTurn(
     if (message.method !== 'turn/completed') return;
     const turn = objectValue(params?.turn);
     if (turnId !== undefined && turn?.id !== turnId) return;
+    // The turn can finish before turn/start's answer is read; usage needs its id.
+    if (turnId === undefined && typeof turn?.id === 'string') turnId = turn.id;
     if (turn?.status === 'completed') {
       end();
       return;
@@ -384,10 +448,16 @@ export async function runCodexTurn(
   if (threadId === undefined) {
     throw new Error('Codex App Server returned no thread.id');
   }
+  const turnUsage = turnUsageOf(
+    usageReports,
+    turnId,
+    req.resumeThreadId !== undefined
+  );
   return {
     threadId,
     reply,
     ...(total === undefined ? {} : { total }),
+    ...(turnUsage === undefined ? {} : { turnUsage }),
     ...(contextTokens === undefined ? {} : { contextTokens }),
   };
 }

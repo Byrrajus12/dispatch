@@ -21,6 +21,8 @@ import {
 } from './fakeCodex.js';
 
 const ROOT = '/work/shop';
+// A turn the floor backstop should have failed times out quickly instead of hanging.
+const FAST = { timeoutMs: 1_000 };
 
 function stubToolset(result?: OverseerToolResult): {
   toolset: OverseerToolset;
@@ -89,6 +91,29 @@ function recorder(answers: ApprovalDecision[]) {
       return Promise.resolve(answers.shift() ?? { allow: false });
     },
   };
+}
+
+// A `thread/tokenUsage/updated` for an earlier turn, as Codex sends on resume.
+function replayUsage(
+  codex: FakeCodexProcess,
+  threadId: string,
+  total: {
+    inputTokens: number;
+    cachedInputTokens: number;
+    outputTokens: number;
+  }
+) {
+  const usage = {
+    totalTokens: total.inputTokens + total.outputTokens,
+    cacheWriteInputTokens: 0,
+    reasoningOutputTokens: 0,
+    ...total,
+  };
+  codex.notify('thread/tokenUsage/updated', {
+    threadId,
+    turnId: 'turn-0',
+    tokenUsage: { total: usage, last: usage, modelContextWindow: null },
+  });
 }
 
 describe('CodexOverseer session', () => {
@@ -166,9 +191,15 @@ describe('CodexOverseer session', () => {
     }
   );
 
-  it('resumes the thread without re-declaring tools and reports cost and context', async () => {
+  it('resumes the thread without re-declaring tools and bills only the new turn', async () => {
     const codex = scriptedCodex({
-      onTurn: (c, t) =>
+      onTurn: (c, t) => {
+        // Codex replays the thread's totals so far under the previous turn's id.
+        replayUsage(c, t, {
+          inputTokens: 1_500_000,
+          cachedInputTokens: 1_000_000,
+          outputTokens: 500_000,
+        });
         finishTurn(c, t, 'second answer', {
           usage: {
             total: {
@@ -188,7 +219,8 @@ describe('CodexOverseer session', () => {
               reasoningOutputTokens: 0,
             },
           },
-        }),
+        });
+      },
     });
     const turn = await overseerOver(codex, {
       pricing: () => ({ input: 1, cachedInput: 0.1, output: 10 }),
@@ -196,7 +228,9 @@ describe('CodexOverseer session', () => {
 
     expect(turn.reply).toBe('second answer');
     expect(turn.sessionId).toBe('thread-7');
-    expect(turn.costUsd).toBeCloseTo(11.1, 6);
+    // 3M total minus the 2M replayed: 0.5M uncached input, 0.5M output. Billing
+    // the cumulative total (11.1) would charge every earlier turn again.
+    expect(turn.costUsd).toBeCloseTo(5.5, 6);
     expect(turn.contextTokens).toBe(40_000);
     expect(codex.paramsOf('thread/resume')).toMatchObject({
       threadId: 'thread-7',
@@ -523,7 +557,7 @@ describe('CodexOverseer floor backstop', () => {
         }),
     });
     await expect(
-      overseerOver(codex).start('x', stubToolset().toolset, {})
+      overseerOver(codex, FAST).start('x', stubToolset().toolset, {})
     ).rejects.toThrow(
       'Codex ran a floor command (force-push) without asking Dispatch'
     );
@@ -541,7 +575,7 @@ describe('CodexOverseer floor backstop', () => {
         }),
     });
     await expect(
-      overseerOver(codex).start('x', stubToolset().toolset, {})
+      overseerOver(codex, FAST).start('x', stubToolset().toolset, {})
     ).rejects.toThrow('Codex typed a floor command (publish) into a shell');
   });
 });
@@ -622,14 +656,53 @@ describe('CodexOverseer command shapes', () => {
     ]);
   });
 
-  it('asks about a command it cannot read instead of allowing it', async () => {
+  // Held, so a grant given for one unreadable command never answers the next.
+  it('holds a command it cannot read instead of allowing it', async () => {
     const missing = await bypassAsk(null);
-    expect(missing.seen.map((r) => r.input)).toEqual([
-      { command: null, cwd: ROOT },
+    expect(missing.seen.map((r) => [r.input, r.check])).toEqual([
+      [{ command: null, cwd: ROOT }, 'unreadable'],
     ]);
     expect(missing.answer).toEqual({ decision: 'decline' });
     const mixed = await bypassAsk(['bash', 7]);
-    expect(mixed.seen).toHaveLength(1);
+    expect(mixed.seen.map((r) => r.check)).toEqual(['unreadable']);
+  });
+
+  it('holds an edit into .DISPATCH, the same directory on macOS', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) => {
+        c.notify('item/started', {
+          threadId: t,
+          turnId: 'turn-1',
+          item: {
+            type: 'fileChange',
+            id: 'edit-1',
+            status: 'inProgress',
+            changes: [
+              {
+                path: `${ROOT}/.DISPATCH/config.yml`,
+                kind: { type: 'update' },
+                diff: '',
+              },
+            ],
+          },
+        });
+        c.serverRequest('item/fileChange/requestApproval', 'ask-1', {
+          threadId: t,
+          turnId: 'turn-1',
+          itemId: 'edit-1',
+          startedAtMs: 0,
+        });
+      },
+    });
+    const gate = recorder([{ allow: false }]);
+    const pending = overseerOver(codex).start('x', stubToolset().toolset, {
+      permissionMode: 'bypassPermissions',
+      authorizeTool: gate.authorizeTool,
+    });
+    await waitFor(() => codex.responseTo('ask-1') !== undefined);
+    expect(gate.seen.map((r) => r.check)).toEqual(['dispatch-files']);
+    finishTurn(codex, 'thread-1', 'ok');
+    await pending;
   });
 
   it('shows the human the script, so a grant covers its program and not the shell', async () => {
@@ -671,7 +744,7 @@ describe('CodexOverseer command shapes', () => {
         }),
     });
     await expect(
-      overseerOver(codex).start('x', stubToolset().toolset, {})
+      overseerOver(codex, FAST).start('x', stubToolset().toolset, {})
     ).rejects.toThrow(
       'Codex ran a floor command (publish) without asking Dispatch'
     );
@@ -760,5 +833,238 @@ describe('CodexOverseer edits with unknown paths', () => {
     expect(gate.seen.map((r) => r.check)).toEqual(['dispatch-files']);
     finishTurn(codex, 'thread-1', 'ok');
     await pending;
+  });
+});
+
+describe('CodexOverseer commands that hide what runs', () => {
+  // Under bypassPermissions only an ask Dispatch can't read fully reaches the gate.
+  async function bypassSeen(command: unknown) {
+    const codex = scriptedCodex({
+      onTurn: (c, t) =>
+        c.serverRequest(
+          'item/commandExecution/requestApproval',
+          'ask-1',
+          commandAsk(t, 'cmd-1', command)
+        ),
+    });
+    const gate = recorder([{ allow: false }]);
+    const pending = overseerOver(codex).start('x', stubToolset().toolset, {
+      permissionMode: 'bypassPermissions',
+      authorizeTool: gate.authorizeTool,
+    });
+    await waitFor(() => codex.responseTo('ask-1') !== undefined);
+    finishTurn(codex, 'thread-1', 'ok');
+    await pending;
+    return { seen: gate.seen, answer: codex.responseTo('ask-1')?.result };
+  }
+
+  it.each([
+    ["env X=1 bash -c 'dispatch task list'"],
+    [`/bin/zsh -lc 'cd x && bash -c "dispatch task list"'`],
+    ["bash -c 'dispatch task list' x"],
+    ["/bin/zsh -lc 'command dispatch task list'"],
+    [`/bin/zsh -lc 'bash -lc "$(echo dispatch) task list"'`],
+    [`sh -c "sh -c 'sh -c \\"sh -c \\\\\\"sh -c ls\\\\\\"\\"'"`],
+    [['sh', '-c', 'sh -c "sh -c \'sh -c \\"sh -c ls\\"\'"']],
+    ["bash --rcfile evil.sh -c 'ls'"],
+    ["bash -o posix -c 'ls'"],
+    ["/bin/zsh -lc '$CMD task list'"],
+    ["/bin/zsh -lc 'xargs dispatch < ids'"],
+  ])('asks about %p instead of allowing it', async (command) => {
+    const { seen, answer } = await bypassSeen(command);
+    expect(seen).toHaveLength(1);
+    expect(answer).toEqual({ decision: 'decline' });
+  });
+
+  it('still allows a plain wrapped command itself under bypassPermissions', async () => {
+    const { seen, answer } = await bypassSeen(
+      "/bin/zsh -lc 'git status --short'"
+    );
+    expect(seen).toEqual([]);
+    expect(answer).toEqual({ decision: 'accept' });
+  });
+
+  it.each([
+    [`/bin/zsh -lc 'g""h release create v1'`, 'publish'],
+    [`/bin/zsh -lc '"dispatch" task list'`, 'dispatch-cli'],
+    ['bash -lc "dis\\\npatch task list"', 'dispatch-cli'],
+    [`/bin/zsh -lc 'git push --"force" origin main'`, 'force-push'],
+    ["/bin/zsh -lc 'env dispatch task list'", 'dispatch-cli'],
+  ])('sees through the quoting in %p', async (command, check) => {
+    const { seen } = await bypassSeen(command);
+    expect(seen.map((r) => r.check)).toEqual([check]);
+  });
+});
+
+describe('CodexOverseer permission asks', () => {
+  async function permissionAsk(
+    permissions: unknown,
+    mode = 'bypassPermissions'
+  ) {
+    const codex = scriptedCodex({
+      onTurn: (c, t) =>
+        c.serverRequest('item/permissions/requestApproval', 'ask-1', {
+          threadId: t,
+          turnId: 'turn-1',
+          itemId: 'p-1',
+          environmentId: null,
+          startedAtMs: 0,
+          cwd: ROOT,
+          reason: null,
+          permissions,
+        }),
+    });
+    const gate = recorder([{ allow: false }]);
+    const pending = overseerOver(codex).start('x', stubToolset().toolset, {
+      permissionMode: mode,
+      authorizeTool: gate.authorizeTool,
+    });
+    await waitFor(() => codex.responseTo('ask-1') !== undefined);
+    finishTurn(codex, 'thread-1', 'ok');
+    await pending;
+    return { seen: gate.seen, answer: codex.responseTo('ask-1')?.result };
+  }
+
+  it('holds a write root under .dispatch', async () => {
+    const { seen } = await permissionAsk({
+      network: null,
+      fileSystem: { read: null, write: [`${ROOT}/.dispatch`] },
+    });
+    expect(seen.map((r) => r.check)).toEqual(['dispatch-files']);
+  });
+
+  it.each([
+    ['a write root outside the checkout', { read: null, write: ['/etc'] }],
+    [
+      'a glob write entry',
+      {
+        read: null,
+        write: null,
+        entries: [
+          { path: { type: 'glob_pattern', pattern: '**' }, access: 'write' },
+        ],
+      },
+    ],
+    [
+      'a special write root',
+      {
+        read: null,
+        write: null,
+        entries: [
+          {
+            path: { type: 'special', value: { kind: 'root' } },
+            access: 'write',
+          },
+        ],
+      },
+    ],
+  ])('holds %s', async (_label, fileSystem) => {
+    const { seen } = await permissionAsk({ network: null, fileSystem });
+    expect(seen.map((r) => r.check)).toEqual(['outside-checkout']);
+  });
+
+  it('allows a write root inside the checkout itself under bypassPermissions', async () => {
+    const { seen, answer } = await permissionAsk({
+      network: null,
+      fileSystem: { read: null, write: [`${ROOT}/build`] },
+    });
+    expect(seen).toEqual([]);
+    expect(answer).toMatchObject({ scope: 'turn' });
+  });
+});
+
+describe('CodexOverseer floor backstop on any finished command', () => {
+  it('fails the turn for a floor command that ran and failed', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) =>
+        c.notify('item/completed', {
+          threadId: t,
+          turnId: 'turn-1',
+          item: {
+            type: 'commandExecution',
+            id: 'cmd-9',
+            status: 'failed',
+            command: "/bin/zsh -lc 'npm publish'",
+            cwd: ROOT,
+            exitCode: 1,
+          },
+        }),
+    });
+    await expect(
+      overseerOver(codex, FAST).start('x', stubToolset().toolset, {})
+    ).rejects.toThrow(
+      'Codex ran a floor command (publish) without asking Dispatch'
+    );
+  });
+
+  it('leaves a declined floor command alone', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) => {
+        c.notify('item/completed', {
+          threadId: t,
+          turnId: 'turn-1',
+          item: {
+            type: 'commandExecution',
+            id: 'cmd-9',
+            status: 'declined',
+            command: 'npm publish',
+            cwd: ROOT,
+          },
+        });
+        finishTurn(c, t, 'ok');
+      },
+    });
+    const turn = await overseerOver(codex, FAST).start(
+      'x',
+      stubToolset().toolset,
+      {}
+    );
+    expect(turn.reply).toBe('ok');
+  });
+});
+
+describe('CodexOverseer cost', () => {
+  const usage = (inputTokens: number, outputTokens: number) => ({
+    totalTokens: inputTokens + outputTokens,
+    inputTokens,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    outputTokens,
+    reasoningOutputTokens: 0,
+  });
+  const pricing = () => ({ input: 1, output: 10 });
+
+  it('bills a fresh thread its whole total', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) =>
+        finishTurn(c, t, 'ok', {
+          usage: { total: usage(1_000_000, 100_000), last: usage(10, 1) },
+        }),
+    });
+    const turn = await overseerOver(codex, { pricing }).start(
+      'x',
+      stubToolset().toolset,
+      {}
+    );
+    expect(turn.costUsd).toBeCloseTo(2, 6);
+  });
+
+  it('bills a resumed turn its own calls when Codex replays no totals', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) =>
+        finishTurn(c, t, 'ok', {
+          usage: {
+            total: usage(9_000_000, 900_000),
+            last: usage(1_000_000, 100_000),
+          },
+        }),
+    });
+    const turn = await overseerOver(codex, { pricing }).sendMessage(
+      'thread-3',
+      'x',
+      stubToolset().toolset,
+      {}
+    );
+    expect(turn.costUsd).toBeCloseTo(2, 6);
   });
 });
