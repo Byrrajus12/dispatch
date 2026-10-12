@@ -5,7 +5,13 @@ import {
   effortFromId,
   effortOptions,
   modelDisplayName,
-} from './models.ts';
+  readDefaultModel,
+  readRoleModelOverride,
+  resolveExecuteModel,
+  resolveRoleModel,
+  storeRoleModelOverride,
+} from '../src/models';
+import { memoryStorage } from '../src/storage';
 
 // `modelDisplayName` is the single id->label mapping used across the Sessions analytics views
 // (session rows, session detail, per-model spend). It must name every model shape that shows up
@@ -68,5 +74,33 @@ describe('effort picker', () => {
   test('maps the Default sentinel to no effort and a level to itself', () => {
     expect(effortFromId(DEFAULT_EFFORT_ID)).toBeUndefined();
     expect(effortFromId('max')).toBe('max');
+  });
+});
+
+describe('device model picks', () => {
+  test('a role pick round-trips under the key desktop has always used', () => {
+    const store = memoryStorage();
+    storeRoleModelOverride('overseer', 'claude-fable-5-1', store);
+    expect(store.get('dispatch:model:overseer')).toBe('claude-fable-5-1');
+    expect(readRoleModelOverride('overseer', store)).toBe('claude-fable-5-1');
+    expect(resolveRoleModel('overseer', null, store)).toBe('claude-fable-5-1');
+  });
+
+  test('a stored id no longer offered falls back to config, then the default', () => {
+    const store = memoryStorage({
+      'dispatch:model:plan': 'claude-retired-1',
+      'dispatch:default-model': 'claude-retired-1',
+    });
+    expect(readRoleModelOverride('plan', store)).toBeUndefined();
+    expect(
+      resolveRoleModel('plan', { models: { plan: 'claude-sonnet-5-5' } }, store)
+    ).toBe('claude-sonnet-5-5');
+    expect(readDefaultModel(store)).toBe('claude-opus-5-5');
+    expect(
+      resolveExecuteModel(
+        { models: { execute: 'claude-haiku-4-5-20251001' } },
+        store
+      )
+    ).toBe('claude-haiku-4-5-20251001');
   });
 });

@@ -155,7 +155,10 @@ import {
   useFixLoops,
   useStopFixLoop,
 } from './useOrchestration';
-import { overseerKey, overseerKeyPrefix } from './useOverseerSession';
+import {
+  invalidateOverseerEvent,
+  overseerKeyPrefix,
+} from './useOverseerSession';
 import { readinessKey, useReadiness } from './useReadiness';
 import { runDiffKey, runReviewKey } from './useRunData';
 import { commentsRootKey, taskCommentsKey } from './useTaskComments';
@@ -1765,12 +1768,9 @@ export function useDispatchProject(
             queryKey: agentSessionsQueryKey,
           });
         } else if (event.type === 'overseer.changed') {
-          // The overseer record query itself lives in useOverseerSession; this
-          // hook owns the one WS connection, so the invalidation happens
-          // here — the same split useOrchestration's keys use.
-          void queryClient.invalidateQueries({
-            queryKey: overseerKey(port, event.conversationId),
-          });
+          // The overseer record query lives in useOverseerSession; this hook
+          // owns the one WS connection, so it applies the shared invalidation.
+          invalidateOverseerEvent(queryClient, port, event.conversationId);
           void queryClient.invalidateQueries({
             queryKey: agentSessionsQueryKey,
           });

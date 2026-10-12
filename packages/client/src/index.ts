@@ -260,3 +260,51 @@ export { reduceProposal } from './proposalReducer';
 export type { ProposalAction } from './proposalReducer';
 export { useTasks } from './useTasks';
 export type { UseTasksResult } from './useTasks';
+export {
+  approvalReply,
+  findOverseerActionGate,
+  findOverseerApprovalGate,
+  findToolApprovalGate,
+  foldsIntoOpenApproval,
+  gateNotification,
+  gateOf,
+  isSystemMarker,
+  openGatesAfter,
+  openGatesKey,
+  questionsByRun,
+  runIdOf,
+  runsAskingMe,
+  scopeRequestsByRun,
+  taskProposalOf,
+  toRunQuestion,
+  toScopeRequest,
+  toolApprovalOf,
+} from './gates';
+export type { RunQuestion, RunScopeRequest } from './gates';
+export { browserStorage, memoryStorage } from './storage';
+export type { KeyValueStore } from './storage';
+export {
+  DEFAULT_EFFORT_ID,
+  effortFromId,
+  effortOptions,
+  modelDisplayName,
+  modelLabel,
+  MODELS,
+  readDefaultModel,
+  readRoleModelOverride,
+  resolveExecuteModel,
+  resolveRoleModel,
+  storeRoleModelOverride,
+} from './models';
+export type { ModelOption, PickableRole } from './models';
+export {
+  invalidateOverseerEvent,
+  overseerKey,
+  overseerKeyPrefix,
+  useOverseerSession,
+} from './useOverseerSession';
+export type {
+  OverseerApprovalDecision,
+  OverseerSession,
+  OverseerSessionOptions,
+} from './useOverseerSession';

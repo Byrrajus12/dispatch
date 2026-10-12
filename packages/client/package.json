@@ -17,10 +17,15 @@
     "prepublishOnly": "moon run client:prepublish"
   },
   "dependencies": {
+    "@dispatch-foo/core": "workspace:*",
+    "@dispatch-foo/protocol": "workspace:*",
+    "@tanstack/react-query": "catalog:",
     "react": "catalog:"
   },
   "devDependencies": {
-    "@dispatch-foo/core": "workspace:*",
+    "@happy-dom/global-registrator": "catalog:",
+    "@testing-library/dom": "catalog:",
+    "@testing-library/react": "catalog:",
     "@types/bun": "catalog:",
     "@types/react": "catalog:",
     "tsdown": "catalog:",

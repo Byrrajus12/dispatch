@@ -1,6 +1,6 @@
-import type { Message } from '@dispatch/client';
 import { describe, expect, it } from 'bun:test';
 
+import type { Message } from '../src/api';
 import {
   approvalReply,
   findOverseerActionGate,
@@ -18,9 +18,7 @@ import {
   taskProposalOf,
   toRunQuestion,
   toScopeRequest,
-} from './gates';
-import { isKindEnabled } from './notificationEdges';
-import { pendingApprovalsFromGates } from './pendingApprovals';
+} from '../src/gates';
 
 function msg(id: string, over: Partial<Message>): Message {
   return {
@@ -73,16 +71,6 @@ const overseer = msg('m-o', {
     summary: 'Dispatch t-1',
   },
 });
-const ALL_ON = {
-  approval: true,
-  'scope-request': true,
-  memory: true,
-  doc: true,
-  question: true,
-  'fix-loop-capped': true,
-  'run-stalled': true,
-};
-
 describe('gate adapters', () => {
   it('turns each gate into the shape its card takes, and nothing else', () => {
     expect(toRunQuestion(question)).toEqual({
@@ -115,25 +103,6 @@ describe('gate adapters', () => {
     });
     expect(findToolApprovalGate([approval], 'r-1', 'req-1')?.id).toBe('m-a');
     expect(findToolApprovalGate([approval], 'r-1', 'req-2')).toBeNull();
-  });
-
-  it('keeps only awaiting-approval runs once runs have loaded', () => {
-    expect(pendingApprovalsFromGates([approval], undefined).get('r-1')).toEqual(
-      [
-        {
-          requestId: 'req-1',
-          toolName: 'Bash',
-          input: { command: 'ls' },
-          truncated: false,
-        },
-      ]
-    );
-    expect(
-      pendingApprovalsFromGates(
-        [approval],
-        [{ id: 'r-1', state: 'running' } as never]
-      ).size
-    ).toBe(0);
   });
 
   it('maps card decisions onto gate choices', () => {
@@ -204,12 +173,9 @@ describe('gateNotification', () => {
       kind: 'approval',
     });
   });
-  it('a wake gate notifies under approval, so switching approval off silences it', () => {
+  it('a wake gate notifies under the approval toggle', () => {
     const note = gateNotification(wake, () => undefined);
     expect(note?.kind).toBe('approval');
-    expect(isKindEnabled({ ...ALL_ON, approval: false }, note?.kind)).toBe(
-      false
-    );
   });
   it('leaves run questions to the edge detector and overseer gates to the chat', () => {
     expect(gateNotification(question, () => 'Checkout')).toBeNull();
