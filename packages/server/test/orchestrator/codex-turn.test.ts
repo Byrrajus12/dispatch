@@ -120,6 +120,7 @@ describe('runCodexTurn', () => {
       CODEX_SIGNED_OUT_MESSAGE
     );
     expect(codex.paramsOf('thread/start')).toBeUndefined();
+    expect(codex.killed).toBe(true);
   });
 
   it('lets an API key stand in for a login, and lets an older Codex through', async () => {
@@ -171,6 +172,7 @@ describe('runCodexTurn', () => {
     await expect(runCodexTurn(request(codex))).rejects.toThrow(
       'You have hit your usage limit.'
     );
+    expect(codex.killed).toBe(true);
   });
 
   it('prefers the final answer, ignores other threads, and reports usage', async () => {
@@ -253,6 +255,7 @@ describe('runCodexTurn', () => {
       )
     ).rejects.toThrow('stopped by hook');
     expect(seen).toEqual(['commandExecution:false']);
+    expect(codex.killed).toBe(true);
     await waitFor(() => codex.paramsOf('turn/steer') !== undefined);
     expect(codex.paramsOf('turn/steer')).toMatchObject({
       threadId: 'thread-1',
@@ -270,6 +273,36 @@ describe('runCodexTurn', () => {
       runCodexTurn(request(codex, { signal: controller.signal }))
     ).rejects.toThrow(CODEX_STOPPED_MESSAGE);
     expect(codex.killed).toBe(true);
+  });
+});
+
+describe('runCodexTurn limits', () => {
+  it('times out a turn that never completes and kills the process', async () => {
+    const codex = scriptedCodex();
+    await expect(
+      runCodexTurn(request(codex, { timeoutMs: 50 }))
+    ).rejects.toThrow("Codex didn't finish within");
+    expect(codex.killed).toBe(true);
+  });
+
+  it('reports a throwing hook by its own error', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) =>
+        c.notify('item/started', {
+          threadId: t,
+          turnId: 'turn-1',
+          item: { type: 'commandExecution', id: 'c1' },
+        }),
+    });
+    await expect(
+      runCodexTurn(
+        request(codex, {
+          onItem: () => {
+            throw new Error('hook blew up');
+          },
+        })
+      )
+    ).rejects.toThrow('hook blew up');
   });
 });
 

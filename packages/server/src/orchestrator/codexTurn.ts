@@ -24,6 +24,8 @@ import type {
   CodexTokenTotal,
 } from './executors/codex.js';
 
+const DEFAULT_TURN_TIMEOUT_MS = 10 * 60_000;
+
 /** Why a Codex planner or Overseer turn ended when Stop was pressed. */
 export const CODEX_STOPPED_MESSAGE = 'the Codex turn was stopped';
 
@@ -61,6 +63,8 @@ export interface CodexTurnRequest {
   /** Opts into Codex's experimental API, which dynamic tools need. */
   experimentalApi?: boolean;
   signal?: AbortSignal;
+  /** Ends the turn with an error after this long; 10 minutes by default. */
+  timeoutMs?: number;
   spawnProcess?: SpawnCodexAppServer;
   /** The env the sign-in check reads for an API key; agentEnv() by default. */
   env?: Record<string, string>;
@@ -90,6 +94,15 @@ interface CodexTurnResult {
   total?: CodexTokenTotal;
   /** Input tokens of the turn's last model call: how full the context is. */
   contextTokens?: number;
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function describeMinutes(ms: number): string {
+  const minutes = ms / 60_000;
+  return minutes === 1 ? '1 minute' : `${minutes} minutes`;
 }
 
 // Dispatch effort to Codex effort: Codex has no `max`, so it gets `xhigh`.
@@ -192,18 +205,23 @@ export async function runCodexTurn(
 
   server.onServerRequest((request) => {
     if (settled || req.onServerRequest === undefined) return false;
-    return req.onServerRequest(
-      request,
-      (result) => {
-        if (settled) return;
-        try {
-          server.respond(request.id, result);
-        } catch {
-          // The process is gone; the turn's own end reports why.
-        }
-      },
-      controls
-    );
+    try {
+      return req.onServerRequest(
+        request,
+        (result) => {
+          if (settled) return;
+          try {
+            server.respond(request.id, result);
+          } catch {
+            // The process is gone; the turn's own end reports why.
+          }
+        },
+        controls
+      );
+    } catch (error) {
+      end(toError(error));
+      return true;
+    }
   });
 
   server.onMessage((message) => {
@@ -234,7 +252,11 @@ export async function runCodexTurn(
           replyIsFinal = isFinal;
         }
       }
-      req.onItem?.(item, completed, controls);
+      try {
+        req.onItem?.(item, completed, controls);
+      } catch (error) {
+        end(toError(error));
+      }
       return;
     }
     if (message.method === 'item/commandExecution/terminalInteraction') {
@@ -242,7 +264,11 @@ export async function runCodexTurn(
         typeof params?.itemId === 'string' &&
         typeof params.stdin === 'string'
       ) {
-        req.onTerminalInput?.(params.itemId, params.stdin, controls);
+        try {
+          req.onTerminalInput?.(params.itemId, params.stdin, controls);
+        } catch (error) {
+          end(toError(error));
+        }
       }
       return;
     }
@@ -340,11 +366,18 @@ export async function runCodexTurn(
     if (typeof turn.turn?.id === 'string') turnId = turn.turn.id;
     for (const text of queuedSteers.splice(0)) sendSteer(text);
   };
-  void drive().catch((error: unknown) =>
-    end(error instanceof Error ? error : new Error(String(error)))
-  );
+  void drive().catch((error: unknown) => end(toError(error)));
 
+  const timeoutMs = req.timeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
+  const timer = setTimeout(
+    () =>
+      end(
+        new Error(`Codex didn't finish within ${describeMinutes(timeoutMs)}.`)
+      ),
+    timeoutMs
+  );
   await done;
+  clearTimeout(timer);
   req.signal?.removeEventListener('abort', onAbort);
   server.close();
   if (failure !== undefined) throw failure;
