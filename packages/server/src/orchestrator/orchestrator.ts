@@ -84,6 +84,7 @@ import { prNumberFromOrigin } from './prReviewTask.js';
 import type { PendingApproval } from './registry.js';
 import { RunRegistry } from './registry.js';
 import { RepoDigestCache } from './repoDigest.js';
+import { isDispatchSetupChange, SETUP_FILE_PATHS } from './setupFiles.js';
 import type { RunDetail } from './transcript.js';
 import { recentEntries, replayTranscript, Transcript } from './transcript.js';
 import type {
@@ -3535,7 +3536,7 @@ export class Orchestrator {
     // finish, prior request-changes) are expected bookkeeping, not
     // unrelated user work; a genuinely dirty checkout (the user's own
     // pending changes elsewhere) still refuses the merge.
-    const dirtyPaths = this.mainDirtyPathsOutsideDispatch();
+    const dirtyPaths = this.mainDirtyPathsAfterSetupCommit();
     if (dirtyPaths.length > 0) {
       throw new MergeEnvironmentError(
         Orchestrator.describeDirtyPaths(dirtyPaths)
@@ -3835,7 +3836,7 @@ export class Orchestrator {
       // Same three gates as mergeRun, same reasoning: they describe the main
       // checkout, clear the moment the user commits/stashes, and the third is
       // satisfied by definition here.
-      const dirtyPaths = this.mainDirtyPathsOutsideDispatch();
+      const dirtyPaths = this.mainDirtyPathsAfterSetupCommit();
       if (dirtyPaths.length > 0) {
         throw new MergeEnvironmentError(
           Orchestrator.describeDirtyPaths(dirtyPaths)
@@ -4950,6 +4951,43 @@ export class Orchestrator {
         // reads as a file list rather than as git status output.
         .map((line) => line.replace(/^\S+\s+/, ''))
     );
+  }
+
+  // The main checkout's dirty paths, after committing Dispatch's own setup
+  // files (see setupFiles.ts) when they are the only thing dirty. Project init
+  // leaves .gitattributes/.gitignore uncommitted, which would otherwise block
+  // a new project's first land. Anything else dirty, or staged, commits nothing.
+  private mainDirtyPathsAfterSetupCommit(): string[] {
+    const dirtyPaths = this.mainDirtyPathsOutsideDispatch();
+    if (dirtyPaths.length === 0) return dirtyPaths;
+    if (this.worktrees.hasStagedChanges()) return dirtyPaths;
+    const rootDir = this.ctx.rootDir;
+    const allSetup = dirtyPaths.every((path) => {
+      if (!(SETUP_FILE_PATHS as readonly string[]).includes(path)) return false;
+      const head = spawnGitSync(rootDir, ['show', `HEAD:${path}`]);
+      const full = join(rootDir, path);
+      if (!existsSync(full)) return false;
+      return isDispatchSetupChange(
+        path,
+        head.exitCode === 0 ? head.stdout : undefined,
+        readFileSync(full, 'utf8')
+      );
+    });
+    if (!allSetup) return dirtyPaths;
+    const add = spawnGitSync(rootDir, ['add', '--', ...dirtyPaths]);
+    if (add.exitCode !== 0) return dirtyPaths;
+    const commit = spawnGitSync(rootDir, [
+      'commit',
+      '-m',
+      'chore: set up Dispatch',
+      '--',
+      ...dirtyPaths,
+    ]);
+    if (commit.exitCode !== 0) {
+      spawnGitSync(rootDir, ['reset', '-q', '--', ...dirtyPaths]);
+      return dirtyPaths;
+    }
+    return this.mainDirtyPathsOutsideDispatch();
   }
 
   // Renders the dirty paths into the refusal message. Naming them is the

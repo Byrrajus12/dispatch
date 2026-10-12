@@ -1,4 +1,8 @@
-import { ActorContext, TaskStore } from '@dispatch-foo/core';
+import {
+  ActorContext,
+  TaskStore,
+  writeGitAttributes,
+} from '@dispatch-foo/core';
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import {
   appendFileSync,
@@ -690,6 +694,65 @@ describe('Orchestrator.review merge', () => {
     } catch (err) {
       expect((err as Error).message).toContain('stray-download.zip');
     }
+  });
+
+  // Project init leaves .gitattributes and carto's .gitignore line
+  // uncommitted; a brand-new project's first land must not trip over them.
+  it("commits Dispatch's own setup files before landing when they are all that is dirty", async () => {
+    const { orchestrator, store } = makeOrchestrator(repo);
+    orchestrator.registerExecutor(
+      'fake',
+      new FakeExecutor({
+        steps: [
+          {
+            write: (cwd) => writeFileSync(join(cwd, 'x.txt'), 'work\n'),
+            commitMessage: 'agent: add x.txt',
+          },
+        ],
+        finish: { state: 'finished' },
+      })
+    );
+    const task = store.create({ title: 'First land' });
+    const meta = await orchestrator.dispatch(task.meta.id, 'fake');
+    await waitFor(
+      () => orchestrator.getRun(meta.id)?.meta.state === 'finished'
+    );
+
+    writeGitAttributes(repo);
+    writeFileSync(join(repo, '.gitignore'), '.carto/\n');
+
+    orchestrator.review(meta.id, 'merge');
+    expect(store.get(task.meta.id)!.meta.status).toBe('landed');
+    const log = runGitSync(repo, ['log', '--format=%s', '-3']);
+    expect(log).toContain('chore: set up Dispatch');
+    const status = runGitSync(repo, [
+      'status',
+      '--porcelain',
+      '--',
+      '.gitattributes',
+      '.gitignore',
+    ]);
+    expect(status.trim()).toBe('');
+  });
+
+  it('still refuses, committing nothing, when a setup file carries a hand edit', async () => {
+    const { orchestrator, store } = makeOrchestrator(repo);
+    orchestrator.registerExecutor(
+      'fake',
+      new FakeExecutor({ finish: { state: 'finished' } })
+    );
+    const task = store.create({ title: 'Edited setup file' });
+    const meta = await orchestrator.dispatch(task.meta.id, 'fake');
+    await waitFor(
+      () => orchestrator.getRun(meta.id)?.meta.state === 'finished'
+    );
+    const before = runGitSync(repo, ['rev-parse', 'HEAD']).trim();
+
+    writeGitAttributes(repo);
+    writeFileSync(join(repo, '.gitignore'), '.carto/\nsecrets.env\n');
+
+    expect(() => orchestrator.review(meta.id, 'merge')).toThrow(/\.gitignore/);
+    expect(runGitSync(repo, ['rev-parse', 'HEAD']).trim()).toBe(before);
   });
 
   // Residual of Important #5 (fix-wave verification New-1): `git commit`
