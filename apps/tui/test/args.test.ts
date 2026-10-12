@@ -8,7 +8,21 @@ describe('parseArgs', () => {
       parseArgs(['--root', '/repo', '--port', '4100'], {
         DISPATCH_TUI_TOKEN: 'tok',
       })
-    ).toEqual({ ok: true, root: '/repo', port: 4100, token: 'tok' });
+    ).toEqual({
+      ok: true,
+      root: '/repo',
+      port: 4100,
+      token: 'tok',
+      canDecide: false,
+    });
+  });
+
+  test('DISPATCH_TUI_CAN_DECIDE=1 marks an app token', () => {
+    const got = parseArgs(['--root', '/r', '--port', '1'], {
+      DISPATCH_TUI_TOKEN: 't',
+      DISPATCH_TUI_CAN_DECIDE: '1',
+    });
+    expect(got.ok && got.canDecide).toBe(true);
   });
 
   test('a missing token is an error that says how to launch it', () => {

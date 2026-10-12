@@ -82,6 +82,34 @@ describe('buildTuiLaunch', () => {
   });
 });
 
+describe('buildTuiLaunch tokens', () => {
+  it('with an app token, the TUI gets it and may decide', () => {
+    const launch = buildTuiLaunch({
+      entry: '/e',
+      root: '/r',
+      port: 1,
+      token: 'agent-tok',
+      appToken: 'app-tok',
+      env: {},
+    });
+    expect(launch.env.DISPATCH_TUI_TOKEN).toBe('app-tok');
+    expect(launch.env.DISPATCH_TUI_CAN_DECIDE).toBe('1');
+    expect(launch.args.join(' ')).not.toContain('app-tok');
+  });
+
+  it('without one, it runs read-only on the agent token', () => {
+    const launch = buildTuiLaunch({
+      entry: '/e',
+      root: '/r',
+      port: 1,
+      token: 'agent-tok',
+      env: {},
+    });
+    expect(launch.env.DISPATCH_TUI_TOKEN).toBe('agent-tok');
+    expect(launch.env.DISPATCH_TUI_CAN_DECIDE).toBeUndefined();
+  });
+});
+
 describe('runTui', () => {
   it('a missing bun is an actionable error, not a stack trace', async () => {
     const launch = {

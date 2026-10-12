@@ -51,18 +51,30 @@ export interface TuiLaunch {
   env: Record<string, string | undefined>;
 }
 
-/** The bun command for the TUI; the token rides in the environment so `ps` never shows it. */
+/**
+ * The bun command for the TUI. Tokens ride in the environment so `ps` never shows them; an app
+ * token (the human tier) unlocks the Overseer and approvals, the agent token alone is read-only.
+ */
 export function buildTuiLaunch(opts: {
   entry: string;
   root: string;
   port: number;
   token: string;
+  appToken?: string;
   env: Record<string, string | undefined>;
 }): TuiLaunch {
+  const app =
+    opts.appToken !== undefined && opts.appToken !== ''
+      ? opts.appToken
+      : undefined;
   return {
     cmd: 'bun',
     args: [opts.entry, '--root', opts.root, '--port', String(opts.port)],
-    env: { ...opts.env, DISPATCH_TUI_TOKEN: opts.token },
+    env: {
+      ...opts.env,
+      DISPATCH_TUI_TOKEN: app ?? opts.token,
+      ...(app !== undefined ? { DISPATCH_TUI_CAN_DECIDE: '1' } : {}),
+    },
   };
 }
 
@@ -91,7 +103,11 @@ export function registerTuiCommand(program: Command, ctx: CliContext): void {
     .command('tui')
     .description('Open Dispatch in the terminal, starting dispatchd if needed')
     .option('--port <n>', 'port to use when starting dispatchd')
-    .action(async (opts: { port?: string }) => {
+    .option(
+      '--token <token>',
+      'the daemon app token (or DISPATCH_APP_TOKEN); without it the TUI is read-only'
+    )
+    .action(async (opts: { port?: string; token?: string }) => {
       requireInitialized(ctx);
       const entry = resolveTuiEntry();
       const { port, agentToken } = await ensureDaemon(ctx, { port: opts.port });
@@ -101,6 +117,7 @@ export function registerTuiCommand(program: Command, ctx: CliContext): void {
           root: projectRoot(ctx.cwd),
           port,
           token: agentToken,
+          appToken: opts.token ?? process.env.DISPATCH_APP_TOKEN,
           env: process.env,
         })
       );

@@ -30,6 +30,7 @@ createRoot(renderer).render(
     port={args.port}
     root={args.root}
     storage={storage}
+    canDecide={args.canDecide}
     fakeBackend={process.env.DISPATCH_TUI_FAKE_OVERSEER === '1'}
     onQuit={quit}
   />

@@ -143,7 +143,12 @@ afterEach(() => {
 
 const settle = () => new Promise((r) => setTimeout(r, 30));
 
-async function mount(width: number, height: number, client: ApiClient) {
+async function mount(
+  width: number,
+  height: number,
+  client: ApiClient,
+  canDecide = true
+) {
   const quit: string[] = [];
   const t = await testRender(
     <TuiRoot
@@ -151,6 +156,7 @@ async function mount(width: number, height: number, client: ApiClient) {
       port={PORT}
       root="/repo/storefront"
       storage={memoryStorage()}
+      canDecide={canDecide}
       onQuit={() => quit.push('quit')}
     />,
     { width, height }
@@ -272,6 +278,7 @@ test('with the fake backend on, a new conversation asks dispatchd for it', async
       port={PORT}
       root="/repo/storefront"
       storage={memoryStorage()}
+      canDecide
       fakeBackend
       onQuit={() => {}}
     />,
@@ -288,4 +295,43 @@ test('with the fake backend on, a new conversation asks dispatchd for it', async
     await t.renderOnce();
   }
   expect(started[0]?.backend).toBe('fake');
+});
+
+test('without the app token it opens read-only, says how to get one, and never asks for decisions', async () => {
+  let decisionsAsked = 0;
+  let overseerAsked = 0;
+  const { client } = fakeClient({
+    openDecisions: () => {
+      decisionsAsked++;
+      return Promise.resolve({ items: [] });
+    },
+    currentOverseer: () => {
+      overseerAsked++;
+      return Promise.resolve({ conversation: null });
+    },
+  });
+  const { frame, press } = await mount(120, 40, client, false);
+  const f = await frame();
+  expect(f).toContain('read-only');
+  expect(f).toContain('--token');
+  expect(f).toContain('Add address autocomplete');
+  const typed = await press('i', 'y');
+  expect(typed).not.toContain('type, enter to send');
+  expect(decisionsAsked).toBe(0);
+  expect(overseerAsked).toBe(0);
+});
+
+test('esc leaves the composer, so j and y act on the card again', async () => {
+  const { client, replies } = fakeClient();
+  const { frame, press } = await mount(120, 40, client);
+  await frame();
+  await press('i', 'h', 'i');
+  await press('ESCAPE');
+  // A lone ESC is told apart from an Alt chord only after a short pause.
+  await new Promise((r) => setTimeout(r, 200));
+  const f = await press('j', 'y');
+  expect(replies).toEqual([
+    { id: 'g-act', input: { body: '', choice: 'confirm' } },
+  ]);
+  expect(f).not.toContain('enter send');
 });

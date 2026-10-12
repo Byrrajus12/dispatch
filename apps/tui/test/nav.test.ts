@@ -19,6 +19,7 @@ const key = (name: string, mods: Partial<Key> = {}): Key => ({
 const ctx = (over: Partial<NavContext> = {}): NavContext => ({
   wide: true,
   cards: 0,
+  canCompose: true,
   lengths: { in: 3, out: 2, list: 5 },
   ...over,
 });
@@ -58,6 +59,12 @@ describe('the composer', () => {
     for (const name of ['y', 'n', 'q', '2', 'j', 'd']) {
       expect(resolveKey(composing, key(name), ctx({ cards: 1 }))).toBeNull();
     }
+  });
+
+  test('without the app token, i explains instead of opening the composer', () => {
+    const readOnly = run([key('i')], ctx({ canCompose: false }));
+    expect(readOnly.composing).toBe(false);
+    expect(readOnly.notice).toContain('--token');
   });
 
   test('ctrl+c still quits while composing', () => {

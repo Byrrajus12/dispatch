@@ -19,7 +19,11 @@ const problem = (err: unknown): string | null => {
 };
 
 /** Tasks, runs, open asks and captured notes, refetched whenever dispatchd says they changed. */
-export function useDaemonData(client: ApiClient, port: number) {
+export function useDaemonData(
+  client: ApiClient,
+  port: number,
+  canDecide: boolean
+) {
   const tasks = useQuery({
     queryKey: key(port, 'tasks'),
     queryFn: () => client.fetchTasks(),
@@ -31,6 +35,8 @@ export function useDaemonData(client: ApiClient, port: number) {
   const decisions = useQuery({
     queryKey: key(port, 'decisions'),
     queryFn: () => client.openDecisions(),
+    // The decision feed is human-tier; the agent token would only earn a 403.
+    enabled: canDecide,
   });
   const inbox = useQuery({
     queryKey: key(port, 'inbox'),

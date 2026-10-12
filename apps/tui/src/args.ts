@@ -1,5 +1,5 @@
 export type TuiArgs =
-  | { ok: true; root: string; port: number; token: string }
+  | { ok: true; root: string; port: number; token: string; canDecide: boolean }
   | { ok: false; error: string };
 
 const LAUNCH_HINT =
@@ -27,5 +27,11 @@ export function parseArgs(
   if (token === undefined || token === '') {
     return { ok: false, error: `No daemon token given. ${LAUNCH_HINT}` };
   }
-  return { ok: true, root, port, token };
+  return {
+    ok: true,
+    root,
+    port,
+    token,
+    canDecide: env.DISPATCH_TUI_CAN_DECIDE === '1',
+  };
 }

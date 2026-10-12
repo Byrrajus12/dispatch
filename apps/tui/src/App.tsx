@@ -31,6 +31,8 @@ export interface TuiProps {
   port: number;
   root: string;
   storage: KeyValueStore;
+  /** Holding the app token (human tier): the Overseer and approvals work. */
+  canDecide: boolean;
   /** Opens new conversations on dispatchd's scripted fake backend (dev and demos). */
   fakeBackend?: boolean;
   onQuit: () => void;
@@ -58,6 +60,7 @@ function App({
   port,
   root,
   storage,
+  canDecide,
   fakeBackend = false,
   onQuit,
 }: TuiProps) {
@@ -65,8 +68,9 @@ function App({
     () => ({ storage, fakeBackend: () => fakeBackend }),
     [storage, fakeBackend]
   );
+  // Without the app token the Overseer is out of reach, so the session gets no client at all.
   const session = useOverseerSession(
-    client,
+    canDecide ? client : null,
     port,
     root,
     undefined,
@@ -74,7 +78,7 @@ function App({
     true,
     options
   );
-  const data = useDaemonData(client, port);
+  const data = useDaemonData(client, port, canDecide);
   useDaemonEvents(client, port);
   const { width } = useTerminalDimensions();
   const wide = width >= WIDE;
@@ -91,6 +95,7 @@ function App({
   const ctx: NavContext = {
     wide,
     cards: cards.length,
+    canCompose: canDecide,
     lengths: { in: inflow.length, out: outflow.length, list: listLength },
   };
 
@@ -169,7 +174,7 @@ function App({
             This window’s access was revoked. Run dispatch tui again.
           </text>
         ) : (
-          <StatusLine nav={nav} error={data.error} />
+          <StatusLine nav={nav} error={data.error} readOnly={!canDecide} />
         )}
       </box>
     </box>

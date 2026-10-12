@@ -1,4 +1,4 @@
-import type { NavState } from '../nav';
+import { type NavState, READ_ONLY } from '../nav';
 import { color } from '../theme';
 
 // What the keys do right now, so the bottom line doubles as the help a newcomer needs.
@@ -14,18 +14,22 @@ function hints(nav: NavState): string {
   return 'j/k move · 1 overseer · 3 runs · ? help · q quit';
 }
 
-/** The bottom line: a problem first, then a notice, then the key hints. */
+/** The bottom line: a problem first, then a notice, then read-only, then the key hints. */
 export function StatusLine({
   nav,
   error,
+  readOnly,
 }: {
   nav: NavState;
   error: string | null;
+  readOnly: boolean;
 }) {
   if (error !== null) {
     return <text fg={color.bad}>{` dispatchd: ${error} · retrying`}</text>;
   }
-  if (nav.notice !== null)
+  if (nav.notice !== null) {
     return <text fg={color.warn}>{` ${nav.notice}`}</text>;
+  }
+  if (readOnly) return <text fg={color.warn}>{` ${READ_ONLY}`}</text>;
   return <text fg={color.dim}>{` ${hints(nav)}`}</text>;
 }

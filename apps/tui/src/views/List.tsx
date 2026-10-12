@@ -35,7 +35,6 @@ export function List({
           <text
             key={row.key}
             wrapMode="none"
-            truncate
             fg={row.tone ?? color.text}
             bg={focused && i === cursor ? color.focus : undefined}
           >
