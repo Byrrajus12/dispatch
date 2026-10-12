@@ -35,8 +35,8 @@ See [LICENSING.md](LICENSING.md) and [pricing](https://dispatch.foo/pricing).
 - **Git.** On a Mac without it, Setup runs Apple's installer.
 - **An AI coding agent:** Claude Code (Claude Pro or Max plan, or an API key),
   Codex (ChatGPT plan or an API key), or Gemini CLI, Cursor Agent, opencode,
-  Qwen Code, Crush, Goose or Aider. Setup installs the one you pick and opens
-  its sign-in.
+  Qwen Code, Crush, Goose or Aider. Setup installs the one you pick or opens its
+  install page, then opens its sign-in.
 - **Optional:** the GitHub CLI (`gh`) to clone from GitHub and open pull
   requests.
 
