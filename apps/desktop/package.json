@@ -17,7 +17,6 @@
     "e2e:update": "playwright test --update-snapshots"
   },
   "dependencies": {
-    "@dispatch-foo/protocol": "workspace:*",
     "@dispatch/client": "workspace:*",
     "@dispatch/tokens": "workspace:*",
     "@dnd-kit/core": "catalog:",

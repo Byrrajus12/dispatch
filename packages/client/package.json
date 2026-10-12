@@ -17,10 +17,11 @@
     "prepublishOnly": "moon run client:prepublish"
   },
   "dependencies": {
+    "@dispatch-foo/core": "workspace:*",
+    "@dispatch-foo/protocol": "workspace:*",
     "react": "catalog:"
   },
   "devDependencies": {
-    "@dispatch-foo/core": "workspace:*",
     "@types/bun": "catalog:",
     "@types/react": "catalog:",
     "tsdown": "catalog:",
