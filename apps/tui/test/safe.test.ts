@@ -10,7 +10,8 @@ describe('safeText', () => {
   });
 
   test('drops CSI sequences such as colours and cursor moves', () => {
-    expect(safeText('a\x1b[31mred\x1b[0m\x1b[2J b')).toBe('ared b');
+    // Split so the colour code and the word stay apart for the spell checker.
+    expect(safeText('a \x1b[31m' + 'red\x1b[0m\x1b[2J b')).toBe('a red b');
   });
 
   test('drops OSC sequences such as clipboard writes and title changes', () => {
