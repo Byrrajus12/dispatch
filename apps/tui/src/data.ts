@@ -122,3 +122,73 @@ export function useDaemonEvents(client: ApiClient, port: number) {
     [client, port, queryClient]
   );
 }
+
+/** Team docs, and the selected one's text. */
+export function useDocs(client: ApiClient, port: number, ref: string | null) {
+  const list = useQuery({
+    queryKey: key(port, 'docs'),
+    queryFn: () => client.listDocs(),
+  });
+  const doc = useQuery({
+    queryKey: [...key(port, 'doc'), ref],
+    queryFn: () => client.getDoc(ref ?? ''),
+    enabled: ref !== null,
+  });
+  return {
+    docs: list.data?.docs ?? [],
+    text: doc.data?.text ?? null,
+    error: problem(list.error),
+  };
+}
+
+/** Recent threads (human tier, so only with the app token) and the selected one's messages. */
+export function useThreads(
+  client: ApiClient,
+  port: number,
+  enabled: boolean,
+  id: string | null
+) {
+  const list = useQuery({
+    queryKey: key(port, 'threads'),
+    queryFn: () => client.listRecentThreads(30),
+    enabled,
+  });
+  const thread = useQuery({
+    queryKey: [...key(port, 'thread'), id],
+    queryFn: () => client.getThread(id ?? ''),
+    enabled: enabled && id !== null,
+  });
+  return {
+    threads: list.data?.threads ?? [],
+    messages: thread.data?.messages ?? [],
+  };
+}
+
+/** Open pull requests, and the selected one's status, conversation and diff (when shown). */
+export function usePrs(
+  client: ApiClient,
+  port: number,
+  number: number | null,
+  diff: boolean
+) {
+  const list = useQuery({
+    queryKey: key(port, 'prs'),
+    queryFn: () => client.fetchRepoPrs(),
+  });
+  const detail = useQuery({
+    queryKey: [...key(port, 'pr'), number],
+    queryFn: () => client.fetchRepoPrDetail(number ?? 0),
+    enabled: number !== null,
+  });
+  const patch = useQuery({
+    queryKey: [...key(port, 'pr-diff'), number],
+    queryFn: () => client.fetchRepoPrDiff(number ?? 0),
+    enabled: number !== null && diff,
+  });
+  return {
+    prs: list.data ?? [],
+    detail: detail.data ?? null,
+    patch: patch.data?.patch ?? null,
+    error: problem(list.error),
+  };
+}

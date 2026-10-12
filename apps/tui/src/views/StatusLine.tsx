@@ -10,7 +10,8 @@ function hints(nav: NavState): string {
       ? 'y approve · n reject · j/k cards · i type · ? help · q quit'
       : 'i type · j cards · tab columns · 2 tasks · 3 runs · ? help · q quit';
   }
-  if (nav.view === 'runs')
+  if (nav.overlay === 'projects') return 'j/k move · enter switch · esc close';
+  if (nav.view === 'runs' || nav.view === 'prs')
     return 'j/k move · d diff · 1 overseer · ? help · q quit';
   return 'j/k move · 1 overseer · 3 runs · ? help · q quit';
 }

@@ -5,8 +5,9 @@ import { safeText } from '../safe';
 import { color } from '../theme';
 import { List } from './List';
 import { runTone } from './Overseer';
+import { Patch } from './Patch';
 
-// The run's patch, line by line, coloured like `git diff`.
+// The run's patch, once loaded.
 function Diff({
   client,
   port,
@@ -17,35 +18,17 @@ function Diff({
   run: RunMeta;
 }) {
   const diff = useRunDiff(client, port, run.id);
-  if (diff.isError)
+  if (diff.isError) {
     return (
-      <text
-        fg={color.bad}
-      >{`Could not load the diff: ${diff.error instanceof Error ? diff.error.message : 'unknown error'}`}</text>
+      <text fg={color.bad}>
+        {`Could not load the diff: ${diff.error instanceof Error ? diff.error.message : 'unknown error'}`}
+      </text>
     );
+  }
   if (diff.data === undefined) return <text fg={color.dim}>loading diff…</text>;
   if (diff.data.patch.trim() === '')
     return <text fg={color.dim}>This run changed nothing.</text>;
-  return (
-    <scrollbox flexGrow={1}>
-      {diff.data.patch.split('\n').map((line, i) => (
-        <text
-          key={i}
-          fg={
-            line.startsWith('+')
-              ? color.ok
-              : line.startsWith('-')
-                ? color.bad
-                : line.startsWith('@@') || line.startsWith('diff ')
-                  ? color.accent
-                  : color.text
-          }
-        >
-          {line === '' ? ' ' : safeText(line)}
-        </text>
-      ))}
-    </scrollbox>
-  );
+  return <Patch patch={diff.data.patch} />;
 }
 
 /** Live and recent runs on the left; the selected run, or its diff (d), on the right. */

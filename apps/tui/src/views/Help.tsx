@@ -1,12 +1,13 @@
 import { color } from '../theme';
 
 const LINES = [
-  '1 overseer   2 tasks   3 runs',
+  '1 overseer   2 tasks   3 runs   4 docs   5 threads   6 prs',
+  'ctrl+p   switch project',
   'tab / shift+tab   move between columns',
   'j / k, arrows   move within a list or between cards',
   'i or /   type to the Overseer   esc   stop typing',
   'y / n   approve or reject the focused card',
-  'd   a run’s diff (Runs)   [ ]   side columns when narrow',
+  'd   the diff (Runs, PRs)   [ ]   side columns when narrow',
   '?   this help   q / ctrl+c   quit',
 ];
 

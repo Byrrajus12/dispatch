@@ -1,9 +1,9 @@
 // Where focus is and what a key does there. Pure, so every focus rule is unit-tested
 // without a terminal; the App only maps OpenTUI key events in and side effects out.
 
-export type View = 'overseer' | 'tasks' | 'runs';
+export type View = 'overseer' | 'tasks' | 'runs' | 'docs' | 'threads' | 'prs';
 type Pane = 'in' | 'conversation' | 'out' | 'list';
-type ListName = 'in' | 'out' | 'list';
+type ListName = 'in' | 'out' | 'list' | 'projects';
 
 export interface NavState {
   view: View;
@@ -12,7 +12,7 @@ export interface NavState {
   /** The focused proposal card in the conversation, or null when none has focus. */
   card: number | null;
   cursor: Record<ListName, number>;
-  overlay: 'in' | 'out' | 'help' | null;
+  overlay: 'in' | 'out' | 'help' | 'projects' | null;
   diff: boolean;
   notice: string | null;
 }
@@ -43,6 +43,7 @@ export type NavAction =
   | { type: 'diff'; on: boolean }
   | { type: 'overlay'; which: NavState['overlay'] }
   | { type: 'notice'; text: string }
+  | { type: 'pick-project'; index: number }
   | { type: 'quit' };
 
 export const initialNav: NavState = {
@@ -50,13 +51,12 @@ export const initialNav: NavState = {
   pane: 'conversation',
   composing: false,
   card: null,
-  cursor: { in: 0, out: 0, list: 0 },
+  cursor: { in: 0, out: 0, list: 0, projects: 0 },
   overlay: null,
   diff: false,
   notice: null,
 };
 
-const PHASE_3 = 'Docs, threads, PRs and projects arrive in phase 3.';
 export const READ_ONLY =
   'read-only: the Overseer and approvals need the app token. Run `dispatch tui --ask-token`, or set DISPATCH_APP_TOKEN, to the DISPATCH_APP_TOKEN line `dispatch serve` prints.';
 const OVERSEER_PANES: Pane[] = ['in', 'conversation', 'out'];
@@ -71,7 +71,22 @@ export function resolveKey(
   if (state.composing) {
     return key.name === 'escape' ? { type: 'compose', on: false } : null;
   }
-  if (key.ctrl && key.name === 'p') return { type: 'notice', text: PHASE_3 };
+  if (key.ctrl && key.name === 'p') {
+    return {
+      type: 'overlay',
+      which: state.overlay === 'projects' ? null : 'projects',
+    };
+  }
+  if (state.overlay === 'projects') {
+    if (key.name === 'escape') return { type: 'overlay', which: null };
+    if (key.name === 'return')
+      return { type: 'pick-project', index: state.cursor.projects };
+    if (key.name === 'j' || key.name === 'down')
+      return { type: 'move', delta: 1 };
+    if (key.name === 'k' || key.name === 'up')
+      return { type: 'move', delta: -1 };
+    return key.name === 'q' ? { type: 'quit' } : null;
+  }
   if (key.name === 'escape') {
     if (state.overlay !== null) return { type: 'overlay', which: null };
     if (state.diff) return { type: 'diff', on: false };
@@ -85,9 +100,11 @@ export function resolveKey(
     case '3':
       return { type: 'view', view: 'runs' };
     case '4':
+      return { type: 'view', view: 'docs' };
     case '5':
+      return { type: 'view', view: 'threads' };
     case '6':
-      return { type: 'notice', text: PHASE_3 };
+      return { type: 'view', view: 'prs' };
     case 'q':
       return { type: 'quit' };
     case '?':
@@ -120,7 +137,9 @@ export function resolveKey(
         ? null
         : { type: 'overlay', which: 'out' };
     case 'd':
-      return state.view === 'runs' ? { type: 'diff', on: true } : null;
+      return state.view === 'runs' || state.view === 'prs'
+        ? { type: 'diff', on: true }
+        : null;
     case 'y':
     case 'n':
       return state.view === 'overseer' &&
@@ -162,6 +181,16 @@ export function navReducer(
       };
     }
     case 'move': {
+      if (state.overlay === 'projects') {
+        const max = Math.max(0, ctx.lengths.projects - 1);
+        return {
+          ...state,
+          cursor: {
+            ...state.cursor,
+            projects: clamp(state.cursor.projects + action.delta, max),
+          },
+        };
+      }
       if (state.pane === 'conversation') {
         if (ctx.cards === 0) return state;
         const at = state.card ?? -1;
