@@ -8,6 +8,11 @@ import { Plus, Sparkles, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { FailureNotice } from '../components/failure/FailureNotice';
+import {
+  type SendChoice,
+  SendToAgent,
+  type SendToAgentOptions,
+} from '../components/guide/SendToAgent';
 import { PlanQuestionsForm } from '../components/plans/PlanQuestionsForm';
 import {
   EpicControl,
@@ -49,6 +54,11 @@ interface DraftViewProps {
   onDone: () => void;
   /** A failed draft's Try again: a fresh draft from the same sentence. */
   onRetry?: () => Promise<void>;
+  /** The first-task guide's draft: Send to agent replaces Create task, which moves into More options. */
+  send?: {
+    options: SendToAgentOptions;
+    onSend: (input: CreateInput, choice: SendChoice) => Promise<void>;
+  };
 }
 
 /** A settled AI task draft's review page on the issue-page grammar (§8): the task title is the
@@ -62,6 +72,7 @@ export function DraftView({
   draft,
   onDone,
   onRetry,
+  send,
 }: DraftViewProps) {
   const proposal = draft.proposal;
   const task = proposal?.tasks[0];
@@ -216,7 +227,9 @@ export function DraftView({
           <span className="font-book text-muted-foreground px-2 text-[12px]">
             {draft.state === 'running'
               ? 'The planner is working on this draft…'
-              : 'Nothing is written until you create the task.'}
+              : send !== undefined
+                ? 'This is what the agent will do. Edit anything, then send it.'
+                : 'Nothing is written until you create the task.'}
           </span>
         }
       />
@@ -385,7 +398,7 @@ export function DraftView({
         )}
       </div>
 
-      <div className="shadow-hairline-top flex h-12 shrink-0 items-center justify-end gap-2 px-6">
+      <div className="shadow-hairline-top flex min-h-12 shrink-0 flex-wrap items-center justify-end gap-2 px-6 py-2">
         {saveError !== null && (
           <p role="alert" className="text-red mr-auto text-[13px]">
             {saveError}
@@ -398,15 +411,43 @@ export function DraftView({
           {discarding && <Spinner className="size-3.5" />}
           Discard
         </PillButton>
-        <Button disabled={!canCreate} onClick={() => void save()}>
-          {saving ? (
-            <>
-              <Spinner className="size-3.5" /> Creating…
-            </>
-          ) : (
-            'Create task'
-          )}
-        </Button>
+        {send !== undefined && task !== undefined ? (
+          <SendToAgent
+            options={send.options}
+            disabled={!canCreate}
+            onSend={(choice) =>
+              send.onSend(
+                {
+                  ...editableDraftToCreateInput(editable),
+                  ...(choice.writes.length > 0
+                    ? { writes: choice.writes }
+                    : {}),
+                },
+                choice
+              )
+            }
+            extra={
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!canCreate}
+                onClick={() => void save()}
+              >
+                Just create the task
+              </Button>
+            }
+          />
+        ) : (
+          <Button disabled={!canCreate} onClick={() => void save()}>
+            {saving ? (
+              <>
+                <Spinner className="size-3.5" /> Creating…
+              </>
+            ) : (
+              'Create task'
+            )}
+          </Button>
+        )}
       </div>
     </div>
   );
