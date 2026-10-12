@@ -21,11 +21,13 @@ test('lists notes and routes Make task and Dismiss by id', () => {
   render(
     <CapturedNotes
       items={[note({})]}
-      onMakeTask={async (ids) => {
+      onMakeTask={(ids) => {
         made.push(ids);
+        return Promise.resolve();
       }}
-      onDismiss={async (ids) => {
+      onDismiss={(ids) => {
         dismissed.push(ids);
+        return Promise.resolve();
       }}
     />
   );
