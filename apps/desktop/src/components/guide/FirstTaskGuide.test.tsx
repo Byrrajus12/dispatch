@@ -42,7 +42,7 @@ function actions(): MockActions {
     looksGood: mock(() => {}),
     askForChanges: ok(),
     land: ok(),
-    discard: ok(),
+    startOver: ok(),
     dismiss: mock(() => {}),
     closeCompletion: mock(() => {}),
     openBoard: mock(() => {}),
@@ -190,7 +190,7 @@ test('stage 5 lands with the plain label, and a refused land says why', async ()
   expect(a.land).toHaveBeenCalledWith('r-1');
 });
 
-test('a pull request that has not merged can be opened or discarded to start over', async () => {
+test('a pull request that has not merged can be opened, or set aside after a confirm', async () => {
   const { a } = card({
     stage: 'land',
     taskId: 't-1',
@@ -200,14 +200,25 @@ test('a pull request that has not merged can be opened or discarded to start ove
   expect(screen.getByText(/This step finishes when it merges/)).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Open the review page' }));
   expect(a.openTask).toHaveBeenCalledWith('t-1', 'review', 'r-1');
-  fireEvent.click(
-    screen.getByRole('button', { name: 'Discard and start over' })
+  fireEvent.click(screen.getByRole('button', { name: 'Start over' }));
+  // Nothing happens until the confirm, which says the pull request stays open.
+  expect(a.startOver).not.toHaveBeenCalled();
+  const dialog = await screen.findByRole('alertdialog');
+  expect(dialog.textContent).toContain(
+    "This won't close the pull request on GitHub"
   );
-  await waitFor(() => expect(a.discard).toHaveBeenCalledWith('r-1'));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  expect(a.startOver).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Start over' }));
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Start the task over' })
+  );
+  await waitFor(() => expect(a.startOver).toHaveBeenCalledWith('r-1'));
 });
 
-test('a merge the queue refused shows its reason on the Land step', () => {
-  card({
+test('a merge the queue refused shows its reason on the Land step, and Try again lands', async () => {
+  const { a } = card({
     stage: 'land',
     taskId: 't-1',
     run: run({
@@ -220,7 +231,25 @@ test('a merge the queue refused shows its reason on the Land step', () => {
     }),
   });
   expect(screen.getByText('merge conflict in src/theme.ts')).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+  await waitFor(() => expect(a.land).toHaveBeenCalledWith('r-1'));
+});
+
+test("a failed discard is not the Land step's failure", () => {
+  card({
+    stage: 'land',
+    taskId: 't-1',
+    run: run({
+      state: 'finished',
+      reviewFailure: {
+        action: 'discard',
+        reason: 'worktree would not remove',
+        at: '2026-10-11T00:00:00.000Z',
+      },
+    }),
+  });
+  expect(screen.queryByText('worktree would not remove')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
 });
 
 test('done points at the board, the Overseer and a teammate', () => {

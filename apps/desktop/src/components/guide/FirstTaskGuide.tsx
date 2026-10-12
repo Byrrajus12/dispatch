@@ -25,6 +25,16 @@ import {
 } from './SendToAgent';
 import { cn } from '@/lib/utils';
 import { IconButton } from '@/ui/ai/icon-button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/ui/alert-dialog';
 import { Button } from '@/ui/button';
 import { Panel, PanelHeader } from '@/ui/chrome';
 import { Spinner } from '@/ui/spinner';
@@ -46,8 +56,8 @@ export interface GuideActions {
   looksGood: (runId: string) => void;
   askForChanges: (runId: string, text: string) => Promise<void>;
   land: (runId: string) => Promise<void>;
-  /** Throws the run away so the task goes back to Check the plan (e.g. a PR closed unmerged). */
-  discard: (runId: string) => Promise<void>;
+  /** Sets a pull request run aside so the task goes back to Check the plan (e.g. closed unmerged). */
+  startOver: (runId: string) => Promise<void>;
   dismiss: () => void;
   closeCompletion: () => void;
   openBoard: () => void;
@@ -321,16 +331,20 @@ function ReviewBody({ view, actions }: BodyProps) {
 function LandBody({ view, actions }: BodyProps) {
   const { run, taskId, waitingOnPr } = view;
   const { busy, error, run: act } = useGuideAction();
+  const [confirming, setConfirming] = useState(false);
   if (run === undefined || taskId === undefined) return null;
   const runId = run.id;
   const land = () => act(() => actions.land(runId));
-  const failure = error ?? run.reviewFailure?.reason ?? null;
+  // Only a refused merge belongs here; a failed discard is another story.
+  const failure =
+    error ??
+    (run.reviewFailure?.action === 'merge' ? run.reviewFailure.reason : null);
   if (waitingOnPr === true) {
     return (
       <>
         <Line>
           Your pull request is open. This step finishes when it merges. If it
-          was closed without merging, discard it and send the task again.
+          was closed without merging, start over and send the task again.
         </Line>
         <div className="flex flex-wrap gap-1.5">
           <Button
@@ -344,13 +358,36 @@ function LandBody({ view, actions }: BodyProps) {
             size="sm"
             variant="ghost"
             disabled={busy}
-            onClick={() => void act(() => actions.discard(runId))}
+            onClick={() => setConfirming(true)}
           >
             {busy && <Spinner className="size-3.5" />}
-            Discard and start over
+            Start over
           </Button>
         </div>
-        {failure !== null && <FailureNotice error={failure} />}
+        {error !== null && <FailureNotice error={error} />}
+        <AlertDialog open={confirming} onOpenChange={setConfirming}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Start this task over?</AlertDialogTitle>
+              <AlertDialogDescription>
+                The task goes back to Check the plan so you can change it and
+                send it again. This won&apos;t close the pull request on GitHub:
+                if it&apos;s still open, close it there.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel variant="ghost">Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  setConfirming(false);
+                  void act(() => actions.startOver(runId));
+                }}
+              >
+                Start the task over
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </>
     );
   }

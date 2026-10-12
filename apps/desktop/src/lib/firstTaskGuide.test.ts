@@ -251,6 +251,27 @@ describe('deriveGuideStage', () => {
     ).toBe('works');
   });
 
+  test('a pull request run set aside to start over goes back to Check the plan', () => {
+    const pr = run({
+      state: 'finished',
+      prUrl: 'https://github.com/a/b/pull/1',
+    });
+    const record = active({ taskId: 't-1', setAsideRunId: 'r-1' });
+    expect(at(record, { tasks: TASKS, runs: [pr] })).toEqual({
+      stage: 'check',
+      taskId: 't-1',
+    });
+    // The next send is followed as usual.
+    const next = run({ id: 'r-2', createdAt: '2026-10-11T00:05:00.000Z' });
+    expect(at(record, { tasks: TASKS, runs: [pr, next] })).toMatchObject({
+      stage: 'works',
+      run: { id: 'r-2' },
+    });
+    // If the set-aside pull request merges anyway, the work did land.
+    const merged = { ...pr, reviewedAt: 'x', reviewAction: 'pr' as const };
+    expect(at(record, { tasks: TASKS, runs: [merged] }).stage).toBe('done');
+  });
+
   test('verify runs on the task never move the guide', () => {
     const r = run({ kind: 'verify' });
     expect(
@@ -334,6 +355,15 @@ describe('guide storage', () => {
     writeGuide('/p/a', { status: 'active', taskId: 't-1' });
     expect(readGuide('/p/a')).toEqual({ status: 'active', taskId: 't-1' });
     expect(readGuide('/p/b')).toBeNull();
+  });
+
+  test('a set-aside run survives a reload', () => {
+    writeGuide('/p/a', {
+      status: 'active',
+      taskId: 't-1',
+      setAsideRunId: 'r-1',
+    });
+    expect(readGuide('/p/a')?.setAsideRunId).toBe('r-1');
   });
 
   test('a corrupt or unknown record reads as none', () => {

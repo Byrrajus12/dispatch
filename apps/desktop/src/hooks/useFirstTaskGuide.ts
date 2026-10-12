@@ -34,6 +34,8 @@ export interface FirstTaskGuideState {
   linkDraft: (draftId: string) => void;
   linkTask: (taskId: string) => void;
   approve: (runId: string) => void;
+  /** Sets a pull request run aside so the task goes back to Check the plan. */
+  startOver: (runId: string) => void;
   dismiss: () => void;
   restart: () => void;
   closeCompletion: () => void;
@@ -111,9 +113,17 @@ export function useFirstTaskGuide({
     sendError,
     setSendError,
     linkDraft: (draftId) =>
-      update({ draftId, taskId: undefined, approvedRunId: undefined }),
-    linkTask: (taskId) => update({ taskId, approvedRunId: undefined }),
+      update({
+        draftId,
+        taskId: undefined,
+        approvedRunId: undefined,
+        setAsideRunId: undefined,
+      }),
+    linkTask: (taskId) =>
+      update({ taskId, approvedRunId: undefined, setAsideRunId: undefined }),
     approve: (runId) => update({ approvedRunId: runId }),
+    startOver: (runId) =>
+      update({ setAsideRunId: runId, approvedRunId: undefined }),
     dismiss: () => {
       save({ status: 'dismissed' });
       setCelebration(null);
@@ -126,4 +136,40 @@ export function useFirstTaskGuide({
     },
     closeCompletion: () => setCelebration(null),
   };
+}
+
+interface TaskListState {
+  /** The list has loaded for the current connection. */
+  ready: boolean;
+  /** When the list last arrived (the query's `dataUpdatedAt`); 0 before it ever has. */
+  fetchedAt: number;
+  /** Tasks in it, archived included. */
+  count: number;
+}
+
+/**
+ * Whether `projectPath` is a fresh, empty project: its task list has loaded and holds nothing.
+ * After a switch from another project, only a list that arrived since the switch counts.
+ */
+export function useFreshEmptyProject(
+  projectPath: string | null,
+  list: TaskListState
+): boolean {
+  // The last project seen and the fetch time on screen when it arrived; -1 trusts any list,
+  // as nothing came before it. A pass through no project still counts as a switch.
+  const [seen, setSeen] = useState({ path: projectPath, fetchedAt: -1 });
+  let current = seen;
+  if (projectPath !== null && seen.path !== projectPath) {
+    current = {
+      path: projectPath,
+      fetchedAt: seen.path === null ? -1 : list.fetchedAt,
+    };
+    setSeen(current);
+  }
+  return (
+    projectPath !== null &&
+    list.ready &&
+    list.fetchedAt !== current.fetchedAt &&
+    list.count === 0
+  );
 }

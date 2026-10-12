@@ -19,6 +19,8 @@ export interface GuideRecord {
   taskId?: string;
   /** The run the user said "Looks good" to; a newer run needs its own. */
   approvedRunId?: string;
+  /** A pull request run the person started over from; the task is back at Check the plan. */
+  setAsideRunId?: string;
 }
 
 const KEY_PREFIX = 'dispatch:first-task-guide:';
@@ -44,9 +46,11 @@ export function readGuide(projectPath: string): GuideRecord | null {
     const draftId = text(parsed['draftId']);
     const taskId = text(parsed['taskId']);
     const approvedRunId = text(parsed['approvedRunId']);
+    const setAsideRunId = text(parsed['setAsideRunId']);
     if (draftId !== undefined) record.draftId = draftId;
     if (taskId !== undefined) record.taskId = taskId;
     if (approvedRunId !== undefined) record.approvedRunId = approvedRunId;
+    if (setAsideRunId !== undefined) record.setAsideRunId = setAsideRunId;
     return record;
   } catch {
     return null;
@@ -128,7 +132,11 @@ export function deriveGuideStage(
     if (run.reviewedAt !== undefined && run.reviewAction !== 'discard') {
       return { stage: 'done', taskId, run };
     }
-    if (run.state === 'cancelled' || run.reviewAction === 'discard') {
+    if (
+      run.state === 'cancelled' ||
+      run.reviewAction === 'discard' ||
+      run.id === record.setAsideRunId
+    ) {
       return { stage: 'check', taskId };
     }
     if (!isTerminalRunState(run.state)) return { stage: 'works', taskId, run };

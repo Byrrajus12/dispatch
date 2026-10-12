@@ -3,7 +3,7 @@ import { act, renderHook } from '@testing-library/react';
 import { beforeEach, expect, test } from 'bun:test';
 
 import { readGuide } from '../lib/firstTaskGuide';
-import { useFirstTaskGuide } from './useFirstTaskGuide';
+import { useFirstTaskGuide, useFreshEmptyProject } from './useFirstTaskGuide';
 
 const NO_DRAFTS: DraftRecord[] = [];
 const NO_TASKS: { meta: { id: string } }[] = [];
@@ -154,4 +154,100 @@ test('linking a task moves the guide to Check the plan', () => {
   act(() => result.current.linkTask('t-1'));
   rerender(props({ projectEmpty: false, tasks: ONE_TASK }));
   expect(result.current.view).toEqual({ stage: 'check', taskId: 't-1' });
+});
+
+test('Start over sets the pull request run aside and goes back to Check the plan', () => {
+  window.localStorage.setItem(
+    'dispatch:first-task-guide:/p/a',
+    JSON.stringify({ status: 'active', taskId: 't-1' })
+  );
+  const pr = [
+    {
+      id: 'r-1',
+      taskId: 't-1',
+      executor: 'claude',
+      state: 'finished',
+      prUrl: 'https://github.com/o/r/pull/1',
+      createdAt: '2026-10-11T00:00:00.000Z',
+    } as RunMeta,
+  ];
+  const { result } = renderHook(() =>
+    useFirstTaskGuide(props({ projectEmpty: false, tasks: ONE_TASK, runs: pr }))
+  );
+  expect(result.current.view?.stage).toBe('land');
+  act(() => result.current.startOver('r-1'));
+  expect(result.current.view).toEqual({ stage: 'check', taskId: 't-1' });
+  expect(readGuide('/p/a')).toEqual({
+    status: 'active',
+    taskId: 't-1',
+    setAsideRunId: 'r-1',
+  });
+});
+
+type ListInput = Parameters<typeof useFreshEmptyProject>[1];
+const list = (over: Partial<ListInput> = {}): ListInput => ({
+  ready: true,
+  fetchedAt: 100,
+  count: 0,
+  ...over,
+});
+
+test('an empty project only counts once its own task list has loaded', () => {
+  const { result, rerender } = renderHook(
+    ({ path, l }: { path: string | null; l: ListInput }) =>
+      useFreshEmptyProject(path, l),
+    {
+      initialProps: {
+        path: null as string | null,
+        l: list({ ready: false, fetchedAt: 0 }),
+      },
+    }
+  );
+  expect(result.current).toBe(false);
+  // Cold start: the first project's list loading, then loaded and empty.
+  rerender({ path: '/p/a', l: list({ ready: false, fetchedAt: 0 }) });
+  expect(result.current).toBe(false);
+  rerender({ path: '/p/a', l: list() });
+  expect(result.current).toBe(true);
+  // A switch: the list still showing is the one from before, so it does not count.
+  rerender({ path: '/p/b', l: list() });
+  expect(result.current).toBe(false);
+  // The new project's list arrives with tasks in it.
+  rerender({ path: '/p/b', l: list({ fetchedAt: 200, count: 3 }) });
+  expect(result.current).toBe(false);
+  // Back to an empty project, once its list has been fetched again.
+  rerender({ path: '/p/a', l: list({ fetchedAt: 200, count: 3 }) });
+  expect(result.current).toBe(false);
+  rerender({ path: '/p/a', l: list({ fetchedAt: 300 }) });
+  expect(result.current).toBe(true);
+  // Switching through no project at all (the new one still resolving) is still a switch.
+  rerender({ path: null, l: list({ ready: false, fetchedAt: 0 }) });
+  expect(result.current).toBe(false);
+  rerender({ path: '/p/b', l: list({ fetchedAt: 300 }) });
+  expect(result.current).toBe(false);
+  rerender({ path: '/p/b', l: list({ fetchedAt: 400, count: 2 }) });
+  expect(result.current).toBe(false);
+});
+
+test('switching to a populated project never starts its guide, even mid-switch', () => {
+  const { result, rerender } = renderHook(
+    ({ path, l }: { path: string; l: ListInput }) => {
+      const projectEmpty = useFreshEmptyProject(path, l);
+      return useFirstTaskGuide(
+        props({
+          projectPath: path,
+          projectEmpty,
+          tasks: l.count > 0 ? ONE_TASK : NO_TASKS,
+        })
+      );
+    },
+    { initialProps: { path: '/p/a', l: list() } }
+  );
+  expect(readGuide('/p/a')).toEqual({ status: 'active' });
+  // One render with the old (empty) list under the new project, then loading, then loaded.
+  rerender({ path: '/p/b', l: list() });
+  rerender({ path: '/p/b', l: list({ ready: false }) });
+  rerender({ path: '/p/b', l: list({ fetchedAt: 200, count: 1 }) });
+  expect(readGuide('/p/b')).toBeNull();
+  expect(result.current.view).toBeNull();
 });
