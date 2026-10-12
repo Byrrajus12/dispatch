@@ -1,9 +1,10 @@
 import type { ExecutorPricing } from '@dispatch-foo/core';
 import { randomUUID } from 'node:crypto';
-import { basename, isAbsolute, relative, resolve } from 'node:path';
+import { isAbsolute, relative, resolve } from 'node:path';
 
-import { dequotedCommand, floorCheckForToolInput } from '../../floor.js';
+import { floorCheckForToolInput } from '../../floor.js';
 import type { SpawnCodexAppServer } from '../codexAppServer.js';
+import { codexCommandFloor, readCodexCommand } from '../codexCommand.js';
 import { claimCodexToolCall, codexDynamicTool } from '../codexDynamicTools.js';
 import { codexEffort, codexMcpConfig, runCodexTurn } from '../codexTurn.js';
 import type { CodexDynamicTool, CodexTurnControls } from '../codexTurn.js';
@@ -65,129 +66,6 @@ function dynamicTool(descriptor: OverseerToolDescriptor): CodexDynamicTool {
   );
 }
 
-const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
-// Short option clusters that take no argument (`-o`/`-O` take one); a long or
-// argument-taking option could change what runs, so it is never unwrapped.
-const SHELL_FLAG = /^-[a-np-zA-NP-Z]+$/;
-const COMMAND_FLAG = /^-[a-np-zA-NP-Z]*c[a-np-zA-NP-Z]*$/;
-const MAX_UNWRAP_DEPTH = 4;
-// What still hides the program that runs once the wrappers are off: a shell
-// `-c` anywhere, a substitution, a variable or a wrapper program in command position.
-const OPAQUE_COMMAND = [
-  /(?:^|[^\w.-])(?:sh|bash|zsh|dash|ksh|fish)(?:\s+\S+)*?\s+-[A-Za-z]*c[A-Za-z]*(?=\s|$)/,
-  /\$\(|`/,
-  /(?:^|[;&|(\n])\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:\$|(?:\S*\/)?(?:env|exec|command|builtin|xargs|sudo|doas|su|nice|nohup|time|timeout|stdbuf|ionice|chroot|watch|eval|source|\.)(?=\s|$))/,
-];
-const SHELL_OPERATOR = /[;&|<>()`$\n]/;
-const PLAIN_WORD = /^[\w@%+=:,./-]+$/;
-
-// A command line split into words, or undefined when it holds anything beyond
-// plain and quoted words (an operator, a substitution, an unclosed quote).
-function shellWords(command: string): string[] | undefined {
-  const words: string[] = [];
-  let word: string | undefined;
-  let i = 0;
-  while (i < command.length) {
-    const char = command[i];
-    if (char === ' ' || char === '\t') {
-      if (word !== undefined) words.push(word);
-      word = undefined;
-      i += 1;
-    } else if (char === "'") {
-      const close = command.indexOf("'", i + 1);
-      if (close === -1) return undefined;
-      word = (word ?? '') + command.slice(i + 1, close);
-      i = close + 1;
-    } else if (char === '"') {
-      let text = '';
-      i += 1;
-      while (i < command.length && command[i] !== '"') {
-        const next = command[i + 1] ?? '';
-        if (command[i] === '\\' && /["\\$`\n]/.test(next)) {
-          // A backslash-newline inside double quotes is a line continuation.
-          if (next !== '\n') text += next;
-          i += 2;
-          continue;
-        }
-        if (/[$`]/.test(command[i])) return undefined;
-        text += command[i];
-        i += 1;
-      }
-      if (i >= command.length) return undefined;
-      word = (word ?? '') + text;
-      i += 1;
-    } else if (char === '\\') {
-      if (i + 1 >= command.length) return undefined;
-      if (command[i + 1] !== '\n') word = (word ?? '') + command[i + 1];
-      i += 2;
-    } else if (SHELL_OPERATOR.test(char)) {
-      return undefined;
-    } else {
-      word = (word ?? '') + char;
-      i += 1;
-    }
-  }
-  if (word !== undefined) words.push(word);
-  return words;
-}
-
-// The script of `<shell> [-flags] -c '<script>'`, the form Codex runs nearly every command in.
-function shellScript(words: readonly string[]): string | undefined {
-  if (words.length < 3 || !SHELLS.has(basename(words[0]))) return undefined;
-  const flags = words.slice(1, -1);
-  return flags.every((flag) => SHELL_FLAG.test(flag)) &&
-    flags.some((flag) => COMMAND_FLAG.test(flag))
-    ? words.at(-1)
-    : undefined;
-}
-
-function quoted(word: string): string {
-  return PLAIN_WORD.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
-}
-
-/** A Codex command read for holds, floor checks and grants. */
-interface CommandReading {
-  text: string;
-  /** False when the text may still hide what runs; such a command always asks. */
-  known: boolean;
-}
-
-/**
- * A Codex command as the one string holds, floor checks and grants read: a
- * shell wrapper (string or argv) unwrapped to its script, an argv joined.
- * Undefined when there is no command to read, which callers treat as unknown.
- */
-function readCommand(command: unknown): CommandReading | undefined {
-  let current: string | undefined;
-  if (typeof command === 'string') current = command;
-  else if (
-    Array.isArray(command) &&
-    command.length > 0 &&
-    command.every((word) => typeof word === 'string')
-  ) {
-    current = shellScript(command) ?? command.map(quoted).join(' ');
-  }
-  if (current === undefined) return undefined;
-  // Unwrap nested wrappers (`bash -lc "sh -c '…'"`) a few levels deep.
-  let exhausted = true;
-  for (let depth = 0; depth < MAX_UNWRAP_DEPTH; depth += 1) {
-    const words = shellWords(current);
-    const script = words === undefined ? undefined : shellScript(words);
-    if (script === undefined) {
-      exhausted = false;
-      break;
-    }
-    current = script;
-  }
-  if (current.trim() === '') return undefined;
-  const text = current;
-  const plain = dequotedCommand(text);
-  const opaque = OPAQUE_COMMAND.some(
-    (pattern) => pattern.test(text) || pattern.test(plain)
-  );
-  return { text, known: !exhausted && !opaque };
-}
-
 /** What an approval shows the human and what the floor and hold checks read. */
 interface ApprovalView {
   input: Record<string, unknown>;
@@ -205,7 +83,7 @@ function approvalView(
   const reason =
     typeof params.reason === 'string' ? { reason: params.reason } : {};
   if (approval.method === 'item/commandExecution/requestApproval') {
-    const command = readCommand(params.command);
+    const command = readCodexCommand(params.command);
     return {
       input: {
         command: command?.text ?? params.command ?? null,
@@ -304,11 +182,10 @@ function unaskedFloorCommand(
   ) {
     return undefined;
   }
-  const command = readCommand(item.command)?.text;
-  const check =
-    command === undefined ? null : floorCheckForToolInput({ command });
+  const check = codexCommandFloor(item.command);
   if (check === null) return undefined;
-  return `Codex ran a floor command (${check}) without asking Dispatch, most likely under an allow rule in $CODEX_HOME/rules: ${command ?? ''}. The Overseer turn is stopped so you can review it.`;
+  const command = readCodexCommand(item.command)?.text ?? '';
+  return `Codex ran a floor command (${check}) without asking Dispatch, most likely under an allow rule in $CODEX_HOME/rules: ${command}. The Overseer turn is stopped so you can review it.`;
 }
 
 // One turn's approval bookkeeping: edit paths Codex announced, asks that
@@ -418,7 +295,7 @@ class ApprovalGate {
     }
     if (item.type === 'commandExecution') {
       this.opts.onToolUse?.('codex.commandExecution', {
-        command: readCommand(item.command)?.text ?? item.command,
+        command: readCodexCommand(item.command)?.text ?? item.command,
         cwd: item.cwd,
       });
       return;

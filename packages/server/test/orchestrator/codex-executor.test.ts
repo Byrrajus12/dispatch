@@ -1168,6 +1168,9 @@ describe('CodexExecutor', () => {
         afterTurn(fake) {
           fake.serverRequest(method, `session-${toolName}`, {
             reason: 'needs broader access',
+            ...(toolName === 'codex.commandExecution'
+              ? { command: "/bin/zsh -lc 'pnpm test'" }
+              : {}),
           });
         },
       });
@@ -1429,7 +1432,7 @@ function answerTo(
 // A command item's item/completed as codex-cli 0.153 sends it.
 function commandCompleted(
   id: string,
-  command: string,
+  command: unknown,
   status: 'completed' | 'failed' | 'declined'
 ): Record<string, unknown> {
   return {
@@ -1834,6 +1837,212 @@ describe('the irreversibility floor for Codex runs', () => {
     expect(harness.entries.some((entry) => entry.kind === 'system')).toBe(
       false
     );
+  });
+});
+
+describe('what a Codex run command really runs', () => {
+  // Codex runs nearly every command as `/bin/zsh -lc '<script>'`.
+  const wrapped = (script: string) => `/bin/zsh -lc '${script}'`;
+  const ask = (command: unknown, itemId = 'call-1') => ({
+    ...FORCE_PUSH_ASK,
+    itemId,
+    command,
+  });
+
+  it('asks about a command that still hides what runs instead of allowing it under bypassPermissions', async () => {
+    const hidden: Record<string, unknown> = {
+      substitution: wrapped('$(echo gh) release create v1'),
+      backticks: wrapped('`echo gh` release create v1'),
+      eval: wrapped('eval "gh release create v1"'),
+      variable: wrapped('$CMD release create v1'),
+      wrapper: wrapped('env gh release create v1'),
+      nested: `bash -c "sh -c 'zsh -c \\"bash -c \\\\\\"sh -c ls\\\\\\"\\"'"`,
+      argv: ['/bin/zsh', '-lc', 'gh release create v1'],
+    };
+    const process = scriptedProcess({
+      afterTurn(fake) {
+        fake.serverRequest(
+          'item/commandExecution/requestApproval',
+          'plain',
+          ask(wrapped('pnpm test'), 'plain')
+        );
+        for (const [id, command] of Object.entries(hidden)) {
+          fake.serverRequest(
+            'item/commandExecution/requestApproval',
+            id,
+            ask(command, id)
+          );
+        }
+      },
+    });
+    const harness = startHarness(process, undefined, undefined, {
+      permissionMode: 'bypassPermissions',
+    });
+    await waitFor(
+      () =>
+        harness.approvals.length === Object.keys(hidden).length &&
+        answerTo(process, 'plain') !== undefined
+    );
+    expect(answerTo(process, 'plain')).toEqual({ decision: 'accept' });
+    for (const id of Object.keys(hidden)) {
+      expect(answerTo(process, id)).toBeUndefined();
+    }
+    await harness.run.interrupt();
+  });
+
+  it('holds a wrapped floor command a human must decide even when its script is quoted apart', async () => {
+    const process = scriptedProcess({
+      afterTurn(fake) {
+        fake.serverRequest(
+          'item/commandExecution/requestApproval',
+          'release',
+          ask(`/bin/zsh -lc "g''h release create v1"`, 'release')
+        );
+        fake.serverRequest(
+          'item/commandExecution/requestApproval',
+          'argv',
+          ask(['/bin/zsh', '-lc', 'npm publish'], 'argv')
+        );
+      },
+    });
+    const harness = startHarness(process, undefined, undefined, {
+      permissionMode: 'bypassPermissions',
+    });
+    await waitFor(() => harness.approvals.length === 2);
+    expect(answerTo(process, 'release')).toBeUndefined();
+    expect(answerTo(process, 'argv')).toBeUndefined();
+    // Both asks carried a floor command, so running them is not a bypass.
+    for (const approval of harness.approvals) {
+      harness.run.approve(approval.requestId, { allow: true });
+    }
+    process.notify(
+      'item/completed',
+      commandCompleted(
+        'release',
+        `/bin/zsh -lc "g''h release create v1"`,
+        'completed'
+      )
+    );
+    process.notify(
+      'item/completed',
+      commandCompleted('argv', ['/bin/zsh', '-lc', 'npm publish'], 'completed')
+    );
+    process.notify('turn/completed', TURN_COMPLETED);
+    await waitFor(() => harness.finishes.length === 1);
+    expect(harness.finishes[0]?.state).toBe('finished');
+  });
+
+  it('stops a run whose wrapped argv floor command ran without asking Dispatch', async () => {
+    const process = scriptedProcess({
+      afterTurn(fake) {
+        fake.notify(
+          'item/completed',
+          commandCompleted(
+            'call-9',
+            ['/bin/zsh', '-lc', 'gh release create v1'],
+            'completed'
+          )
+        );
+        fake.notify('turn/completed', TURN_COMPLETED);
+      },
+    });
+    const harness = startHarness(process);
+    await waitFor(() => harness.finishes.length === 1);
+    expect(harness.finishes[0]?.state).toBe('failed');
+    expect(harness.finishes[0]?.error).toContain('gh release create v1');
+  });
+
+  it('stops a run that types a quoted-apart floor command into a shell', async () => {
+    const process = scriptedProcess({
+      afterTurn(fake) {
+        fake.serverRequest(
+          'item/commandExecution/requestApproval',
+          'shell',
+          ask('/bin/zsh -lc bash', 'call-1')
+        );
+      },
+    });
+    const harness = startHarness(process);
+    await waitFor(() => harness.approvals.length === 1);
+    harness.run.approve(harness.approvals[0]?.requestId ?? '', { allow: true });
+    process.notify(
+      'item/commandExecution/terminalInteraction',
+      typed('g""h release create v1\n')
+    );
+    await waitFor(() => harness.finishes.length === 1);
+    expect(harness.finishes[0]?.state).toBe('failed');
+    expect(harness.finishes[0]?.error).toContain('publish');
+  });
+
+  it('never lets a session-wide answer cover a floor command or one it cannot read', async () => {
+    const process = scriptedProcess({
+      afterTurn(fake) {
+        fake.serverRequest(
+          'item/commandExecution/requestApproval',
+          'tests',
+          ask(wrapped('pnpm test'), 'tests')
+        );
+        fake.serverRequest(
+          'item/commandExecution/requestApproval',
+          'release',
+          ask(wrapped('gh release create v1'), 'release')
+        );
+        fake.serverRequest(
+          'item/commandExecution/requestApproval',
+          'hidden',
+          ask(wrapped('$(echo rm) -rf build'), 'hidden')
+        );
+        fake.serverRequest(
+          'item/commandExecution/requestApproval',
+          'blind',
+          ask(null, 'blind')
+        );
+      },
+    });
+    const harness = startHarness(process);
+    await waitFor(() => harness.approvals.length === 4);
+    for (const approval of harness.approvals) {
+      harness.run.approve(approval.requestId, {
+        allow: true,
+        scope: 'session',
+      });
+    }
+    await waitFor(() => answerTo(process, 'blind') !== undefined);
+    // Codex keeps a session answer for that exact command only.
+    expect(answerTo(process, 'tests')).toEqual({
+      decision: 'acceptForSession',
+    });
+    expect(answerTo(process, 'release')).toEqual({ decision: 'accept' });
+    expect(answerTo(process, 'hidden')).toEqual({ decision: 'accept' });
+    expect(answerTo(process, 'blind')).toEqual({ decision: 'accept' });
+    await harness.run.interrupt();
+  });
+
+  it('still asks Dispatch about a different wrapped command after a session answer', async () => {
+    const process = scriptedProcess({
+      afterTurn(fake) {
+        fake.serverRequest(
+          'item/commandExecution/requestApproval',
+          'first',
+          ask(wrapped('ls'), 'first')
+        );
+      },
+    });
+    const harness = startHarness(process);
+    await waitFor(() => harness.approvals.length === 1);
+    harness.run.approve(harness.approvals[0]?.requestId ?? '', {
+      allow: true,
+      scope: 'session',
+    });
+    await waitFor(() => answerTo(process, 'first') !== undefined);
+    process.serverRequest(
+      'item/commandExecution/requestApproval',
+      'second',
+      ask(wrapped('rm -rf build'), 'second')
+    );
+    await waitFor(() => harness.approvals.length === 2);
+    expect(answerTo(process, 'second')).toBeUndefined();
+    await harness.run.interrupt();
   });
 });
 

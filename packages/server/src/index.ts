@@ -130,6 +130,7 @@ import {
 import type { Messaging } from './messaging/service.js';
 import { openMessaging } from './messaging/service.js';
 import { NoteStore } from './notes.js';
+import { codexApprovalNeedsHuman } from './orchestrator/codexCommand.js';
 import { EpicEngine } from './orchestrator/epic.js';
 import { ClaudeExecutor } from './orchestrator/executors/claude.js';
 import { CliExecutor } from './orchestrator/executors/cli.js';
@@ -2232,9 +2233,11 @@ async function bootServer(
   // The irreversibility floor's answer for the approval gate (floor.ts): a
   // force-push, a registry publish, a release-tag push or a repo-settings
   // change is never auto-allowed, at any rung. Any tool whose input carries a
-  // shell command is covered, so the tool's name is not what decides.
-  const approvalFloor: ApprovalFloor = (_toolName, input) =>
-    floorCheckForToolInput(input) !== null;
+  // shell command is covered, so the tool's name is not what decides. A Codex
+  // command whose script cannot be read is never auto-allowed either.
+  const approvalFloor: ApprovalFloor = (toolName, input) =>
+    floorCheckForToolInput(input) !== null ||
+    codexApprovalNeedsHuman(toolName, input);
 
   // Chromium instances the daemon drives. Nothing is launched at boot; this
   // only holds the ones a request asks for, so shutdown can kill them.
