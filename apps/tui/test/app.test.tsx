@@ -256,3 +256,36 @@ test('i, typing and enter send the message to the open conversation', async () =
   await frame();
   expect(sent.map((m) => m.text)).toEqual(['add a test']);
 });
+
+test('with the fake backend on, a new conversation asks dispatchd for it', async () => {
+  const started: { backend?: string }[] = [];
+  const { client } = fakeClient({
+    currentOverseer: () => Promise.resolve({ conversation: null }),
+    startOverseer: (_prompt: string, opts: { backend?: string }) => {
+      started.push(opts);
+      return Promise.resolve(record);
+    },
+  });
+  const t = await testRender(
+    <TuiRoot
+      client={client}
+      port={PORT}
+      root="/repo/storefront"
+      storage={memoryStorage()}
+      fakeBackend
+      onQuit={() => {}}
+    />,
+    { width: 120, height: 40 }
+  );
+  destroy = () => t.renderer.destroy();
+  await settle();
+  t.mockInput.pressKey('i');
+  await settle();
+  await t.mockInput.typeText('hello');
+  t.mockInput.pressEnter();
+  for (let i = 0; i < 5; i++) {
+    await settle();
+    await t.renderOnce();
+  }
+  expect(started[0]?.backend).toBe('fake');
+});

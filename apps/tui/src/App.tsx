@@ -31,6 +31,8 @@ export interface TuiProps {
   port: number;
   root: string;
   storage: KeyValueStore;
+  /** Opens new conversations on dispatchd's scripted fake backend (dev and demos). */
+  fakeBackend?: boolean;
   onQuit: () => void;
 }
 
@@ -51,8 +53,18 @@ function toKey(event: KeyEvent): Key {
 }
 
 /** The TUI shell: header, the current view, the status line, and one keyboard handler. */
-function App({ client, port, root, storage, onQuit }: TuiProps) {
-  const options = useMemo(() => ({ storage }), [storage]);
+function App({
+  client,
+  port,
+  root,
+  storage,
+  fakeBackend = false,
+  onQuit,
+}: TuiProps) {
+  const options = useMemo(
+    () => ({ storage, fakeBackend: () => fakeBackend }),
+    [storage, fakeBackend]
+  );
   const session = useOverseerSession(
     client,
     port,
