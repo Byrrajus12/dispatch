@@ -1,8 +1,13 @@
-import type { CreateInput, Priority } from '@dispatch-foo/core/browser';
+import {
+  type CreateInput,
+  type Priority,
+  providerById,
+} from '@dispatch-foo/core/browser';
 import type { DraftRecord } from '@dispatch/client';
 import { Plus, Sparkles, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
+import { FailureNotice } from '../components/failure/FailureNotice';
 import { PlanQuestionsForm } from '../components/plans/PlanQuestionsForm';
 import {
   EpicControl,
@@ -42,6 +47,8 @@ interface DraftViewProps {
    * notifications, history restore, and the tray can all land here mid-turn. */
   draft: DraftRecord;
   onDone: () => void;
+  /** A failed draft's Try again: a fresh draft from the same sentence. */
+  onRetry?: () => Promise<void>;
 }
 
 /** A settled AI task draft's review page on the issue-page grammar (§8): the task title is the
@@ -54,6 +61,7 @@ export function DraftView({
   onCreate,
   draft,
   onDone,
+  onRetry,
 }: DraftViewProps) {
   const proposal = draft.proposal;
   const task = proposal?.tasks[0];
@@ -216,6 +224,14 @@ export function DraftView({
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1 overflow-y-auto px-10 py-6">
           <div className="mx-auto flex w-full max-w-[800px] flex-col gap-4">
+            {draft.state === 'failed' && (
+              <FailureNotice
+                error={draft.error ?? 'Drafting the task failed.'}
+                providerId={providerById(draft.plannerName)?.id}
+                onRetry={onRetry}
+              />
+            )}
+
             {draft.questions.length > 0 && (
               <PlanQuestionsForm
                 questions={draft.questions}
@@ -230,7 +246,9 @@ export function DraftView({
               <p className="font-book text-muted-foreground text-[13px]">
                 {draft.questions.length > 0
                   ? 'Answer the question above to get a proposed task.'
-                  : 'No proposed task yet.'}
+                  : draft.state === 'failed'
+                    ? null
+                    : 'No proposed task yet.'}
               </p>
             ) : (
               <>

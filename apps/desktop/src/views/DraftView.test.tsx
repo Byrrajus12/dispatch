@@ -35,10 +35,12 @@ function mount({
   draft = draftRecord(),
   projectName,
   onCreate = () => Promise.resolve(),
+  onRetry,
 }: {
   draft?: DraftRecord;
   projectName?: string;
   onCreate?: (input: CreateInput) => Promise<void>;
+  onRetry?: () => Promise<void>;
 } = {}) {
   const dismissed: string[] = [];
   let done = 0;
@@ -61,6 +63,7 @@ function mount({
         created.push(input);
         return onCreate(input);
       }}
+      onRetry={onRetry}
       onDone={() => {
         done += 1;
       }}
@@ -181,4 +184,35 @@ test('without a proposal there is no rail and Create task is disabled', () => {
     screen.getByRole<HTMLButtonElement>('button', { name: 'Create task' })
       .disabled
   ).toBe(true);
+});
+
+test("a draft that failed says why instead of 'No proposed task yet'", () => {
+  mount({
+    draft: draftRecord({
+      state: 'failed',
+      proposal: null,
+      plannerName: 'claude',
+      error:
+        'Claude Code CLI not found. Install it and re-dispatch — `curl -fsSL https://claude.ai/install.sh | bash`',
+    }),
+  });
+  expect(
+    screen.getByText("Claude Code isn't installed, or Dispatch can't find it.")
+  ).toBeTruthy();
+  expect(screen.queryByText('No proposed task yet.')).toBeNull();
+});
+
+test('a failed draft offers Try again', async () => {
+  let retried = 0;
+  mount({
+    draft: draftRecord({ state: 'failed', proposal: null, error: 'boom' }),
+    onRetry: () => {
+      retried += 1;
+      return Promise.resolve();
+    },
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+  });
+  expect(retried).toBe(1);
 });

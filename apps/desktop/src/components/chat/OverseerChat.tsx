@@ -1,3 +1,4 @@
+import { providerById } from '@dispatch-foo/core/browser';
 import type { OverseerAction, OverseerApproval } from '@dispatch/client';
 import {
   Check,
@@ -32,6 +33,7 @@ import {
   type OverseerStreamItem,
 } from '../../lib/overseerThread';
 import { slashSuggestions } from '../../lib/slashCommands';
+import { askAgentToFix, FailureNotice } from '../failure/FailureNotice';
 import { Markdown } from '../runs/Markdown';
 import { cn } from '@/lib/utils';
 import { IconButton, type IconButtonProps } from '@/ui/ai/icon-button';
@@ -740,6 +742,12 @@ export function OverseerChat({
     void overseer.decideApproval(requestId, decision);
   }
 
+  // A failed turn's fixes: re-send the last ask, or hand the error to the agent.
+  const overseerProvider = providerById(overseer.record?.backendName ?? '')?.id;
+  const lastAsk = overseer.record?.messages
+    .filter((m) => m.role === 'user')
+    .at(-1)?.text;
+
   function renderRow(item: OverseerStreamItem) {
     switch (item.kind) {
       case 'message':
@@ -829,7 +837,16 @@ export function OverseerChat({
       case 'failed':
         return (
           <div key={item.key} className="self-start">
-            <ErrorLine>{item.error}</ErrorLine>
+            <FailureNotice
+              error={item.error}
+              providerId={overseerProvider}
+              onRetry={
+                lastAsk === undefined
+                  ? undefined
+                  : () => overseer.reply(lastAsk)
+              }
+              onAskAgent={() => overseer.reply(askAgentToFix(item.error))}
+            />
           </div>
         );
       case 'notice':

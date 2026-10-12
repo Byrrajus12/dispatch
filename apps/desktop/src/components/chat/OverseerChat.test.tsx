@@ -4,6 +4,7 @@ import { expect, test } from 'bun:test';
 import { useState } from 'react';
 
 import type { OverseerSession } from '../../hooks/useOverseerSession';
+import { askAgentToFix } from '../failure/FailureNotice';
 import { OverseerChat } from './OverseerChat';
 
 // The same fixture shapes overseerThread.test.ts builds; the component's whole
@@ -1008,4 +1009,53 @@ test('an edit the turn beat says so on the error line', () => {
     />
   );
   expect(screen.getByText(/already sent/)).toBeDefined();
+});
+
+test('a failed Overseer turn explains a sign-in problem', () => {
+  render(
+    <OverseerChat
+      overseer={overseerSession({
+        conversationId: 'w-1',
+        record: overseerRecord({
+          state: 'failed',
+          backendName: 'claude',
+          error: 'Invalid API key · Please run /login',
+        }),
+      })}
+    />
+  );
+  expect(
+    screen.getByText('Claude Code needs you to sign in again.')
+  ).toBeTruthy();
+});
+
+test('a failed Overseer turn can be retried or handed back to the agent', async () => {
+  const replies: string[] = [];
+  render(
+    <OverseerChat
+      overseer={overseerSession({
+        conversationId: 'w-1',
+        reply: (text) => {
+          replies.push(text);
+          return Promise.resolve();
+        },
+        record: overseerRecord({
+          state: 'failed',
+          error: 'TypeError: boom',
+          messages: [
+            {
+              role: 'user',
+              text: 'what needs me?',
+              at: '2026-08-10T00:00:01Z',
+            },
+          ],
+        }),
+      })}
+    />
+  );
+  await clickAndSettle(screen.getByRole('button', { name: 'Try again' }));
+  await clickAndSettle(
+    screen.getByRole('button', { name: 'Ask the agent to fix it' })
+  );
+  expect(replies).toEqual(['what needs me?', askAgentToFix('TypeError: boom')]);
 });
