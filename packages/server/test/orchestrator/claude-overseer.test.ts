@@ -413,6 +413,19 @@ describe('ClaudeOverseer session wiring', () => {
     );
   });
 
+  it('fails a turn the signed-out CLI reports as an error success', async () => {
+    const { toolset } = stubToolset();
+    await expect(
+      runTurn(
+        successStream({
+          is_error: true,
+          result: 'Not logged in · Please run /login',
+        }),
+        toolset
+      )
+    ).rejects.toThrow('Not logged in · Please run /login');
+  });
+
   it('rewrites the SDK missing-CLI error into an install hint', async () => {
     const { toolset } = stubToolset();
     const queryFn = () => {

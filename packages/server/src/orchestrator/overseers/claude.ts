@@ -288,6 +288,11 @@ export class ClaudeOverseer implements OverseerBackend {
         if (message.subtype !== 'success') {
           throw new Error(`overseer turn failed: ${message.subtype}`);
         }
+        // Signed out or rate limited still reports `success`; the reason is the result text.
+        if (message.is_error) {
+          const detail = message.result.trim();
+          throw new Error(detail === '' ? 'overseer turn failed' : detail);
+        }
         const reply = message.result.trim();
         return {
           reply: reply === '' ? EMPTY_REPLY_MESSAGE : reply,

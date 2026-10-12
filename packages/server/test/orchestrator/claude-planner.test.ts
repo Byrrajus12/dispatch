@@ -178,6 +178,29 @@ describe('ClaudePlanner.start', () => {
     expect(calls).toBe(2);
   });
 
+  it('rejects with the CLI text when a signed-out turn reports an error success', async () => {
+    let calls = 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    function* fakeMessages(): Generator<any> {
+      yield {
+        type: 'result',
+        subtype: 'success',
+        is_error: true,
+        result: 'Not logged in · Please run /login',
+      };
+    }
+    const fakeQueryFn = () => {
+      calls += 1;
+      return fakeMessages() as unknown as Query;
+    };
+    const planner = new ClaudePlanner('/tmp/does-not-matter', fakeQueryFn);
+
+    await expect(planner.start('build the thing')).rejects.toThrow(
+      'Not logged in · Please run /login'
+    );
+    expect(calls).toBe(1);
+  });
+
   it('rejects when the stream ends with no result message at all', async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     function* fakeMessages(): Generator<any> {

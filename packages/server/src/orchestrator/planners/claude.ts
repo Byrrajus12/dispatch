@@ -146,6 +146,12 @@ export class ClaudePlanner implements Planner {
             }`
           );
         }
+        // A signed-out or rate-limited CLI still reports `success`, with the
+        // reason in `result` ("Not logged in · Please run /login").
+        if (message.is_error) {
+          const detail = message.result.trim();
+          throw new Error(detail === '' ? 'planner failed' : detail);
+        }
         if (message.structured_output === undefined) return null;
         const output = message.structured_output as PlannerTurnOutput;
         return {
