@@ -158,6 +158,29 @@ export function worktreePath(rootDir: string, runId: string): string {
   return join(worktreesDir(rootDir), runId);
 }
 
+// One cargo target directory shared by every run of this project. Each run
+// is a fresh worktree with no `target/`, so without this every `cargo build`
+// or `cargo test` an agent or verify step runs is a cold build of the whole
+// dependency graph — for a Bevy or Tauri crate that is several hundred
+// crates and gigabytes of compiler memory, once per run, times however many runs
+// are live. Sharing the directory lets later runs reuse compiled dependencies,
+// and cargo's lock on the build directory makes concurrent runs build one at
+// a time instead of each launching a full set of compiler jobs at once.
+export function cargoTargetDir(rootDir: string): string {
+  return join(dispatchHome(), '.dispatch', 'cargo-target', rootHash(rootDir));
+}
+
+// Points CARGO_TARGET_DIR at `cargoTargetDir` for everything this daemon
+// spawns (executors, verify steps), which all inherit its environment. A
+// value the user already set wins, so a deliberate choice is never undone.
+export function shareCargoTargetDir(
+  rootDir: string,
+  env: Record<string, string | undefined> = process.env
+): void {
+  if ((env.CARGO_TARGET_DIR ?? '') !== '') return;
+  env.CARGO_TARGET_DIR = cargoTargetDir(rootDir);
+}
+
 /**
  * Where a project's git receipt log lives by default — the audit trail the
  * daemon exports OUTSIDE the project repo, so ledger and finding churn stops
