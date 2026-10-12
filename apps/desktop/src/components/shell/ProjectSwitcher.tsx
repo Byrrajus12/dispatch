@@ -2,6 +2,7 @@ import {
   ChevronDown,
   Cog,
   FolderGit2,
+  LifeBuoy,
   LogOut,
   Palette,
   Plus,
@@ -13,7 +14,9 @@ import { InitialsAvatar } from '@/ui/ai/initials-avatar';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuSub,
@@ -44,6 +47,8 @@ interface ProjectSwitcherProps {
   onOpenSettings: () => void;
   /** Dev-only; omitted in a production build. */
   onOpenGallery?: () => void;
+  /** Help: brings the first-task guide back for this project. */
+  onRestartGuide?: () => void;
   /** Set only for a teammate on a team-local daemon: who they are signed in
    *  as, and how to stop. Someone at their own machine has no session to end. */
   teamSession?: { handle: string; onSignOut: () => void };
@@ -70,6 +75,7 @@ export function ProjectSwitcher({
   onAddProject,
   onOpenSettings,
   onOpenGallery,
+  onRestartGuide,
   teamSession,
 }: ProjectSwitcherProps) {
   if (projectName === null) {
@@ -157,6 +163,18 @@ export function ProjectSwitcher({
               <Palette />
               Gallery
             </DropdownMenuItem>
+          </>
+        )}
+        {onRestartGuide !== undefined && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>Help</DropdownMenuLabel>
+              <DropdownMenuItem onClick={onRestartGuide}>
+                <LifeBuoy />
+                Restart the guide
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
           </>
         )}
         <DropdownMenuSeparator />

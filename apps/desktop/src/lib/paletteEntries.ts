@@ -57,6 +57,8 @@ export interface PaletteEntriesContext {
     openSavedView?: (id: string) => void;
     /** Copies the task's `dispatch://` link. */
     copyTaskLink?: (taskId: string) => void;
+    /** Brings the first-task guide back for the active project. */
+    restartGuide?: () => void;
   };
 }
 
@@ -137,6 +139,16 @@ export function buildPaletteEntries(
     shortcut: '?',
     run: actions.openShortcuts,
   });
+  const { restartGuide } = actions;
+  if (ctx.hasProject && restartGuide !== undefined) {
+    entries.push({
+      id: 'action-restart-guide',
+      label: 'Restart the first-task guide',
+      kind: 'help',
+      section: 'actions',
+      run: restartGuide,
+    });
+  }
 
   entries.push(
     {
