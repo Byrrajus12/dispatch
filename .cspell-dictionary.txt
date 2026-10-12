@@ -476,6 +476,7 @@ rustls
 rustup
 sandboxing
 satteri
+scrollbox
 sslip
 subshell
 Sätteri

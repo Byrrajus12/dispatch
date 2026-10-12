@@ -2,7 +2,7 @@
 // without a terminal; the App only maps OpenTUI key events in and side effects out.
 
 export type View = 'overseer' | 'tasks' | 'runs';
-export type Pane = 'in' | 'conversation' | 'out' | 'list';
+type Pane = 'in' | 'conversation' | 'out' | 'list';
 type ListName = 'in' | 'out' | 'list';
 
 export interface NavState {
