@@ -697,6 +697,18 @@ test('an empty filter result shows the no-match empty state', () => {
   expect(screen.getByText('No tasks match')).not.toBeNull();
 });
 
+test('a project with no tasks says so instead of blaming a filter', () => {
+  const Shell = shellWith(shellLog());
+  render(
+    <Shell>
+      <TasksListView data={dataWith([])} onSelectTask={() => {}} />
+    </Shell>
+  );
+
+  expect(screen.getByText('No tasks yet')).not.toBeNull();
+  expect(screen.queryByText('No tasks match')).toBeNull();
+});
+
 // 2000 tasks under status headers: the grid mounts a screenful, and j/k walk it by
 // scrolling the focused row in rather than rendering everything.
 const MANY = Array.from({ length: 2000 }, (_, i) =>

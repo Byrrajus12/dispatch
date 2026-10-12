@@ -12,6 +12,7 @@ import {
   Copy,
   Eye,
   Link2,
+  ListTodo,
   Milestone,
   Play,
   SearchX,
@@ -415,12 +416,21 @@ export function TasksListView({
           headers (and their chevrons) in place. */}
       {groups.length === 0 ? (
         <>
-          <EmptyState
-            icon={SearchX}
-            heading="No tasks match"
-            description="Nothing passes the current filter. Clear it to see the project's tasks."
-            className="flex-1"
-          />
+          {data.tasks.length === 0 && data.epics.length === 0 ? (
+            <EmptyState
+              icon={ListTodo}
+              heading="No tasks yet"
+              description="Describe a change to the Overseer, or press New task."
+              className="flex-1"
+            />
+          ) : (
+            <EmptyState
+              icon={SearchX}
+              heading="No tasks match"
+              description="Nothing passes the current filter. Clear it to see the project's tasks."
+              className="flex-1"
+            />
+          )}
           {footer}
         </>
       ) : (
