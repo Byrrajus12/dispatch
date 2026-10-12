@@ -5,7 +5,13 @@ import {
   backendModel,
   isClaudeModelId,
   pickAgentBackend,
+  registerCodexOverseer,
+  registerCodexPlanner,
 } from '../../src/orchestrator/agentBackends.js';
+import type { OverseerBackend } from '../../src/orchestrator/overseerBackend.js';
+import { CodexOverseer } from '../../src/orchestrator/overseers/codex.js';
+import type { Planner } from '../../src/orchestrator/planner.js';
+import { CodexPlanner } from '../../src/orchestrator/planners/codex.js';
 
 describe('pickAgentBackend', () => {
   it("uses the default agent's backend when it has one", () => {
@@ -91,5 +97,46 @@ describe('backendModel', () => {
         'claude-sonnet-5-5'
       )
     ).toBeUndefined();
+  });
+});
+
+describe('registerCodexPlanner / registerCodexOverseer', () => {
+  it('registers Codex once, and only when it is installed', () => {
+    const planners = new Map<string, Planner>();
+    const planRegistry = {
+      registerPlanner: (name: string, planner: Planner) => {
+        planners.set(name, planner);
+      },
+      registeredPlannerNames: () => [...planners.keys()],
+    };
+    expect(registerCodexPlanner(planRegistry, '/repo', () => false)).toBe(
+      false
+    );
+    expect(planners.size).toBe(0);
+    expect(registerCodexPlanner(planRegistry, '/repo', () => true)).toBe(true);
+    const first = planners.get('codex');
+    expect(first).toBeInstanceOf(CodexPlanner);
+    expect(registerCodexPlanner(planRegistry, '/repo', () => true)).toBe(false);
+    expect(planners.get('codex')).toBe(first);
+
+    const backends = new Map<string, OverseerBackend>();
+    const overseerRegistry = {
+      registerBackend: (name: string, backend: OverseerBackend) => {
+        backends.set(name, backend);
+      },
+      registeredBackendNames: () => [...backends.keys()],
+    };
+    expect(registerCodexOverseer(overseerRegistry, '/repo', () => false)).toBe(
+      false
+    );
+    expect(registerCodexOverseer(overseerRegistry, '/repo', () => true)).toBe(
+      true
+    );
+    expect(backends.get('codex')).toBeInstanceOf(CodexOverseer);
+    const firstOverseer = backends.get('codex');
+    expect(registerCodexOverseer(overseerRegistry, '/repo', () => true)).toBe(
+      false
+    );
+    expect(backends.get('codex')).toBe(firstOverseer);
   });
 });

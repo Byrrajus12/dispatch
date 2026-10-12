@@ -20,6 +20,10 @@ import {
   resolveStoreBackend,
   startServer,
 } from './index.js';
+import {
+  registerCodexOverseer,
+  registerCodexPlanner,
+} from './orchestrator/agentBackends.js';
 import { ClaudeExecutor } from './orchestrator/executors/claude.js';
 import type { FakeExecutorScript } from './orchestrator/executors/fake.js';
 import { FakeExecutor } from './orchestrator/executors/fake.js';
@@ -565,6 +569,7 @@ const serverOpts: Parameters<typeof startServer>[0] = {
   registerPlanners: enableFakes
     ? (planManager) => {
         planManager.registerPlanner('claude', new ClaudePlanner(rootDir));
+        registerCodexPlanner(planManager, rootDir);
         planManager.registerPlanner(
           'fake',
           new FakePlanner({ ok: true, proposal: DEFAULT_FAKE_PROPOSAL })
@@ -577,6 +582,7 @@ const serverOpts: Parameters<typeof startServer>[0] = {
   registerOverseers: enableFakes
     ? (overseerManager) => {
         overseerManager.registerBackend('claude', new ClaudeOverseer(rootDir));
+        registerCodexOverseer(overseerManager, rootDir);
         overseerManager.registerBackend(
           'fake',
           new FakeOverseer(buildDefaultFakeOverseerScript())

@@ -169,6 +169,25 @@ describe('/api/setup', () => {
     }
   });
 
+  it('refresh brings up Codex drafting once codex is installed', async () => {
+    const bin = mkdtempSync(join(tmpdir(), 'dispatch-setup-bin-'));
+    const originalPath = process.env.PATH;
+    try {
+      writeFileSync(join(bin, 'codex'), '#!/bin/sh\nexit 0\n');
+      chmodSync(join(bin, 'codex'), 0o755);
+      process.env.PATH = `${bin}:${originalPath ?? ''}`;
+      expect((await post('/api/setup/refresh', {})).status).toBe(200);
+      expect((await post('/api/setup/refresh', {})).status).toBe(200);
+
+      const res = await post('/api/plan', { prompt: 'x', planner: 'nope' });
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(await res.json())).toContain('codex');
+    } finally {
+      process.env.PATH = originalPath;
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
   it('refuses the agent token on both writes', async () => {
     const asAgent = (path: string, body: unknown) =>
       rawFetch(`${baseUrl}${path}`, {
