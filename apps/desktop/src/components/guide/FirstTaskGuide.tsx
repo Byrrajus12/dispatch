@@ -360,7 +360,6 @@ function LandBody({ view, actions }: BodyProps) {
             disabled={busy}
             onClick={() => setConfirming(true)}
           >
-            {busy && <Spinner className="size-3.5" />}
             Start over
           </Button>
         </div>
@@ -443,7 +442,7 @@ export function FirstTaskGuide({
     ? 'Done'
     : `Step ${index + 1} of ${GUIDE_STEPS.length}: ${GUIDE_STEPS[index]?.label ?? ''}`;
   return (
-    <Panel className="bg-background shadow-overlay w-80">
+    <Panel className="bg-background shadow-overlay w-80 max-w-full">
       <section
         aria-label="First-task guide"
         data-testid="first-task-guide"

@@ -15,7 +15,7 @@ export interface TwoViewShellProps {
   tasks: ReactNode;
   /** A drawer over either view; it never changes the view underneath. */
   peek: ReactNode;
-  /** The first-task guide card, floating over either view; hidden while a gate is up. */
+  /** The first-task guide card, floating over either view; hidden under a gate or a peek. */
   guide?: ReactNode;
 }
 
@@ -48,10 +48,10 @@ export function TwoViewShell({
                 {tasks}
               </Activity>
               {peek}
-              {guide !== undefined && guide !== null && (
+              {guide !== undefined && guide !== null && peek === null && (
                 <div
                   data-testid="first-task-guide-slot"
-                  className="absolute right-3 bottom-16 z-30"
+                  className="absolute right-3 bottom-16 z-30 max-w-[calc(100%-24px)]"
                 >
                   {guide}
                 </div>

@@ -446,8 +446,6 @@ export interface DispatchProjectData {
    * connection — readiness, not an in-flight flag, since `isLoading` is false for a query
    * that is merely disabled (no daemon client yet). The deep-link router waits on this. */
   tasksReady: boolean;
-  /** When the task list last arrived (its query's `dataUpdatedAt`), 0 before it ever has. */
-  tasksFetchedAt: number;
   // Task 8 fix: the same task list as `tasks`, but including archived tasks
   // (`fetchTaskList({ archived: true })`) — feed this, not `tasks`, to
   // countMergeReady, or an archived done own-task/blocker will be missing
@@ -1037,7 +1035,6 @@ export function useDispatchProject(
     data: listedTasks,
     isLoading: tasksLoading,
     isFetched: allTasksFetched,
-    dataUpdatedAt: tasksFetchedAt,
   } = useQuery({
     queryKey: tasksQueryKey,
     queryFn: () => {
@@ -3237,7 +3234,6 @@ export function useDispatchProject(
       tasks: tasks ?? [],
       tasksLoading,
       tasksReady: tasks !== undefined && allTasksFetched,
-      tasksFetchedAt,
       tasksIncludingArchived: allTasksIncludingArchived ?? [],
       archivedTasks,
       showArchived,
@@ -3388,7 +3384,6 @@ export function useDispatchProject(
       tasks,
       tasksLoading,
       allTasksFetched,
-      tasksFetchedAt,
       allTasksIncludingArchived,
       archivedTasks,
       showArchived,

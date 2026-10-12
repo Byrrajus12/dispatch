@@ -25,7 +25,7 @@ const topBar: TwoViewTopBarProps = {
   trafficLightInset: false,
 };
 
-function shell(gate: ReactNode | null) {
+function shell(gate: ReactNode | null, peek: ReactNode = null) {
   return (
     <TwoViewShell
       topBar={topBar}
@@ -33,7 +33,7 @@ function shell(gate: ReactNode | null) {
       gate={gate}
       overseer={<p>overseer</p>}
       tasks={<p>tasks</p>}
-      peek={null}
+      peek={peek}
       guide={<p>guide card</p>}
     />
   );
@@ -46,4 +46,11 @@ test('the guide floats over the views and gives way to a gate screen', () => {
   );
   rerender(shell(<p>setup</p>));
   expect(screen.queryByTestId('first-task-guide-slot')).toBeNull();
+});
+
+test('the guide steps aside while a peek drawer is open', () => {
+  const { rerender } = render(shell(null, <aside>peek</aside>));
+  expect(screen.queryByTestId('first-task-guide-slot')).toBeNull();
+  rerender(shell(null));
+  expect(screen.getByTestId('first-task-guide-slot')).toBeTruthy();
 });

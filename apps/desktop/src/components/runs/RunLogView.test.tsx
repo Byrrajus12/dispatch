@@ -666,10 +666,12 @@ test('a resumable failed run can ask its agent to fix the failure', async () => 
     sent.push(text);
     return Promise.resolve();
   });
-  await act(async () => {
+  // An async act, so the click's settled promise flushes inside it.
+  await act(() => {
     fireEvent.click(
       screen.getByRole('button', { name: 'Ask the agent to fix it' })
     );
+    return Promise.resolve();
   });
   expect(sent).toEqual([askAgentToFix(error)]);
 });

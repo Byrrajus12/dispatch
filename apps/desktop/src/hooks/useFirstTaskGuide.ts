@@ -1,5 +1,12 @@
 import type { DraftRecord, RunMeta } from '@dispatch/client';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type QueryKey, useQueryClient } from '@tanstack/react-query';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 
 import {
   deriveGuideStage,
@@ -141,10 +148,10 @@ export function useFirstTaskGuide({
 interface TaskListState {
   /** The list has loaded for the current connection. */
   ready: boolean;
-  /** When the list last arrived (the query's `dataUpdatedAt`); 0 before it ever has. */
-  fetchedAt: number;
   /** Tasks in it, archived included. */
   count: number;
+  /** The task list's query key; when it last arrived is read from the query cache. */
+  queryKey: QueryKey;
 }
 
 /**
@@ -153,8 +160,11 @@ interface TaskListState {
  */
 export function useFreshEmptyProject(
   projectPath: string | null,
-  list: TaskListState
+  { ready, count, queryKey }: TaskListState
 ): boolean {
+  const queryClient = useQueryClient();
+  const fetchedAt = () =>
+    queryClient.getQueryState(queryKey)?.dataUpdatedAt ?? 0;
   // The last project seen and the fetch time on screen when it arrived; -1 trusts any list,
   // as nothing came before it. A pass through no project still counts as a switch.
   const [seen, setSeen] = useState({ path: projectPath, fetchedAt: -1 });
@@ -162,14 +172,19 @@ export function useFreshEmptyProject(
   if (projectPath !== null && seen.path !== projectPath) {
     current = {
       path: projectPath,
-      fetchedAt: seen.path === null ? -1 : list.fetchedAt,
+      fetchedAt: seen.path === null ? -1 : fetchedAt(),
     };
     setSeen(current);
   }
-  return (
-    projectPath !== null &&
-    list.ready &&
-    list.fetchedAt !== current.fetchedAt &&
-    list.count === 0
+  const captured = current.fetchedAt;
+  // A boolean snapshot, so a refetch re-renders the caller only when the answer flips.
+  const subscribe = useCallback(
+    (onChange: () => void) => queryClient.getQueryCache().subscribe(onChange),
+    [queryClient]
   );
+  const arrivedSince = useSyncExternalStore(
+    subscribe,
+    () => captured === -1 || fetchedAt() !== captured
+  );
+  return projectPath !== null && ready && arrivedSince && count === 0;
 }

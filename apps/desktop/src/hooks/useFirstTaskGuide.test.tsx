@@ -1,6 +1,8 @@
 import type { DraftRecord, RunMeta } from '@dispatch/client';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, expect, test } from 'bun:test';
+import type { ReactNode } from 'react';
 
 import { readGuide } from '../lib/firstTaskGuide';
 import { useFirstTaskGuide, useFreshEmptyProject } from './useFirstTaskGuide';
@@ -184,70 +186,110 @@ test('Start over sets the pull request run aside and goes back to Check the plan
   });
 });
 
-type ListInput = Parameters<typeof useFreshEmptyProject>[1];
-const list = (over: Partial<ListInput> = {}): ListInput => ({
-  ready: true,
-  fetchedAt: 100,
-  count: 0,
-  ...over,
-});
+// Each project's task list under one key, as when a daemon port is reused: what the hook
+// must tell apart is a list that arrived before the switch from one that arrived after.
+const KEY = ['dispatch-tasks', 1] as const;
+interface Step {
+  path: string | null;
+  ready: boolean;
+  count: number;
+}
+const step = (
+  path: string | null,
+  over: Partial<Omit<Step, 'path'>> = {}
+): Step => ({ path, ready: true, count: 0, ...over });
+
+function setup() {
+  const queryClient = new QueryClient();
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+  // A list arriving at time `at`, the way a fetch updates the query.
+  const arrive = (at: number) =>
+    act(() => {
+      queryClient.setQueryData(KEY, [], { updatedAt: at });
+    });
+  return { wrapper, arrive };
+}
 
 test('an empty project only counts once its own task list has loaded', () => {
+  const { wrapper, arrive } = setup();
   const { result, rerender } = renderHook(
-    ({ path, l }: { path: string | null; l: ListInput }) =>
-      useFreshEmptyProject(path, l),
-    {
-      initialProps: {
-        path: null as string | null,
-        l: list({ ready: false, fetchedAt: 0 }),
-      },
-    }
+    ({ path, ready, count }: Step) =>
+      useFreshEmptyProject(path, { ready, count, queryKey: KEY }),
+    { wrapper, initialProps: step(null, { ready: false }) }
   );
   expect(result.current).toBe(false);
   // Cold start: the first project's list loading, then loaded and empty.
-  rerender({ path: '/p/a', l: list({ ready: false, fetchedAt: 0 }) });
+  rerender(step('/p/a', { ready: false }));
   expect(result.current).toBe(false);
-  rerender({ path: '/p/a', l: list() });
+  arrive(100);
+  rerender(step('/p/a'));
   expect(result.current).toBe(true);
   // A switch: the list still showing is the one from before, so it does not count.
-  rerender({ path: '/p/b', l: list() });
+  rerender(step('/p/b'));
   expect(result.current).toBe(false);
   // The new project's list arrives with tasks in it.
-  rerender({ path: '/p/b', l: list({ fetchedAt: 200, count: 3 }) });
+  arrive(200);
+  rerender(step('/p/b', { count: 3 }));
   expect(result.current).toBe(false);
   // Back to an empty project, once its list has been fetched again.
-  rerender({ path: '/p/a', l: list({ fetchedAt: 200, count: 3 }) });
+  rerender(step('/p/a', { count: 3 }));
   expect(result.current).toBe(false);
-  rerender({ path: '/p/a', l: list({ fetchedAt: 300 }) });
+  arrive(300);
+  rerender(step('/p/a'));
   expect(result.current).toBe(true);
   // Switching through no project at all (the new one still resolving) is still a switch.
-  rerender({ path: null, l: list({ ready: false, fetchedAt: 0 }) });
+  rerender(step(null, { ready: false }));
   expect(result.current).toBe(false);
-  rerender({ path: '/p/b', l: list({ fetchedAt: 300 }) });
+  rerender(step('/p/b'));
   expect(result.current).toBe(false);
-  rerender({ path: '/p/b', l: list({ fetchedAt: 400, count: 2 }) });
+  arrive(400);
+  rerender(step('/p/b', { count: 2 }));
   expect(result.current).toBe(false);
 });
 
-test('switching to a populated project never starts its guide, even mid-switch', () => {
+test('a list arriving after the switch is picked up without another render', () => {
+  const { wrapper, arrive } = setup();
+  arrive(100);
   const { result, rerender } = renderHook(
-    ({ path, l }: { path: string; l: ListInput }) => {
-      const projectEmpty = useFreshEmptyProject(path, l);
+    ({ path, ready, count }: Step) =>
+      useFreshEmptyProject(path, { ready, count, queryKey: KEY }),
+    { wrapper, initialProps: step('/p/a') }
+  );
+  expect(result.current).toBe(true);
+  rerender(step('/p/b'));
+  expect(result.current).toBe(false);
+  arrive(200);
+  expect(result.current).toBe(true);
+});
+
+test('switching to a populated project never starts its guide, even mid-switch', () => {
+  const { wrapper, arrive } = setup();
+  arrive(100);
+  const { result, rerender } = renderHook(
+    ({ path, ready, count }: Step) => {
+      const projectEmpty = useFreshEmptyProject(path, {
+        ready,
+        count,
+        queryKey: KEY,
+      });
       return useFirstTaskGuide(
         props({
           projectPath: path,
           projectEmpty,
-          tasks: l.count > 0 ? ONE_TASK : NO_TASKS,
+          tasks: count > 0 ? ONE_TASK : NO_TASKS,
         })
       );
     },
-    { initialProps: { path: '/p/a', l: list() } }
+    { wrapper, initialProps: step('/p/a') }
   );
   expect(readGuide('/p/a')).toEqual({ status: 'active' });
   // One render with the old (empty) list under the new project, then loading, then loaded.
-  rerender({ path: '/p/b', l: list() });
-  rerender({ path: '/p/b', l: list({ ready: false }) });
-  rerender({ path: '/p/b', l: list({ fetchedAt: 200, count: 1 }) });
+  rerender(step('/p/b'));
+  rerender(step('/p/b', { ready: false }));
+  arrive(200);
+  rerender(step('/p/b', { count: 1 }));
   expect(readGuide('/p/b')).toBeNull();
   expect(result.current.view).toBeNull();
 });

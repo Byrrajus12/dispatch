@@ -92,6 +92,7 @@ import {
 import { useGlobalKeyboard } from './hooks/useGlobalKeyboard';
 import { useOverseerSession } from './hooks/useOverseerSession';
 import { useSavedViews } from './hooks/useSavedViews';
+import { tasksKey } from './hooks/useTaskDoc';
 import {
   threadListsKey,
   useA2APeers,
@@ -1375,8 +1376,8 @@ function App() {
   // fresh, empty project once Setup is done, and its progress lives in this browser.
   const projectEmpty = useFreshEmptyProject(activeProject?.path ?? null, {
     ready: data.tasksReady,
-    fetchedAt: data.tasksFetchedAt,
     count: data.tasksIncludingArchived.length,
+    queryKey: tasksKey(data.port),
   });
   const guide = useFirstTaskGuide({
     projectPath: activeProject?.path ?? null,
@@ -1398,19 +1399,38 @@ function App() {
   const firstRunDraft = data.drafts.find((d) => d.id === firstRunDraftId);
   const failedFirstRun =
     firstRunDraft?.state === 'failed' ? firstRunDraft : undefined;
+  const guidePath = activeProject?.path ?? null;
+  // The latest guide and project, for handlers that pick up again after an await.
+  const guideRef = useRef(guide);
+  const guidePathRef = useRef(guidePath);
+  // The guide as it is now, or null once the project has changed since `path`.
+  const guideFor = (path: string | null) =>
+    guidePathRef.current === path ? guideRef.current : null;
 
   // A failed draft's Try again: the same sentence as a fresh draft, opened in its place.
   const retryDraft = async (draft: DraftRecord) => {
+    const path = guidePath;
     const next = await rawData.handleStartDraft(draft.prompt, {
       parent: draft.parent ?? null,
     });
-    if (guide.draftId === draft.id) guide.linkDraft(next.id);
+    const latest = guideFor(path);
+    if (latest === null) return;
+    if (latest.draftId === draft.id) latest.linkDraft(next.id);
     setFirstRunDraftId((id) => (id === draft.id ? next.id : id));
-    void data.handleDismissDraft(draft.id);
     dispatchNav({ type: 'openDraft', draftId: next.id });
+    try {
+      await rawData.handleDismissDraft(draft.id);
+    } catch (err) {
+      toasts.push({
+        title: "Couldn't remove the failed draft",
+        description: describeError(err),
+        tone: 'error',
+      });
+    }
   };
   // The guide's Send to agent on a task; a refusal stays on the card with the task open.
   const sendGuidedTask = async (taskId: string, choice: SendChoice) => {
+    const path = guidePath;
     guide.setSendError(null);
     try {
       if (choice.writes.length > 0) {
@@ -1420,7 +1440,9 @@ function App() {
         effort: choice.effort,
       });
     } catch (err) {
-      guide.setSendError(describeError(err));
+      const latest = guideFor(path);
+      if (latest === null) return;
+      latest.setSendError(describeError(err));
       openTaskView(taskId, 'spec');
     }
   };
@@ -1430,12 +1452,17 @@ function App() {
     input: CreateInput,
     choice: SendChoice
   ) => {
+    const path = guidePath;
     const doc = await rawData.handleCreate(input);
     if (doc === null) {
       throw new Error('The project is still starting. Try again in a moment.');
     }
-    guide.linkTask(doc.meta.id);
+    const latest = guideFor(path);
+    // A switch mid-send leaves the new task on its own project's board.
+    if (latest === null) return;
+    latest.linkTask(doc.meta.id);
     await rawData.handleDismissDraft(draftId);
+    if (guideFor(path) === null) return;
     await sendGuidedTask(doc.meta.id, { ...choice, writes: [] });
   };
   const showFirstRunBox = () => {
@@ -1448,6 +1475,8 @@ function App() {
   };
   useEffect(() => {
     restartGuideRef.current = restartGuide;
+    guideRef.current = guide;
+    guidePathRef.current = guidePath;
   });
   // The first-run box also shows while the guide waits at Describe it (after a Restart).
   const showFirstRun =
@@ -1470,7 +1499,17 @@ function App() {
           openTask: (taskId, tab, runId) => openTaskView(taskId, tab, runId),
           send: sendGuidedTask,
           retryDraft,
-          retryRun: (taskId) => rawData.handleDispatch(taskId),
+          // The same agent, model and effort the failed run had.
+          retryRun: (taskId) => {
+            const failed =
+              guide.view?.run?.taskId === taskId ? guide.view.run : undefined;
+            return rawData.handleDispatch(
+              taskId,
+              failed?.executor,
+              failed?.model,
+              { effort: failed?.effort }
+            );
+          },
           askAgentToFix: (runId, error) =>
             rawData.handleRequestChanges(runId, askAgentToFix(error)),
           looksGood: guide.approve,
@@ -1691,9 +1730,16 @@ function App() {
             key={draft.id}
             data={data}
             onCreate={async (input) => {
+              const path = guidePath;
               const doc = await rawData.handleCreate(input);
-              if (doc !== null && guide.active && guide.draftId === draft.id) {
-                guide.linkTask(doc.meta.id);
+              const latest = guideFor(path);
+              if (
+                doc !== null &&
+                latest !== null &&
+                latest.active &&
+                latest.draftId === draft.id
+              ) {
+                latest.linkTask(doc.meta.id);
               }
               return doc;
             }}
@@ -2148,13 +2194,17 @@ function App() {
                   onStartDraft={async (prompt) => {
                     // A new draft replaces the last one's failure.
                     setFirstRunDraftId(null);
+                    const path = guidePath;
                     const draft = await rawData.handleStartDraft(prompt);
+                    const latest = guideFor(path);
+                    if (latest === null) return draft;
                     setFirstRunDraftId(draft.id);
-                    if (guide.active) guide.linkDraft(draft.id);
+                    if (latest.active) latest.linkDraft(draft.id);
                     dispatchNav({ type: 'openDraft', draftId: draft.id });
                     return draft;
                   }}
                   onCreateTask={async ({ what, done }) => {
+                    const path = guidePath;
                     const doc = await rawData.handleCreate(
                       formTaskInput(
                         what,
@@ -2167,7 +2217,9 @@ function App() {
                         'The project is still starting. Try again in a moment.'
                       );
                     }
-                    if (guide.active) guide.linkTask(doc.meta.id);
+                    const latest = guideFor(path);
+                    if (latest === null) return;
+                    if (latest.active) latest.linkTask(doc.meta.id);
                     openTaskView(doc.meta.id, 'spec');
                   }}
                   failure={
