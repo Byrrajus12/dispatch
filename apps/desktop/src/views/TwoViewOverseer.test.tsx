@@ -302,20 +302,3 @@ test('an open conversation keeps the talk over the first-run prompt', () => {
   );
   expect(screen.queryByTestId('overseer-first-run')).toBeNull();
 });
-
-test('Plans opens the Plans page', () => {
-  let opened = 0;
-  render(
-    <Harness
-      overseer={session({})}
-      client={{ getOverseer: (id: string) => Promise.resolve(record(id, 'x')) }}
-      extra={{
-        onOpenPlans: () => {
-          opened++;
-        },
-      }}
-    />
-  );
-  fireEvent.click(screen.getByTestId('overseer-open-plans'));
-  expect(opened).toBe(1);
-});

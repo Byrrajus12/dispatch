@@ -31,7 +31,7 @@ import { Button } from '@/ui/button';
 import { ToggleGroup, ToggleGroupItem } from '@/ui/toggle-group';
 
 /** Layouts drawn by another view's component rather than by the map itself. */
-type GraphLayoutId = 'projects' | 'branches' | 'live';
+type GraphLayoutId = 'projects' | 'live';
 type GraphMode = 'milestones' | 'tasks' | GraphLayoutId;
 
 /** One of those layouts: its body, and controls for the toolbar while it shows. */
@@ -43,7 +43,6 @@ interface GraphLayout {
 const GRAPH_MODES: { id: GraphMode; label: string }[] = [
   { id: 'projects', label: 'Projects' },
   { id: 'milestones', label: 'Milestones' },
-  { id: 'branches', label: 'Branches' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'live', label: 'Live' },
 ];

@@ -1,5 +1,3 @@
-import type { ImpactSubjectKind } from '@dispatch/client';
-
 import type { TaskPageMode } from './taskPageMode';
 
 // The whole app's navigation state, modeled as one pure reducer so routing decisions (what
@@ -22,6 +20,7 @@ export type ProjectView =
   | 'live'
   /** retired — normalized to 'inbox' */
   | 'runs'
+  /** retired — normalized to 'cockpit' */
   | 'branches'
   /** retired — normalized to 'landing' */
   | 'landed'
@@ -36,8 +35,9 @@ export type ProjectView =
   /** Conversations on the message bus: Needs you, Channels, Direct.
    * `threadFocus` says which thread is open. */
   | 'threads'
+  /** retired — normalized to 'cockpit' */
   | 'brain-dump'
-  /** Point at an element in a live browser and hand it to an agent. */
+  /** retired — normalized to 'cockpit' */
   | 'design'
   /** Browse and edit the checkout, with previews and quick open. */
   | 'files'
@@ -45,13 +45,13 @@ export type ProjectView =
   | 'docs'
   /** Shells on the repo or a run's worktree, split any number of ways. */
   | 'terminals'
+  /** retired — normalized to 'cockpit' */
   | 'plans'
   /** A single AI task draft's review page — `activeDraftId` says which one. */
   | 'draft'
   /** One repo pull request, full-window — `activePrNumber` says which. */
   | 'pr'
-  /** The blast-radius browser — `impactSubject` says which file/run/task, or
-   * `null` for the picker with nothing preselected. */
+  /** retired — normalized to 'cockpit' */
   | 'impact'
   /** One task, full-window, on a mode that follows its state — `activeTaskId` says which. */
   | 'task'
@@ -60,10 +60,7 @@ export type ProjectView =
 /** Views that act on the host machine as the person running the daemon — a
  * shell, and a browser carrying their cookies. The daemon holds both to the
  * operator tier, so a teammate below it is not shown doors that only 403. */
-export const HOST_VIEWS: ReadonlySet<ProjectView> = new Set([
-  'terminals',
-  'design',
-]);
+export const HOST_VIEWS: ReadonlySet<ProjectView> = new Set(['terminals']);
 
 /** Which mode the task page shows: `auto` follows the task's state (see
  * defaultTaskPageMode); `thread` is the task's message threads; `preview` is the
@@ -76,26 +73,11 @@ export type TaskTab =
   | 'files'
   | 'terminal';
 
-/** One file/run/task to show the blast radius of — what `ImpactView` fetches
- * and what the two "open in Impact" entry points (Review case panel, Git
- * file pane) hand it preselected. */
-export interface ImpactSubjectRef {
-  kind: ImpactSubjectKind;
-  id: string;
-}
-
 /** Global, not-project-scoped views living below the primary nav in the sidebar.
  * `overseer` is the chat assistant for the active project — it lives in this section
  * (not `ProjectView`) so it stays reachable from any view, but its conversation is
- * still scoped to whichever project is active. `gallery` is dev-only — see the
- * `import.meta.env.DEV` gates in App.tsx/Sidebar.tsx — but stays in this union
- * unconditionally so the type checker covers it like any other view. */
-export type GlobalView =
-  | 'all-agents'
-  | 'sessions'
-  | 'overseer'
-  | 'settings'
-  | 'gallery';
+ * still scoped to whichever project is active. */
+export type GlobalView = 'all-agents' | 'sessions' | 'overseer' | 'settings';
 
 /** The pages of the Settings view, in its nav order. Lives here rather than in
  * `SettingsView` so a `setGlobalView('settings', { page })` can name one — the rail's
@@ -141,10 +123,6 @@ export interface NavState {
   activeDraftId: string | null;
   /** Repo PR number shown by the PR review view, or `null` when none is open. */
   activePrNumber: number | null;
-  /** The subject `ImpactView` is showing, or `null` for the picker with
-   * nothing preselected — set by `openImpact`, the two entry points' way
-   * of handing over "open in Impact" with a subject already chosen. */
-  impactSubject: ImpactSubjectRef | null;
   /** A message id whose thread the Threads view opens (a root id opens its own
    * thread), or `null`. Not kept in history: the view keeps its own selection. */
   threadFocus: string | null;
@@ -185,15 +163,24 @@ interface NavEntry {
   activeRunId: string | null;
   activeDraftId: string | null;
   activePrNumber: number | null;
-  impactSubject: ImpactSubjectRef | null;
   activeTaskId: string | null;
   taskTab: TaskTab;
 }
 
 /** Retired page ids survive so stored nav state and deep links land somewhere
- * real: Runs/Review folded into the Inbox, Landed into the Landing table. */
+ * real: Runs/Review folded into the Inbox, Landed into the Landing table, and
+ * the pruned pages (Plans, Notes, Git, Impact, Design) onto the cockpit. */
+const RETIRED_TO_COCKPIT: ReadonlySet<ProjectView> = new Set([
+  'plans',
+  'brain-dump',
+  'branches',
+  'impact',
+  'design',
+]);
+
 function normalizeProjectView(view: ProjectView): ProjectView {
   if (view === 'runs' || view === 'review') return 'inbox';
+  if (RETIRED_TO_COCKPIT.has(view)) return 'cockpit';
   return view === 'landed' ? 'landing' : view;
 }
 
@@ -207,7 +194,6 @@ export const initialNavState: NavState = {
   activeRunId: null,
   activeDraftId: null,
   activePrNumber: null,
-  impactSubject: null,
   threadFocus: null,
   activeDocId: null,
   activeDocAnchor: null,
@@ -225,7 +211,6 @@ export const initialNavState: NavState = {
       activeRunId: null,
       activeDraftId: null,
       activePrNumber: null,
-      impactSubject: null,
       activeTaskId: null,
       taskTab: 'auto',
     },
@@ -247,8 +232,6 @@ function pushHistory(state: NavState, next: NavEntry): NavState {
     last.activeRunId === next.activeRunId &&
     last.activeDraftId === next.activeDraftId &&
     last.activePrNumber === next.activePrNumber &&
-    last.impactSubject?.kind === next.impactSubject?.kind &&
-    last.impactSubject?.id === next.impactSubject?.id &&
     last.activeTaskId === next.activeTaskId &&
     last.taskTab === next.taskTab
   ) {
@@ -273,9 +256,6 @@ export type NavAction =
   /** Routes to the PR review page for one repo pull request — the Inbox's PR
    * rows and a run's "Review PR" button. */
   | { type: 'openPr'; number: number }
-  /** Routes to `ImpactView` with a subject preselected — the "open in Impact"
-   * action on the Review case panel and the Git file pane. */
-  | { type: 'openImpact'; subject: ImpactSubjectRef }
   /** Routes to Threads with the thread holding `messageId` open — a run chat's
    * message link, a ref chip, or a rail row. */
   | { type: 'openThread'; messageId: string | null }
@@ -317,7 +297,6 @@ export function navReducer(state: NavState, action: NavAction): NavState {
         activeRunId: null,
         activeDraftId: null,
         activePrNumber: null,
-        impactSubject: null,
         activeTaskId: null,
         threadFocus: null,
         activeDocId: null,
@@ -334,10 +313,6 @@ export function navReducer(state: NavState, action: NavAction): NavState {
       const activeDraftId = view === 'draft' ? state.activeDraftId : null;
       // Same rule for the open pull request: only the PR view renders one.
       const activePrNumber = view === 'pr' ? state.activePrNumber : null;
-      // Same rule as the draft id: only Impact itself renders a preselected
-      // subject, so leaving it drops a stale one rather than reopening it
-      // the next time the nav item is clicked fresh.
-      const impactSubject = view === 'impact' ? state.impactSubject : null;
       const activeTaskId = view === 'task' ? state.activeTaskId : null;
       const next: NavState = {
         ...state,
@@ -346,7 +321,6 @@ export function navReducer(state: NavState, action: NavAction): NavState {
         activeRunId,
         activeDraftId,
         activePrNumber,
-        impactSubject,
         activeTaskId,
         taskTab: state.taskTab,
       };
@@ -357,7 +331,6 @@ export function navReducer(state: NavState, action: NavAction): NavState {
         activeRunId,
         activeDraftId,
         activePrNumber,
-        impactSubject,
         activeTaskId,
         taskTab: state.taskTab,
       });
@@ -393,7 +366,6 @@ export function navReducer(state: NavState, action: NavAction): NavState {
           activeRunId: action.runId,
           activeDraftId: state.activeDraftId,
           activePrNumber: state.activePrNumber,
-          impactSubject: state.impactSubject,
           activeTaskId: state.activeTaskId,
           taskTab: state.taskTab,
         }
@@ -417,7 +389,6 @@ export function navReducer(state: NavState, action: NavAction): NavState {
           activeRunId: state.activeRunId,
           activeDraftId: action.draftId,
           activePrNumber: state.activePrNumber,
-          impactSubject: state.impactSubject,
           activeTaskId: state.activeTaskId,
           taskTab: state.taskTab,
         }
@@ -439,7 +410,6 @@ export function navReducer(state: NavState, action: NavAction): NavState {
           activeRunId: state.activeRunId,
           activeDraftId: state.activeDraftId,
           activePrNumber: action.number,
-          impactSubject: state.impactSubject,
           activeTaskId: state.activeTaskId,
           taskTab: state.taskTab,
         }
@@ -462,7 +432,6 @@ export function navReducer(state: NavState, action: NavAction): NavState {
           activeRunId: state.activeRunId,
           activeDraftId: state.activeDraftId,
           activePrNumber: state.activePrNumber,
-          impactSubject: state.impactSubject,
           activeTaskId: state.activeTaskId,
           taskTab: state.taskTab,
         }
@@ -487,30 +456,6 @@ export function navReducer(state: NavState, action: NavAction): NavState {
           activeRunId: state.activeRunId,
           activeDraftId: state.activeDraftId,
           activePrNumber: state.activePrNumber,
-          impactSubject: state.impactSubject,
-          activeTaskId: state.activeTaskId,
-          taskTab: state.taskTab,
-        }
-      );
-    case 'openImpact':
-      // Opening a different subject is a destination in its own right, so
-      // back returns to the one you were looking at rather than skipping
-      // straight past the view — same rule `openRun`/`openDraft` follow.
-      return pushHistory(
-        {
-          ...state,
-          section: 'project',
-          projectView: 'impact',
-          impactSubject: action.subject,
-        },
-        {
-          section: 'project',
-          projectView: 'impact',
-          globalView: state.globalView,
-          activeRunId: state.activeRunId,
-          activeDraftId: state.activeDraftId,
-          activePrNumber: state.activePrNumber,
-          impactSubject: action.subject,
           activeTaskId: state.activeTaskId,
           taskTab: state.taskTab,
         }
@@ -530,7 +475,6 @@ export function navReducer(state: NavState, action: NavAction): NavState {
         activeRunId: entry.activeRunId,
         activeDraftId: entry.activeDraftId,
         activePrNumber: entry.activePrNumber,
-        impactSubject: entry.impactSubject,
         activeTaskId: entry.activeTaskId,
         taskTab: entry.taskTab,
         // Moving through history is navigation, not a modal action — anything
@@ -558,7 +502,6 @@ export function navReducer(state: NavState, action: NavAction): NavState {
         activeRunId: next.activeRunId,
         activeDraftId: state.activeDraftId,
         activePrNumber: state.activePrNumber,
-        impactSubject: state.impactSubject,
         activeTaskId: action.taskId,
         taskTab: next.taskTab,
       });

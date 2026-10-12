@@ -1840,25 +1840,3 @@ test('handleWorkEpic forwards a bare concurrency and a full options body', async
   ]);
   epicProgressFixture = [];
 });
-
-test('handleConfirmPlan returns the confirm result, and throws with no plan open', async () => {
-  const { result } = await mountWithEpics([]);
-  const proposal = { tasks: [] };
-
-  // Settled by hand: bun's `rejects` matcher is not awaitable under the
-  // repo's `await-thenable` rule.
-  const refused = await result.current.handleConfirmPlan(proposal).then(
-    () => 'resolved',
-    (err: unknown) => (err instanceof Error ? err.message : 'not an Error')
-  );
-  expect(refused).toBe('no plan open to confirm');
-
-  await act(async () => {
-    await result.current.handleSubmitPrompt('split the auth rewrite');
-  });
-  await waitFor(() => {
-    expect(result.current.planRecord?.id).toBe('p-1');
-  });
-  const confirmed = await result.current.handleConfirmPlan(proposal);
-  expect(confirmed).toEqual({ epicId: 'e-1', taskIds: ['t-1'] });
-});

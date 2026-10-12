@@ -1,6 +1,5 @@
 import type {
   GlobalView,
-  ImpactSubjectRef,
   NavAction,
   NavState,
   ProjectView,
@@ -29,19 +28,13 @@ const DIGIT_PRESETS: readonly TasksPreset[] = [
 export type MainView = 'overseer' | 'tasks';
 export type TasksMode = 'list' | 'board' | 'graph';
 
-/** Settings' own pages plus the three global views that fold into it. */
-type TwoViewsSettingsPage = SettingsPage | 'usage' | 'runs' | 'developer';
+/** Settings' own pages plus the two global views that fold into it. */
+type TwoViewsSettingsPage = SettingsPage | 'usage' | 'runs';
 
 /** Project views shown as a page under Tasks, led by "‹ tasks". */
 export type HostedView = Extract<
   ProjectView,
-  | 'branches'
-  | 'files'
-  | 'terminals'
-  | 'design'
-  | 'brain-dump'
-  | 'threads'
-  | 'plans'
+  'files' | 'terminals' | 'threads'
 >;
 
 /** What the Tasks view shows beside or instead of its list. */
@@ -65,7 +58,8 @@ export type TasksPage =
   /** A named room, reached by name, never listed. */
   | { kind: 'room'; room: string }
   | { kind: 'view'; view: HostedView }
-  | { kind: 'impact'; subject: ImpactSubjectRef | null };
+  /** The Files page opened on one file, e.g. from a file link in a thread. */
+  | { kind: 'file'; path: string };
 
 /** A drawer over either view; it never changes the view underneath. */
 type Peek =
@@ -99,6 +93,7 @@ export type TwoViewsAction =
   | { type: 'tv/closeSettings' }
   | { type: 'tv/closePeek' }
   | { type: 'tv/closePage' }
+  | { type: 'tv/openFile'; path: string }
   | { type: 'tv/expandTask' }
   /** Opens a person, an outside agent, a room or a task by address. */
   | { type: 'tv/openAddress'; address: string };
@@ -140,18 +135,18 @@ export function projectViewDestination(view: ProjectView): TwoViewsDestination {
       return { kind: 'tasks' };
     case 'docs':
       return { kind: 'docs' };
-    case 'branches':
     case 'files':
     case 'terminals':
-    case 'design':
-    case 'brain-dump':
     case 'threads':
-    // The planner's page: plan history, an editable proposal, "Create & send
-    // agents…". Overseer's create_plan card covers none of the three.
-    case 'plans':
       return { kind: 'page', page: { kind: 'view', view } };
+    // Retired pages: plans and notes live in the Overseer now; the rest had no successor.
+    case 'plans':
+    case 'brain-dump':
+      return { kind: 'overseer' };
+    case 'branches':
     case 'impact':
-      return { kind: 'page', page: { kind: 'impact', subject: null } };
+    case 'design':
+      return { kind: 'tasks' };
     // These name a record; without its id there is nowhere to go.
     case 'task':
     case 'pr':
@@ -179,8 +174,6 @@ export function globalViewDestination(
       return { kind: 'settings', page: 'usage' };
     case 'all-agents':
       return { kind: 'settings', page: 'runs' };
-    case 'gallery':
-      return { kind: 'settings', page: 'developer' };
     default: {
       const unhandled: never = view;
       return unhandled;
@@ -386,8 +379,8 @@ export function twoViewsReducer(
       return toTasks(state, { kind: 'pr', number: action.number });
     case 'openDraft':
       return toTasks(state, { kind: 'draft', draftId: action.draftId });
-    case 'openImpact':
-      return toTasks(state, { kind: 'impact', subject: action.subject });
+    case 'tv/openFile':
+      return toTasks(state, { kind: 'file', path: action.path });
     case 'back':
       if (state.peek !== null) return { ...state, peek: null };
       return step(state, -1);

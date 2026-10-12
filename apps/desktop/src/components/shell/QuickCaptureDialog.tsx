@@ -26,25 +26,20 @@ interface QuickCaptureDialogProps {
    * wrapper: the wrapper swallows rejections, and this modal must keep the draft and show
    * the error inline when a capture fails rather than clearing it as if it landed. */
   onCapture: (text: string) => Promise<void>;
-  /** Navigates to the full Brain dump view — the escape hatch for when one quick line turns
-   * out to need the real composer. */
-  onOpenBrainDump: () => void;
 }
 
 /**
- * The one-shot capture dialog (⌘D, or the rail's "Drop a thought"): a centered version of
- * Brain dump's composer, so a passing thought can be dropped into the inbox from any screen
- * without leaving it. Same contract as the full view — one item per line, ⌘⏎ commits — and a
- * successful capture closes the dialog; the confirmation is the thought being gone.
+ * The one-shot capture dialog (⌘D, or the rail's "Drop a thought"): a passing thought is
+ * dropped into the inbox from any screen without leaving it, and shows in the Overseer's
+ * Coming in. One item per line, ⌘⏎ commits, and a successful capture closes the dialog.
  */
 export function QuickCaptureDialog({
   open,
   onOpenChange,
   onCapture,
-  onOpenBrainDump,
 }: QuickCaptureDialogProps) {
-  // The same persisted draft as the full Brain dump view — closing the dialog, navigating,
-  // or relaunching never costs a half-typed thought, and the two surfaces stay one box.
+  // A persisted draft: closing the dialog, navigating or relaunching never costs a
+  // half-typed thought.
   const [draft, setDraft] = usePersistedDraft(BRAIN_DUMP_DRAFT_KEY);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,16 +111,6 @@ export function QuickCaptureDialog({
             </span>
           }
         >
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              onOpenChange(false);
-              onOpenBrainDump();
-            }}
-          >
-            Open Notes
-          </Button>
           <Button
             size="sm"
             disabled={draft.trim() === '' || busy}

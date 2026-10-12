@@ -3416,7 +3416,6 @@ export interface ApiClient {
   // `plan.changed`, `draft.changed` and `overseer.changed`.
   fetchAgentSessions(): Promise<AgentSessionMeta[]>;
   fetchRun(id: string): Promise<RunDetail>;
-  fetchRunClaims(): Promise<RunClaim[]>;
   cancelRun(runId: string): Promise<void>;
   /**
    * Asks a live run to stop gracefully: the agent finishes its current
@@ -3557,49 +3556,6 @@ export interface ApiClient {
   // Discarding a run is deliberately NOT here — that's `reviewRun(id,
   // 'discard')`, the path that already does the full bookkeeping.
   fetchBranches(): Promise<BranchEntry[]>;
-  freeBranchDisk(branch: string): Promise<BranchEntry>;
-  deleteBranch(branch: string, opts?: { force?: boolean }): Promise<void>;
-  // The Git page. `gitDiscard`/`gitStashDrop`/a force `gitDeleteBranch` take
-  // `confirm` because the matching server route 400s outright without it.
-  fetchGitStatus(): Promise<GitOutcome<GitStatus>>;
-  fetchGitLog(opts?: {
-    ref?: string;
-    limit?: number;
-    skip?: number;
-  }): Promise<GitOutcome<{ commits: GitLogEntry[] }>>;
-  fetchGitBranches(): Promise<GitOutcome<{ branches: GitBranchWithRun[] }>>;
-  fetchGitDiff(opts?: {
-    staged?: boolean;
-    path?: string;
-  }): Promise<GitOutcome<{ patch: string }>>;
-  fetchGitCommitDiff(sha: string): Promise<GitOutcome<{ patch: string }>>;
-  gitStage(paths: string[]): Promise<GitOutcome>;
-  gitUnstage(paths: string[]): Promise<GitOutcome>;
-  gitStageHunk(patch: string): Promise<GitOutcome>;
-  gitUnstageHunk(patch: string): Promise<GitOutcome>;
-  gitDiscard(paths: string[], confirm: boolean): Promise<GitOutcome>;
-  gitCommit(
-    message: string,
-    opts?: { amend?: boolean }
-  ): Promise<GitOutcome<{ sha: string }>>;
-  /** `POST /api/git/commit-message` — an AI-generated Conventional Commits message
-   * from the currently staged diff. Throws when nothing is staged. */
-  generateCommitMessage(): Promise<{ message: string }>;
-  gitCheckout(branch: string): Promise<GitOutcome>;
-  gitCreateBranch(name: string, from?: string): Promise<GitOutcome>;
-  gitDeleteBranch(
-    name: string,
-    opts?: { force?: boolean; confirm?: boolean }
-  ): Promise<GitOutcome>;
-  gitStashPush(message?: string): Promise<GitOutcome>;
-  fetchGitStashList(): Promise<GitOutcome<{ stashes: GitStash[] }>>;
-  gitStashPop(index: number): Promise<GitOutcome>;
-  gitStashDrop(index: number, confirm: boolean): Promise<GitOutcome>;
-  gitFetch(remote?: string): Promise<GitOutcome>;
-  gitPull(): Promise<GitOutcome>;
-  gitPush(opts?: { setUpstream?: boolean }): Promise<GitOutcome>;
-  gitCherryPick(sha: string): Promise<GitOutcome>;
-  gitRevert(sha: string): Promise<GitOutcome>;
   // GitHub PR review surface (items 3+4): read a run's PR status + conversation,
   // submit a review verdict (approve/request-changes/comment), or add a
   // PR-level comment — each POST returns the refreshed PrDetail. All 409 a run
@@ -3657,27 +3613,10 @@ export interface ApiClient {
     kind?: InboxKind;
     createdByRunId?: string;
   }): Promise<InboxItem[]>;
-  updateInbox(
-    id: string,
-    patch: { kind?: InboxKind; text?: string; done?: boolean }
-  ): Promise<InboxItem>;
   dismissInbox(ids: string[]): Promise<{ dismissed: number }>;
   convertInbox(ids: string[]): Promise<InboxConvertResponse>;
   /** Starts an AI draft that fleshes out a task that already exists, preserving what is there. */
   enrichTask(id: string): Promise<{ planId: string }>;
-  /** Model-backed grouping of related captures. Always resolves with a 200 —
-   * `error` carries a failed model call. A successful pass is persisted
-   * server-side; `fetchInboxClusters` reads it back. */
-  clusterInbox(): Promise<{
-    groups: InboxClusterGroup[];
-    error: string | null;
-  }>;
-  /** The persisted result of the last clustering pass, or null when none has
-   * ever run — what a page load renders instead of billing a fresh call. */
-  fetchInboxClusters(): Promise<InboxClusterSnapshot | null>;
-  /** The persisted result of the last triage pass (run as part of
-   * `clusterInbox`), or null when none has run or judgments are off. */
-  fetchInboxTriage(): Promise<InboxTriageSnapshot | null>;
 
   /** One side of a file in a run's worktree. `sha` is the precondition for applyRunEdit. */
   fetchRunFile(
@@ -3787,21 +3726,7 @@ export interface ApiClient {
    * poll with `fetchPlan`, whose proposal is confirmed through the ordinary
    * `confirmPlan` (which also links the note to the task it writes). */
   enrichNote(id: string): Promise<{ planId: string }>;
-  // Phase 5 P2: the big-prompt plan flow. `startPlan` returns immediately
-  // (202) with the plan's id — poll `fetchPlan`/watch `plan.changed` over WS
-  // for it to move to `ready`/`failed`. `confirmPlan` sends the (possibly
-  // client-edited) proposal back verbatim; the server re-validates it from
-  // scratch and is the only place that actually writes the epic/tasks.
-  // `model` is the composer's pick for this plan, over the configured `plan`
-  // role's model; the plan keeps it for every follow-up.
-  startPlan(
-    prompt: string,
-    opts?: { model?: string }
-  ): Promise<{ planId: string }>;
   fetchPlan(planId: string): Promise<PlanRecord>;
-  /** Every plan's summary, newest activity first — the Plans page's history.
-   * Persisted server-side, so it survives restarts and spans windows. */
-  fetchPlans(): Promise<PlanSummary[]>;
   // Send a follow-up message on an existing plan conversation. Resolves (202)
   // with the record already back in `running` — poll `fetchPlan`/watch
   // `plan.changed` for the assistant's reply + refined proposal to land.
@@ -4320,23 +4245,12 @@ export interface ApiClient {
     query: string,
     scope?: WorkspaceScope & { limit?: number }
   ): Promise<WorkspaceSearchResult>;
-  /** Open a Chromium the daemon drives. Headed unless `headless` is set. */
-  launchBrowser(opts?: {
-    url?: string;
-    headless?: boolean;
-    width?: number;
-    height?: number;
-  }): Promise<BrowserInfo>;
-  listBrowsers(): Promise<BrowserInfo[]>;
-  closeBrowser(id: string): Promise<void>;
   navigateBrowser(id: string, url: string): Promise<BrowserInfo>;
   browserClick(id: string, selector: string): Promise<void>;
   browserFill(id: string, selector: string, value: string): Promise<void>;
   browserEvaluate(id: string, expression: string): Promise<{ value: unknown }>;
   /** A base64 PNG of the page. */
   browserScreenshot(id: string): Promise<{ screenshot: string }>;
-  /** Arms Design Mode: the next click in the page is captured, not delivered. */
-  browserStartPick(id: string): Promise<{ picking: boolean }>;
   /** Polled while a pick is armed. */
   browserPickResult(id: string): Promise<PickOutcome>;
   /** Every shell session this daemon knows about, oldest first. */
@@ -4505,7 +4419,6 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
       request(target, `/api/judgments/status${probe ? '?probe=1' : ''}`),
     fetchAgentSessions: () => request(target, '/api/agents'),
     fetchRun: (id) => request(target, `/api/runs/${id}`),
-    fetchRunClaims: () => request(target, '/api/runs/claims'),
     cancelRun: async (runId) => {
       await request(target, `/api/runs/${runId}/cancel`, { method: 'POST' });
     },
@@ -4609,121 +4522,6 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
     publishRun: (runId) =>
       request(target, `/api/runs/${runId}/publish`, { method: 'POST' }),
     fetchBranches: () => request(target, '/api/branches'),
-    freeBranchDisk: (branch) =>
-      request(target, '/api/branches/free-disk', {
-        method: 'POST',
-        ...jsonBody({ branch }),
-      }),
-    deleteBranch: async (branch, opts = {}) => {
-      // Dispatch branch names always contain `/`, so the name is encoded into
-      // a single path segment — the server rejoins and decodes it.
-      const query = opts.force === true ? '?force=1' : '';
-      await request(
-        target,
-        `/api/branches/${encodeURIComponent(branch)}${query}`,
-        { method: 'DELETE' }
-      );
-    },
-    fetchGitStatus: () => request(target, '/api/git/status'),
-    fetchGitLog: (opts = {}) => {
-      const params = new URLSearchParams();
-      if (opts.ref !== undefined) params.set('ref', opts.ref);
-      if (opts.limit !== undefined) params.set('limit', String(opts.limit));
-      if (opts.skip !== undefined) params.set('skip', String(opts.skip));
-      const query = params.size > 0 ? `?${params.toString()}` : '';
-      return request(target, `/api/git/log${query}`);
-    },
-    fetchGitBranches: () => request(target, '/api/git/branches'),
-    fetchGitDiff: (opts = {}) => {
-      const params = new URLSearchParams();
-      if (opts.staged === true) params.set('staged', '1');
-      if (opts.path !== undefined) params.set('path', opts.path);
-      const query = params.size > 0 ? `?${params.toString()}` : '';
-      return request(target, `/api/git/diff${query}`);
-    },
-    fetchGitCommitDiff: (sha) =>
-      request(target, `/api/git/commit/${encodeURIComponent(sha)}`),
-    gitStage: (paths) =>
-      request(target, '/api/git/stage', {
-        method: 'POST',
-        ...jsonBody({ paths }),
-      }),
-    gitUnstage: (paths) =>
-      request(target, '/api/git/unstage', {
-        method: 'POST',
-        ...jsonBody({ paths }),
-      }),
-    gitStageHunk: (patch) =>
-      request(target, '/api/git/stage-hunk', {
-        method: 'POST',
-        ...jsonBody({ patch }),
-      }),
-    gitUnstageHunk: (patch) =>
-      request(target, '/api/git/unstage-hunk', {
-        method: 'POST',
-        ...jsonBody({ patch }),
-      }),
-    gitDiscard: (paths, confirm) =>
-      request(target, '/api/git/discard', {
-        method: 'POST',
-        ...jsonBody({ paths, confirm }),
-      }),
-    gitCommit: (message, opts = {}) =>
-      request(target, '/api/git/commit', {
-        method: 'POST',
-        ...jsonBody({ message, ...opts }),
-      }),
-    generateCommitMessage: () =>
-      request(target, '/api/git/commit-message', { method: 'POST' }),
-    gitCheckout: (branch) =>
-      request(target, '/api/git/checkout', {
-        method: 'POST',
-        ...jsonBody({ branch }),
-      }),
-    gitCreateBranch: (name, from) =>
-      request(target, '/api/git/branch', {
-        method: 'POST',
-        ...jsonBody(from !== undefined ? { name, from } : { name }),
-      }),
-    gitDeleteBranch: (name, opts = {}) =>
-      request(target, `/api/git/branch/${encodeURIComponent(name)}`, {
-        method: 'DELETE',
-        ...jsonBody(opts),
-      }),
-    gitStashPush: (message) =>
-      request(target, '/api/git/stash', {
-        method: 'POST',
-        ...jsonBody(message !== undefined ? { message } : {}),
-      }),
-    fetchGitStashList: () => request(target, '/api/git/stash'),
-    gitStashPop: (index) =>
-      request(target, '/api/git/stash/pop', {
-        method: 'POST',
-        ...jsonBody({ index }),
-      }),
-    gitStashDrop: (index, confirm) =>
-      request(target, '/api/git/stash/drop', {
-        method: 'POST',
-        ...jsonBody({ index, confirm }),
-      }),
-    gitFetch: (remote) =>
-      request(target, '/api/git/fetch', {
-        method: 'POST',
-        ...jsonBody(remote !== undefined ? { remote } : {}),
-      }),
-    gitPull: () => request(target, '/api/git/pull', { method: 'POST' }),
-    gitPush: (opts = {}) =>
-      request(target, '/api/git/push', { method: 'POST', ...jsonBody(opts) }),
-    gitCherryPick: (sha) =>
-      request(target, '/api/git/cherry-pick', {
-        method: 'POST',
-        ...jsonBody({ sha }),
-      }),
-    gitRevert: (sha) =>
-      request(target, '/api/git/revert', {
-        method: 'POST',
-        ...jsonBody({ sha }),
-      }),
     fetchPrDetail: (runId) => request(target, `/api/runs/${runId}/pr`),
     reviewPr: (runId, event, body) =>
       request(target, `/api/runs/${runId}/pr/review`, {
@@ -4760,11 +4558,6 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
         method: 'POST',
         body: JSON.stringify(input),
       }),
-    updateInbox: (id, patch) =>
-      request(target, `/api/inbox/${encodeURIComponent(id)}`, {
-        method: 'PATCH',
-        body: JSON.stringify(patch),
-      }),
     dismissInbox: (ids) =>
       request(target, '/api/inbox/dismiss', {
         method: 'POST',
@@ -4779,10 +4572,6 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
       request(target, `/api/tasks/${encodeURIComponent(id)}/enrich`, {
         method: 'POST',
       }),
-    clusterInbox: () =>
-      request(target, '/api/inbox/cluster', { method: 'POST' }),
-    fetchInboxClusters: () => request(target, '/api/inbox/clusters'),
-    fetchInboxTriage: () => request(target, '/api/inbox/triage'),
     fetchRunFile: (runId, path, side) =>
       request(
         target,
@@ -4880,16 +4669,7 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
       request(target, `/api/notes/${id}/promote`, { method: 'POST' }),
     enrichNote: (id) =>
       request(target, `/api/notes/${id}/enrich`, { method: 'POST' }),
-    startPlan: (prompt, opts = {}) =>
-      request(target, '/api/plan', {
-        method: 'POST',
-        ...jsonBody({
-          prompt,
-          ...(opts.model !== undefined ? { model: opts.model } : {}),
-        }),
-      }),
     fetchPlan: (planId) => request(target, `/api/plan/${planId}`),
-    fetchPlans: () => request(target, '/api/plans'),
     sendPlanMessage: (planId, text) =>
       request(target, `/api/plan/${planId}/message`, {
         method: 'POST',
@@ -5537,14 +5317,6 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
       if (scope.limit !== undefined) params.set('limit', String(scope.limit));
       return request(target, `/api/files/search?${params.toString()}`);
     },
-    launchBrowser: (opts = {}) =>
-      request(target, '/api/browser', { method: 'POST', ...jsonBody(opts) }),
-    listBrowsers: () => request(target, '/api/browser'),
-    closeBrowser: async (id) => {
-      await request(target, `/api/browser/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-      });
-    },
     navigateBrowser: (id, url) =>
       request(target, `/api/browser/${encodeURIComponent(id)}/navigate`, {
         method: 'POST',
@@ -5569,11 +5341,6 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
       }),
     browserScreenshot: (id) =>
       request(target, `/api/browser/${encodeURIComponent(id)}/screenshot`),
-    browserStartPick: (id) =>
-      request(target, `/api/browser/${encodeURIComponent(id)}/pick`, {
-        method: 'POST',
-        ...jsonBody({}),
-      }),
     browserPickResult: (id) =>
       request(target, `/api/browser/${encodeURIComponent(id)}/pick`),
     fetchTerminals: () => request(target, '/api/terminals'),

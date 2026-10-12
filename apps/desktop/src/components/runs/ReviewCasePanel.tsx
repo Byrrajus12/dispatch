@@ -10,13 +10,11 @@ import {
   ChevronRight,
   Flag,
   TriangleAlert,
-  Waypoints,
   Wrench,
   X,
 } from 'lucide-react';
 import { useState } from 'react';
 
-import type { ImpactSubjectRef } from '../../lib/appNav';
 import type { CheckGroup } from '../../lib/findings';
 import { partitionFindings } from '../../lib/findings';
 import { isDeadGuard } from '../../lib/reviewCase';
@@ -59,9 +57,6 @@ interface ReviewCasePanelProps {
    *  the Impact section entirely rather than rendering it half-wired. */
   client?: ApiClient | null;
   runId?: string;
-  /** Navigates to the full `ImpactView`, this run preselected. Optional so
-   *  older/test call sites keep compiling with the button hidden. */
-  onOpenImpact?: (subject: ImpactSubjectRef) => void;
 }
 
 /**
@@ -83,7 +78,6 @@ export function ReviewCasePanel({
   onFixFindings,
   client,
   runId,
-  onOpenImpact,
 }: ReviewCasePanelProps) {
   const { judgment, checks } = partitionFindings(findings);
 
@@ -174,16 +168,6 @@ export function ReviewCasePanel({
             <SectionLabel rule>Impact</SectionLabel>
             <div className="mt-2 flex flex-col items-start gap-2">
               <ImpactPanel client={client} subject="run" id={runId} />
-              {onOpenImpact && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => onOpenImpact({ kind: 'run', id: runId })}
-                >
-                  <Waypoints />
-                  Open in Impact
-                </Button>
-              )}
             </div>
           </section>
         )}

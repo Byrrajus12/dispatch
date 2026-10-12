@@ -5,7 +5,7 @@ import {
 } from '@dispatch-foo/core/browser';
 import type { DraftRecord } from '@dispatch/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, Coins, TriangleAlert, Wrench } from 'lucide-react';
+import { Bot, Coins, TriangleAlert } from 'lucide-react';
 import {
   type ReactNode,
   useCallback,
@@ -18,6 +18,7 @@ import {
 } from 'react';
 
 import { AwayDigest, useNarratorSince } from './components/chat/AwayDigest';
+import { CapturedNotes } from './components/chat/CapturedNotes';
 import { ForYouPosts } from './components/chat/ForYouPosts';
 import { TasksComposer } from './components/chat/TasksComposer';
 import { ConversationTimeline } from './components/conversation/ConversationTimeline';
@@ -116,6 +117,7 @@ import {
 } from './lib/appNav';
 import { hideArchivedRuns } from './lib/archiveFilter';
 import { hasDispatchKey, launchRootKey } from './lib/bootWarm';
+import { openCaptures } from './lib/capturedNotes';
 import { dispatchConfigKey } from './lib/configEvents';
 import { mentions, subjectOf } from './lib/conversationScope';
 import { type DecisionItem, decisionTarget } from './lib/decisionFeed';
@@ -173,17 +175,11 @@ import {
 import { checkForUpdate, installUpdateAndRelaunch } from './lib/updater';
 import { applyZoomFactor, loadZoomFactor, stepZoomFactor } from './lib/zoom';
 import { AllAgentsView } from './views/AllAgentsView';
-import { BrainDumpView } from './views/BrainDumpView';
-import { BranchesView } from './views/BranchesView';
-import { DesignView } from './views/DesignView';
 import { DocsView } from './views/DocsView';
 import { DraftView } from './views/DraftView';
 import { FilesView } from './views/FilesView';
 import { FirstRunView } from './views/FirstRunView';
-import { GalleryView } from './views/GalleryView';
-import { ImpactView } from './views/ImpactView';
 import { OverseerFocusView } from './views/OverseerFocusView';
-import { PlansView } from './views/PlansView';
 import { PrReviewView } from './views/PrReviewView';
 import { SessionsHubView } from './views/SessionsHubView';
 import type { HostedSettingsPage } from './views/SettingsView';
@@ -644,7 +640,7 @@ function App() {
         openTask: (taskId, tab, runId) => openTaskView(taskId, tab, runId),
         openThread: (messageId) =>
           dispatchNav({ type: 'openThread', messageId }),
-        openImpact: (subject) => dispatchNav({ type: 'openImpact', subject }),
+        openFile: (path) => dispatchNav({ type: 'tv/openFile', path }),
         openDoc,
       }),
     [openTaskView, openDoc]
@@ -923,7 +919,6 @@ function App() {
             );
             if (number !== null) dispatchNav({ type: 'openPr', number });
           },
-          openImpact: (subject) => dispatchNav({ type: 'openImpact', subject }),
           // Docs need a teammate or app token, as the Docs view does.
           openDoc: data.messageAccess.canMessage ? openDoc : undefined,
           // Threads need the same token; without it the page shows no Thread tab.
@@ -1018,6 +1013,11 @@ function App() {
       }
       if (target.kind === 'draft') {
         dispatchNav({ type: 'openDraft', draftId: target.draftId });
+        markNotificationInboxRead();
+        return;
+      }
+      if (target.kind === 'plan') {
+        dispatchNav({ type: 'tv/showOverseer' });
         markNotificationInboxRead();
         return;
       }
@@ -1569,9 +1569,6 @@ function App() {
         setAddProjectOpen(true);
       }}
       onOpenSettings={() => setGlobalView('settings')}
-      onOpenGallery={
-        import.meta.env.DEV ? () => setGlobalView('gallery') : undefined
-      }
       onRestartGuide={activeProject === null ? undefined : restartGuide}
     />
   );
@@ -1606,29 +1603,16 @@ function App() {
           <EmptyState
             className="flex-1"
             heading="Only the operator can open this"
-            description="Terminals and Design act on the host machine as the person running Dispatch."
+            description="Terminals act on the host machine as the person running Dispatch."
           />
         </div>
       );
     }
     switch (view) {
-      case 'branches':
-        return (
-          <BranchesView
-            data={data}
-            onOpenRun={jumpToRun}
-            onOpenImpact={(subject) =>
-              dispatchNav({ type: 'openImpact', subject })
-            }
-            onBack={closeTwoViewsPage}
-          />
-        );
       case 'files':
         return <FilesView data={data} onBack={closeTwoViewsPage} />;
       case 'terminals':
         return <TerminalsView data={data} onBack={closeTwoViewsPage} />;
-      case 'design':
-        return <DesignView data={data} onBack={closeTwoViewsPage} />;
       case 'threads':
         return (
           <ThreadsView
@@ -1642,31 +1626,6 @@ function App() {
               busy: overseer.sending || overseer.record?.state === 'running',
               submit: overseer.reply,
               open: openOverseer,
-            }}
-            onBack={closeTwoViewsPage}
-          />
-        );
-      case 'brain-dump':
-        return (
-          <BrainDumpView
-            data={data}
-            onOpenTask={(taskId) => dispatchNav({ type: 'openPeek', taskId })}
-            onPlanText={openOverseer}
-            onBack={closeTwoViewsPage}
-          />
-        );
-      case 'plans':
-        return (
-          <PlansView
-            projectName={activeProject?.name}
-            data={data}
-            onGoToBoard={() => dispatchNav({ type: 'tv/showTasks' })}
-            // A milestone opens on its Plan tab, where Send agents lives.
-            onOpenMilestone={(epicId, opts) => {
-              if (opts?.dispatch === true) {
-                setSendAgents({ epicId, nonce: Date.now() });
-              }
-              openTaskView(epicId, 'plan');
             }}
             onBack={closeTwoViewsPage}
           />
@@ -1784,16 +1743,12 @@ function App() {
         );
       case 'view':
         return renderHostedView(page.view);
-      case 'impact':
+      case 'file':
         return (
-          <ImpactView
-            key={
-              page.subject === null
-                ? 'impact-empty'
-                : `${page.subject.kind}:${page.subject.id}`
-            }
+          <FilesView
+            key={page.path}
             data={data}
-            initialSubject={page.subject}
+            initialPath={page.path}
             onBack={closeTwoViewsPage}
           />
         );
@@ -1824,7 +1779,7 @@ function App() {
         }
       : null;
 
-  // Sessions, All agents and the Gallery as Settings pages in Two views.
+  // Sessions and All agents as Settings pages in Two views.
   const hostedSettingsPages: HostedSettingsPage[] = [
     {
       id: 'usage',
@@ -1857,17 +1812,6 @@ function App() {
         />
       ),
     },
-    ...(import.meta.env.DEV
-      ? [
-          {
-            id: 'developer' as const,
-            label: 'Developer',
-            icon: Wrench,
-            intro: 'The component gallery, in dev builds only.',
-            render: () => <GalleryView />,
-          },
-        ]
-      : []),
   ];
 
   // A link inside a peek closes it, so the peek never sits over where it led.
@@ -1956,6 +1900,7 @@ function App() {
           }),
     [data.me, mailbox, myTaskIds, followedRooms]
   );
+  const captures = useMemo(() => openCaptures(data.inbox), [data.inbox]);
   // An agent or narrator door: Tasks on a task, a milestone or a preset.
   const openDoor = (door: OverseerDoor) => {
     const taskId = door.taskId ?? door.milestoneId;
@@ -2122,7 +2067,7 @@ function App() {
             overseer={overseer}
             projectPath={activeProject?.path ?? null}
             asks={needs.count}
-            postsCount={posts.length}
+            postsCount={posts.length + captures.length}
             runs={data.runs}
             merges={data.mergeQueue?.entries ?? []}
             drafts={
@@ -2195,11 +2140,6 @@ function App() {
             revoked={overseer.revoked}
             onShowAsks={() => dispatchNav({ type: 'tv/showTasks' })}
             onOpenDoor={openDoor}
-            onOpenPlans={
-              activeProject === null
-                ? undefined
-                : () => dispatchNav({ type: 'setProjectView', view: 'plans' })
-            }
             firstRun={
               showFirstRun ? (
                 <FirstRunView
@@ -2276,6 +2216,11 @@ function App() {
                   onReply={replyToPost}
                   holding={overseerTurnLive(overseer)}
                 />
+                <CapturedNotes
+                  items={captures}
+                  onMakeTask={rawData.handleConvertInbox}
+                  onDismiss={rawData.handleDismissInbox}
+                />
               </>
             }
           />
@@ -2311,9 +2256,6 @@ function App() {
             onOpenDoc={(docId) => openDoc(docId, null)}
             onOpenAllDocs={() =>
               dispatchNav({ type: 'setProjectView', view: 'docs' })
-            }
-            onOpenNotes={() =>
-              dispatchNav({ type: 'setProjectView', view: 'brain-dump' })
             }
             renderPage={renderTwoViewsPage}
             composer={
@@ -2373,7 +2315,6 @@ function App() {
                       open={quickCaptureOpen}
                       onOpenChange={setQuickCaptureOpen}
                       onCapture={rawData.handleCaptureInbox}
-                      onOpenBrainDump={() => selectProjectView('brain-dump')}
                     />
 
                     <ShortcutsDialog

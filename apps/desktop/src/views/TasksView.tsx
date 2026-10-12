@@ -54,7 +54,6 @@ import {
   writeTwoViewsFilters,
 } from '../lib/twoViewsTasksPrefs';
 import { LiveView } from './LiveView';
-import { MilestoneBranchesView } from './MilestoneBranchesView';
 import { ProjectsView } from './ProjectsView';
 import { TasksListView } from './TasksListView';
 import { IconButton } from '@/ui/ai/icon-button';
@@ -120,7 +119,7 @@ const OWN_HEADER: ReadonlySet<TasksPage['kind']> = new Set([
   'pr',
   'room',
   'view',
-  'impact',
+  'file',
 ]);
 
 const GRAPH_NEEDS_FOLDED_KEY = 'dispatch:graph-needs-you-folded';
@@ -174,7 +173,6 @@ export interface TasksViewProps {
   onOpenPr: (number: number) => void;
   onOpenDoc: (docId: string) => void;
   onOpenAllDocs: () => void;
-  onOpenNotes: () => void;
   /** Keys per-project choices such as the graph's Milestones | Tasks. */
   projectKey: string;
   speechByTask: ReadonlyMap<string, { count: number; mention: boolean }>;
@@ -211,7 +209,6 @@ export function TasksView({
   onOpenPr,
   onOpenDoc,
   onOpenAllDocs,
-  onOpenNotes,
   projectKey,
   speechByTask,
   composer,
@@ -307,7 +304,6 @@ export function TasksView({
       onOpenPr={onOpenPr}
       onOpenDoc={onOpenDoc}
       onOpenAllDocs={onOpenAllDocs}
-      onOpenNotes={onOpenNotes}
     />
   );
   const model = useStatusModelOf(data.config);
@@ -487,16 +483,6 @@ export function TasksView({
                           <Plus className="size-3.5" />
                           New project
                         </Button>
-                      ),
-                    },
-                    branches: {
-                      body: (
-                        <MilestoneBranchesView
-                          data={data}
-                          onOpenTask={onSelectTask}
-                          display={TWO_VIEWS_TASKS_DISPLAY}
-                          taskFilter={taskFilter}
-                        />
                       ),
                     },
                     live: {

@@ -191,13 +191,8 @@ describe('navigation rows', () => {
       ['Go to Overseer', '⌘1'],
       ['Go to Tasks', '⌘2'],
       ['Go to Settings', '⌘,'],
-      ['Open Plans', undefined],
-      ['Open Notes', undefined],
-      ['Open Git', undefined],
       ['Open Files', undefined],
       ['Open Terminals', undefined],
-      ['Open Design', undefined],
-      ['Open Impact', undefined],
     ]);
     expect(entries.some((e) => e.id === 'action-toggle-sidebar')).toBe(false);
     for (const row of nav) row.run();
@@ -205,31 +200,35 @@ describe('navigation rows', () => {
       'global:overseer',
       'project:board',
       'global:settings',
-      'project:plans',
-      'project:brain-dump',
-      'project:branches',
       'project:files',
       'project:terminals',
-      'project:design',
-      'project:impact',
     ]);
   });
 });
 
+describe('plan work', () => {
+  test('opens the Overseer, where plans are made', () => {
+    const { ctx, calls } = context();
+    const row = buildPaletteEntries(ctx).find(
+      (e) => e.id === 'action-plan-work'
+    );
+    row?.run();
+    expect(calls).toEqual(['global:overseer']);
+  });
+});
+
 describe('host views below the operator tier', () => {
-  test('leaves out Terminals and Design', () => {
+  test('leaves out Terminals', () => {
     const { ctx } = context({ hideHostViews: true });
     const ids = buildPaletteEntries(ctx).map((e) => e.id);
     expect(ids).toContain('go-files');
     expect(ids).not.toContain('go-terminals');
-    expect(ids).not.toContain('go-design');
   });
 
-  test('the operator sees both', () => {
+  test('the operator sees Terminals', () => {
     const { ctx } = context();
     const ids = buildPaletteEntries(ctx).map((e) => e.id);
     expect(ids).toContain('go-terminals');
-    expect(ids).toContain('go-design');
   });
 });
 

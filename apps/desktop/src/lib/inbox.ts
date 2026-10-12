@@ -31,9 +31,8 @@ export function projectViewForInboxTarget(
 ): ProjectView | null {
   switch (target.kind) {
     case 'plan':
-      // Plans render one conversation at a time, so the view itself is the
-      // destination — there is no per-plan id to select once you are there.
-      return 'plans';
+      // Plans are create_plan cards in the Overseer; the shell routes there.
+      return null;
     case 'queue':
     case 'runs-page':
       // Both are merge-queue outcomes: queue state transitions

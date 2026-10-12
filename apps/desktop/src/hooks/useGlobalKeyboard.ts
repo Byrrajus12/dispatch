@@ -23,8 +23,7 @@ export function isTypingTarget(target: EventTarget | null): boolean {
  * `data-open` attribute only while open — it flips to `data-closed` for the exit animation, so
  * presence in the DOM alone is not enough). `AlertDialogContent` is the same device under
  * `data-slot="alert-dialog-content"`, so it is matched too — a destructive confirm has to
- * swallow the app's shortcuts exactly like any other modal does (BranchesView's confirm is
- * one). Checked live via a DOM query at the moment a keydown fires, rather than threaded
+ * swallow the app's shortcuts exactly like any other modal does. Checked live via a DOM query at the moment a keydown fires, rather than threaded
  * through as reactive React state — every dialog instance (CreateTaskModal,
  * SessionDetailModal, DiffModal, CommandPalette, …) only renders into the DOM while open, so
  * the query is always exactly as current as the state would be, without App.tsx needing to

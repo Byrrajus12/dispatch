@@ -2,7 +2,6 @@ import type {
   DraftRecord,
   MergeQueueEntryState,
   MergeQueueSnapshot,
-  PlanRecord,
   RunMeta,
   RunState,
 } from '@dispatch/client';
@@ -92,7 +91,6 @@ export function useTransitionNotifications(
   runs: readonly RunMeta[],
   mergeQueue: MergeQueueSnapshot | null,
   drafts: readonly DraftRecord[],
-  planRecord: PlanRecord | undefined,
   openQuestions: ReadonlyMap<string, RunQuestion[]>,
   onRecord: (adds: InboxEntryDraft[]) => void
 ): void {
@@ -140,7 +138,6 @@ export function useTransitionNotifications(
     const { notifications, next } = diffQuestionNotifications(
       tracking.current.questions,
       drafts,
-      planRecord,
       openQuestions
     );
     tracking.current = { ...tracking.current, questions: next };
@@ -149,5 +146,5 @@ export function useTransitionNotifications(
       onRecord(notifications.map((n) => ({ ...n, ts })));
     }
     for (const n of notifications) void notify(n.title, n.body, n.kind);
-  }, [drafts, planRecord, openQuestions, onRecord]);
+  }, [drafts, openQuestions, onRecord]);
 }

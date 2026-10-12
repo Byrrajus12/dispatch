@@ -66,8 +66,6 @@ const SUCCESS_MESSAGES: Record<string, SuccessSpec> = {
   handleOpenPr: { message: 'Pull request opened' },
   // Its effect is on GitHub, the one place this app is not showing you.
   handlePublishRun: { message: 'Pushed to origin' },
-  handleFreeBranchDisk: { message: 'Worktree reclaimed' },
-  handleDeleteBranch: { message: 'Branch deleted' },
   handleArchiveRun: { message: 'Run archived' },
   handleCancelRun: { message: 'Run cancelled' },
   // A dispatch happens on a worktree you are not looking at; the link is the

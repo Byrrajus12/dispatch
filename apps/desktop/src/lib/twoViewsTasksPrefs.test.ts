@@ -42,8 +42,4 @@ describe('layouts and modes', () => {
     expect(layoutForMode(mode)).toBe(layout);
     expect(modeForLayout(layout)).toBe(mode);
   });
-
-  test('a Branches view opens the graph', () => {
-    expect(modeForLayout('branches')).toBe('graph');
-  });
 });

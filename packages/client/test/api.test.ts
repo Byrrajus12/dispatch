@@ -195,8 +195,8 @@ describe('request() defaults content-type: application/json for a JSON body', ()
 // be promoted from the body readers to a blanket router-level guard.
 describe('request() declares content-type on every state-changing request', () => {
   const bodyless: Array<[string, (c: ApiClient) => Promise<unknown>]> = [
-    ['POST /api/git/pull', (c) => c.gitPull()],
-    ['POST /api/inbox/cluster', (c) => c.clusterInbox()],
+    ['POST /api/merge-queue/recheck', (c) => c.recheckMergeQueue()],
+    ['POST /api/board-sync/now', (c) => c.syncBoardNow()],
     ['POST /api/runs/:id/cancel', (c) => c.cancelRun('run-1')],
     ['POST /api/runs/:id/stop', (c) => c.stopRun('run-1')],
     ['POST /api/runs/:id/resume', (c) => c.resumeRun('run-1')],
@@ -225,7 +225,7 @@ describe('request() declares content-type on every state-changing request', () =
   it('leaves a read with no content-type header at all', async () => {
     const stub = stubFetch();
     try {
-      await createApiClient('http://example.test').fetchGitStatus();
+      await createApiClient('http://example.test').fetchBranches();
       expect(stub.calls).toHaveLength(1);
       const headers = new Headers(stub.calls[0].init?.headers);
       expect(headers.has('content-type')).toBe(false);
@@ -451,34 +451,6 @@ describe('overseer methods', () => {
       });
       expect(sentJson(stub.calls[0])).toEqual({
         prompt: 'hi',
-        model: 'claude-fable-5-1',
-      });
-    } finally {
-      stub.restore();
-    }
-  });
-});
-
-describe('startPlan', () => {
-  it('POSTs /api/plan with just the prompt by default', async () => {
-    const stub = stubFetch();
-    try {
-      await createApiClient('http://example.test').startPlan('build it');
-      expect(stub.calls[0].url).toBe('http://example.test/api/plan');
-      expect(sentJson(stub.calls[0])).toEqual({ prompt: 'build it' });
-    } finally {
-      stub.restore();
-    }
-  });
-
-  it('includes model when the composer picks one', async () => {
-    const stub = stubFetch();
-    try {
-      await createApiClient('http://example.test').startPlan('build it', {
-        model: 'claude-fable-5-1',
-      });
-      expect(sentJson(stub.calls[0])).toEqual({
-        prompt: 'build it',
         model: 'claude-fable-5-1',
       });
     } finally {

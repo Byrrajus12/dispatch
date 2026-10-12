@@ -178,7 +178,6 @@ function Harness({ initialMode = 'list' }: { initialMode?: TasksMode }) {
       onOpenPr={noop}
       onOpenDoc={noop}
       onOpenAllDocs={noop}
-      onOpenNotes={noop}
       projectKey={ROOT}
       speechByTask={new Map()}
       composer={null}
