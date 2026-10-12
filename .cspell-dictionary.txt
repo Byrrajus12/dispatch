@@ -20,6 +20,7 @@ arrayish
 ASKPASS
 assertable
 atag
+atch
 authtest
 autodetection
 AUTOINCREMENT
@@ -92,6 +93,7 @@ cpushed
 CRDT
 CRDT's
 Crockford
+curlie
 curlopt
 cutover
 daemonfile
@@ -128,6 +130,7 @@ diffgc
 diffstat
 dirsize
 dismissable
+dispatc
 dispatchability
 dispatchable
 dispatchd
@@ -202,6 +205,7 @@ gopd
 gpgsign
 granularities
 greppable
+grpcurl
 hact
 hardlink
 hashery
@@ -227,12 +231,14 @@ hotspot
 hotspots
 HPKE
 hstatus
+httpx
 idempotently
 iglob
 IDREF
 indistinguish
 initialisation
 inlines
+inplace
 inspectable
 iojs
 ionice
@@ -272,6 +278,8 @@ linkify
 liveframe
 livefull
 liveiframe
+localdomain
+localtest
 lostconn
 luajit
 macbook
@@ -330,6 +338,7 @@ nosuch
 NOSYSTEM
 notekind
 noul
+nscurl
 numstat
 nvim
 objectname
@@ -464,6 +473,7 @@ rustls
 rustup
 sandboxing
 satteri
+sslip
 subshell
 Sätteri
 scandir
@@ -562,6 +572,7 @@ uall
 unfetched
 urlmatch
 uudecode
+websocat
 überblick
 ulid
 ulids

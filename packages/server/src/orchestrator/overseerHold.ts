@@ -1,11 +1,13 @@
 import { isAbsolute, normalize, relative, resolve, sep } from 'node:path';
 
+import { dequotedCommand } from '../floor.js';
 import {
   commandPositionNames,
   commandTokens,
   globMatches,
   isSimpleCommand,
   programName,
+  shellWords,
 } from './shellCommand.js';
 
 /**
@@ -42,6 +44,19 @@ const HTTP_CLIENTS = new Set([
   'telnet',
   'fetch',
   'aria2c',
+  'nscurl',
+  'wget2',
+  'lwp-request',
+  'get',
+  'post',
+  'curlie',
+  'httpx',
+  'xhs',
+  'websocat',
+  'grpcurl',
+  'openssl',
+  'osascript',
+  'pwsh',
   'node',
   'bun',
   'deno',
@@ -66,7 +81,6 @@ const READ_ONLY_PROGRAMS = new Set([
   'stat',
   'diff',
   'jq',
-  'yq',
   'bat',
 ]);
 // The `.dispatch` paths a token names, and whether one reaches the daemon files.
@@ -80,20 +94,69 @@ function dispatchPathIn(token: string): 'daemon' | 'files' | null {
     : 'files';
 }
 
+// Host names that resolve to a loopback address, or may (wildcard DNS).
+const LOOPBACK_NAMES = new Set([
+  'localhost',
+  'ip6-localhost',
+  'ip6-loopback',
+  'localhost.localdomain',
+]);
+const LOOPBACK_DOMAIN =
+  /(?:^|\.)(?:localhost|lvh\.me|localtest\.me|nip\.io|sslip\.io|xip\.io)$/;
+
+// An IPv4 address the way inet_aton reads it (one to four parts, each
+// decimal, octal or hex), as a number; null for anything else.
+function inetAton(host: string): number | null {
+  const parts = host.split('.');
+  if (parts.length > 4) return null;
+  const values: number[] = [];
+  for (const part of parts) {
+    // Leading zeros never change the value, however many there are.
+    const hex = /^0x0*([0-9a-f]{0,8})$/.exec(part);
+    const octal = /^0+([0-7]{0,11})$/.exec(part);
+    if (hex !== null) values.push(hex[1] === '' ? 0 : parseInt(hex[1], 16));
+    else if (octal !== null) {
+      values.push(octal[1] === '' ? 0 : parseInt(octal[1], 8));
+    } else if (/^[1-9]\d{0,15}$/.test(part)) values.push(Number(part));
+    else return null;
+  }
+  const last = values.pop() ?? 0;
+  let value = 0;
+  for (const byte of values) {
+    if (byte > 255) return null;
+    value = value * 256 + byte;
+  }
+  const room = 256 ** (4 - values.length);
+  return last < room ? value * room + last : null;
+}
+
+function isLocalV4(host: string): boolean {
+  const value = inetAton(host);
+  return value !== null && (value === 0 || Math.floor(value / 2 ** 24) === 127);
+}
+
+// A loopback or unspecified IPv6 address, an IPv4-mapped one included.
+function isLocalV6(host: string): boolean {
+  const address = host.replace(/%.*$/, '');
+  if (!address.includes(':') || !/^[0-9a-f:.]+$/.test(address)) return false;
+  const rest = address.replace(/^[0:]*/, '').replace(/^ffff:/, '');
+  return (
+    rest === '' ||
+    rest === '1' ||
+    /^0{0,4}:0{0,4}$/.test(rest) ||
+    /^7f[0-9a-f]{2}:/.test(rest) ||
+    (rest.includes('.') && isLocalV4(rest))
+  );
+}
+
 // A loopback or any-address host, in the spellings a URL or curl accepts.
 function isLocalHost(host: string): boolean {
-  const bare = host.replace(/^\[|\]$/g, '');
+  const bare = host.replace(/^\[|\]$/g, '').replace(/\.+$/, '');
   return (
-    bare === 'localhost' ||
-    bare.endsWith('.localhost') ||
-    /^127(?:\.\d{1,10}){0,3}$/.test(bare) ||
-    /^0+(?:\.0+){0,3}$/.test(bare) ||
-    bare === '::1' ||
-    /^(?:0{0,4}:){2,7}0{0,3}1$/.test(bare) ||
-    /^::ffff:(?:127\.|7f)/.test(bare) ||
-    /^0x7f[0-9a-f]{0,6}$/.test(bare) ||
-    /^0+177(?:\.\d{1,10}){0,3}$/.test(bare) ||
-    /^21(?:3[0-9]|4[0-7])\d{6}$/.test(bare)
+    LOOPBACK_NAMES.has(bare) ||
+    LOOPBACK_DOMAIN.test(bare) ||
+    isLocalV4(bare) ||
+    isLocalV6(bare)
   );
 }
 
@@ -107,10 +170,102 @@ function hostOf(token: string): string {
     const close = host.indexOf(']');
     return close === -1 ? host : host.slice(0, close + 1);
   }
-  // Two or more colons is a bare IPv6 address, not host:port.
-  return host.indexOf(':') !== host.lastIndexOf(':')
+  // Two or more colons in an address of hex digits is bare IPv6, not host:port.
+  return host.indexOf(':') !== host.lastIndexOf(':') &&
+    /^[0-9a-f:.%]+$/.test(host)
     ? host
     : host.split(':')[0];
+}
+
+// Every host a token may name: as a URL, and each colon-separated part, as
+// curl's `--resolve host:port:addr` and `--connect-to` spell them.
+function hostsIn(token: string): string[] {
+  return [
+    hostOf(token),
+    ...token.split(':').map((part) => hostOf(part.replace(/^\/+/, ''))),
+  ];
+}
+
+// Options that read the request's URLs from a file, which no reader sees.
+const CURL_CONFIG = /^(?:-[a-zA-Z]*K|--config$)/;
+const URL_FILE = /^(?:-[a-zA-Z]*i|--input-file$)/;
+const URL_FILE_CLIENTS = new Set(['wget', 'wget2', 'aria2c']);
+// httpie-style clients read `:4000/x` as localhost.
+const HTTPIE_CLIENTS = new Set(['http', 'https', 'xh', 'xhs', 'httpie']);
+
+// Whether an HTTP client in the command may reach a loopback host.
+function reachesLoopback(
+  tokens: readonly string[],
+  programs: readonly string[]
+): boolean {
+  if (!programs.some((program) => HTTP_CLIENTS.has(program))) return false;
+  if (tokens.some((token) => hostsIn(token).some(isLocalHost))) return true;
+  if (
+    programs.includes('curl') &&
+    tokens.some(
+      (token, at) =>
+        CURL_CONFIG.test(token) ||
+        (token === '--url' && tokens[at + 1]?.startsWith('@'))
+    )
+  ) {
+    return true;
+  }
+  if (
+    programs.some((program) => URL_FILE_CLIENTS.has(program)) &&
+    tokens.some((token) => URL_FILE.test(token))
+  ) {
+    return true;
+  }
+  return (
+    programs.some((program) => HTTPIE_CLIENTS.has(program)) &&
+    tokens.some((token) => token.startsWith(':'))
+  );
+}
+
+// Text that hints at what the holds guard: Dispatch, its daemon, a loopback
+// host or a glob bracket a hold may misread.
+const HELD_TARGET_HINTS = [
+  'dispatch',
+  'daemon',
+  'localhost',
+  '127.',
+  '::1',
+  '0.0.0.0',
+  '[',
+  'lvh.me',
+  'nip.io',
+  'sslip.io',
+  'xip.io',
+  'localtest.me',
+  '.local',
+  '0x7f',
+  '0177',
+  '2130706',
+];
+
+/**
+ * True when a command, with the project's own path taken out, mentions
+ * anything a hold guards. The Overseer never answers such a command itself
+ * and grants it only by its text, so a gap in a hold costs an ask, not a bypass.
+ */
+export function hintsAtHeldTarget(command: string, rootDir?: string): boolean {
+  const strip = (text: string): string =>
+    rootDir !== undefined && rootDir.length > 1
+      ? text.split(rootDir).join('')
+      : text;
+  const texts = [
+    command,
+    shellWords(command)?.join(' ') ?? '',
+    dequotedCommand(command),
+  ].map((text) => strip(text).toLowerCase());
+  if (
+    texts.some((text) => HELD_TARGET_HINTS.some((hint) => text.includes(hint)))
+  ) {
+    return true;
+  }
+  return commandTokens(texts[0]).some(
+    (token) => /[:/]/.test(token) && hostsIn(token).some(isLocalHost)
+  );
 }
 
 // The hold a shell command needs, from its tokens as the shell spells them.
@@ -129,14 +284,12 @@ function commandHold(command: string): OverseerHold | null {
   ) {
     return 'dispatch-cli';
   }
-  const paths = tokens.map(dispatchPathIn);
+  // Paths are read both split at `=` and whole, so `--to=.dispatch/x` and a
+  // bracket like `[[=h=]]` are each seen as a path segment.
+  const words = dequotedCommand(command).split(/[\s;&|()<>`]+/);
+  const paths = [...tokens, ...words].map(dispatchPathIn);
   if (paths.includes('daemon')) return 'daemon-api';
-  if (
-    programs.some((program) => HTTP_CLIENTS.has(program)) &&
-    tokens.some((token) => isLocalHost(hostOf(token)))
-  ) {
-    return 'daemon-api';
-  }
+  if (reachesLoopback(tokens, programs)) return 'daemon-api';
   if (paths.includes('files')) {
     const readOnly =
       isSimpleCommand(command) && READ_ONLY_PROGRAMS.has(programs[0] ?? '');

@@ -1,3 +1,4 @@
+import { hintsAtHeldTarget } from './overseerHold.js';
 import { isSimpleCommand, programName, shellWords } from './shellCommand.js';
 
 /** How long "Allow for this conversation" lasts at most. */
@@ -15,13 +16,54 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value) ?? 'null';
 }
 
+// A command line with runs of spaces and tabs outside quotes folded to one
+// space and trimmed; quoted text, escapes and newlines stay as written.
+function foldBlanks(command: string): string {
+  let out = '';
+  let blank = false;
+  let i = 0;
+  while (i < command.length) {
+    const char = command[i];
+    if (char === ' ' || char === '\t') {
+      blank = true;
+      i += 1;
+      continue;
+    }
+    let end = i + 1;
+    if (char === '\\') end = i + 2;
+    else if (char === "'") {
+      const close = command.indexOf("'", i + 1);
+      end = close === -1 ? command.length : close + 1;
+    } else if (char === '"' || (char === '$' && command[i + 1] === "'")) {
+      // Double quotes and `$'…'` both honour backslash escapes.
+      const quote = char === '"' ? '"' : "'";
+      let j = char === '"' ? i + 1 : i + 2;
+      while (j < command.length && command[j] !== quote) {
+        j += command[j] === '\\' ? 2 : 1;
+      }
+      end = j + 1;
+    }
+    if (blank && out !== '') out += ' ';
+    blank = false;
+    out += command.slice(i, end);
+    i = end;
+  }
+  return out;
+}
+
 /**
  * What a grant covers. A simple shell command (isSimpleCommand: one program,
- * plain arguments) grants its program; any other command line grants only that
- * exact text, with runs of spaces and tabs (never newlines) folded. A Codex
- * permissions ask grants exactly what it requested; any other tool's grant is the tool.
+ * plain arguments) grants its program, named as written when it is a path;
+ * any other command line, or a simple one that hints at what a hold guards
+ * (hintsAtHeldTarget, past `rootDir`), grants only that exact text, with runs
+ * of blanks outside quotes folded. A Codex permissions ask grants exactly what
+ * it requested; any other tool's grant is the tool.
  */
-export function grantKey(toolName: string, input: unknown): string {
+export function grantKey(
+  toolName: string,
+  input: unknown,
+  rootDir?: string
+): string {
   if (toolName === 'codex.permissions') {
     const permissions =
       typeof input === 'object' && input !== null
@@ -37,9 +79,14 @@ export function grantKey(toolName: string, input: unknown): string {
       ? (input as { command?: unknown }).command
       : undefined;
   if (typeof command !== 'string') return toolName;
-  const first = isSimpleCommand(command) ? shellWords(command)?.[0] : undefined;
-  if (first !== undefined) return `${toolName}:${programName(first)}`;
-  return `${toolName}:${command.replace(/[ \t]+/g, ' ').replace(/^ | $/g, '')}`;
+  const first =
+    isSimpleCommand(command) && !hintsAtHeldTarget(command, rootDir)
+      ? shellWords(command)?.[0]
+      : undefined;
+  if (first !== undefined) {
+    return `${toolName}:${first.includes('/') ? first : programName(first)}`;
+  }
+  return `${toolName}:${foldBlanks(command)}`;
 }
 
 interface Grant {

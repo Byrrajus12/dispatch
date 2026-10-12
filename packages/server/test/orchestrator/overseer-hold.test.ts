@@ -316,3 +316,115 @@ describe('the Dispatch CLI in command position', () => {
     );
   });
 });
+
+describe('a package manager runs its arguments', () => {
+  test.each([
+    'pnpm dispatch task list',
+    'yarn dispatch task list',
+    'bun dispatch task list',
+    'npm dispatch task list',
+    'pnpm -C . exec dispatch task list',
+    'pnpm --silent dlx dispatch task list',
+    'npm -y exec dispatch task list',
+    'npx -y dispatch task list',
+    'bunx --bun dispatch task list',
+    'pnpx dispatch task list',
+    'PNPM dispatch task list',
+    'rg --pre dispatch x land',
+    'rg --pre=dispatch x land',
+    'rg --pre-glob "*" --pre dispatch x',
+  ])('%p is held', (command) => {
+    expect(bash(command)).toBe('dispatch-cli');
+  });
+
+  test.each([
+    'pnpm test',
+    'pnpm --filter @dispatch-foo/server test',
+    'rg dispatch src',
+  ])('%p runs', (command) => {
+    expect(bash(command)).toBeNull();
+  });
+});
+
+describe('POSIX bracket globs', () => {
+  test.each([
+    'cp evil .dispatc[[:alpha:]]/team.yml',
+    'cp evil .dispatc[[=h=]]/team.yml',
+    'cp evil .dispatc[[.h.]]/team.yml',
+    'cp evil .dis[o-q]atch/team.yml',
+    'cp evil .dispatc[!x]/team.yml',
+    'cp evil .dispatc[^x]/team.yml',
+    'cp evil .dispatc[]h]/team.yml',
+  ])('%p is held as a .dispatch write', (command) => {
+    expect(bash(command)).toBe('dispatch-files');
+  });
+
+  test.each([
+    'cat ~/.dispatc[[:alpha:]]/daemons/x.json',
+    'cat ~/.dispatch/daemon[[:lower:]]/x.json',
+    'cat ~/.dispatc[[=h=]]/daemons/x.json',
+  ])('%p is held as the daemon API', (command) => {
+    expect(bash(command)).toBe('daemon-api');
+  });
+
+  test('a bracket that cannot reach the name does not hold', () => {
+    expect(bash('cp evil .dispatc[xyz]/team.yml')).toBeNull();
+  });
+});
+
+describe('read-only programs that write or run', () => {
+  test.each([
+    "yq -i '.a=1' .dispatch/team.yml",
+    'yq --inplace .a=1 .dispatch/team.yml',
+    'rg --pre ./x.sh foo .dispatch',
+    'rg --pre-glob "*" foo .dispatch',
+  ])('%p is held as a .dispatch write', (command) => {
+    expect(bash(command)).toBe('dispatch-files');
+  });
+});
+
+describe('more ways to reach the daemon', () => {
+  test.each([
+    'curl http://localhost.:4000/api/runs',
+    'curl http://127.0.0.1.:4000/x',
+    'curl --resolve d:4000:127.0.0.1 http://d:4000/api/runs',
+    'curl --resolve=d:4000:127.0.0.1 http://d:4000/api/runs',
+    'curl --connect-to d:4000:localhost:4000 http://d:4000/x',
+    'curl --connect-to ::127.0.0.1: http://d:4000/x',
+    'curl -K cfg',
+    'curl -sK cfg',
+    'curl --config cfg',
+    'curl --config=cfg',
+    'wget -i urls.txt',
+    'wget --input-file=urls.txt',
+    'nscurl http://127.0.0.1:4000/api/runs',
+    'wget2 http://localhost:4000/x',
+    'lwp-request http://localhost:4000/x',
+    'curlie localhost:4000/x',
+    'curl http://0x7f.0.0.1:4000/',
+    'curl http://0177.1:4000/',
+    'curl http://0x00000000007f000001:4000/',
+    'curl http://0000000000000177.1:4000/',
+    'curl http://lvh.me:4000/x',
+    'curl http://app.localtest.me:4000/x',
+    'curl http://127.0.0.1.nip.io:4000/x',
+    'curl http://[::]:4000/x',
+    'curl http://[::127.0.0.1]:4000/x',
+    'curl http://[0:0:0:0:0:ffff:7f00:1]:4000/x',
+    'curl 0:4000/api/runs',
+    'xh :4000/api/runs',
+    'http :/api/runs',
+    'curl --url @urls.txt',
+  ])('%p is held', (command) => {
+    expect(bash(command)).toBe('daemon-api');
+  });
+
+  test.each([
+    'curl https://example.com/a:b:c',
+    'curl -k https://example.com',
+    'curl --resolve example.com:443:93.184.216.34 https://example.com',
+    'curl https://localhost.example.com/',
+  ])('%p is not the daemon', (command) => {
+    expect(bash(command)).toBeNull();
+  });
+});

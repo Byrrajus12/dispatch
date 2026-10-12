@@ -963,7 +963,7 @@ export class OverseerManager {
     if (granted) {
       this.grants.grant(
         conversationId,
-        grantKey(approval.toolName, approval.input),
+        grantKey(approval.toolName, approval.input, this.ctx.rootDir),
         Date.now(),
         record.sessionId
       );
@@ -975,7 +975,7 @@ export class OverseerManager {
       requestId,
       outcome: decision.allow ? 'allowed' : 'denied',
       text: decision.allow
-        ? `Allowed${granted ? ` ${grantKey(approval.toolName, approval.input)} for this conversation (up to 4 hours)` : ''}: ${approval.summary}`
+        ? `Allowed${granted ? ` ${grantKey(approval.toolName, approval.input, this.ctx.rootDir)} for this conversation (up to 4 hours)` : ''}: ${approval.summary}`
         : `Denied: ${approval.summary}${reason !== undefined && reason !== '' ? ` — ${reason}` : ''}`,
     });
     this.ctx.bus?.closeGate(
@@ -1018,7 +1018,7 @@ export class OverseerManager {
       if (
         this.grants.allows(
           conversationId,
-          grantKey(toolName, input),
+          grantKey(toolName, input, this.ctx.rootDir),
           Date.now(),
           record?.sessionId
         )

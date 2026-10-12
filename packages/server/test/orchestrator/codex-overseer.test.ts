@@ -1141,6 +1141,22 @@ dispatch task list'`,
   `/bin/zsh -lc 'cp x .dispatch/'`,
   `/bin/zsh -lc 'cd .dispatch && touch x'`,
   `/bin/zsh -lc 'cd .disp*ch && touch x'`,
+  // round 4: package managers, bracket globs, read-only writers, loopback forms
+  `/bin/zsh -lc 'pnpm dispatch task list'`,
+  `/bin/zsh -lc 'pnpm -C . exec dispatch task list'`,
+  `/bin/zsh -lc 'pnpm --silent dlx dispatch task list'`,
+  `/bin/zsh -lc 'yarn dispatch task list'`,
+  `/bin/zsh -lc 'npm -y exec dispatch task list'`,
+  `/bin/zsh -lc 'rg --pre dispatch x land'`,
+  `/bin/zsh -lc 'curl http://localhost.:4000/api/runs'`,
+  `/bin/zsh -lc 'curl --resolve d:4000:127.0.0.1 http://d:4000/api/runs'`,
+  `/bin/zsh -lc 'nscurl http://127.0.0.1:4000/api/runs'`,
+  `/bin/zsh -lc 'curl http://lvh.me:4000/api/runs'`,
+  `/bin/zsh -lc 'curl -K cfg'`,
+  `/bin/zsh -lc "yq -i '.a=1' .dispatch/team.yml"`,
+  `/bin/zsh -lc 'cp evil .dispatc[[:alpha:]]/team.yml'`,
+  `/bin/zsh -lc 'cat ~/.dispatc[[:alpha:]]/daemons/x.json'`,
+  `/bin/zsh -lc 'cp evil .dispatc[[=h=]]/team.yml'`,
 ];
 
 describe('CodexOverseer allows itself only simple commands', () => {
@@ -1173,9 +1189,39 @@ describe('CodexOverseer allows itself only simple commands', () => {
   );
 
   it.each([
+    ["/bin/zsh -lc 'pnpm dispatch task list'", 'dispatch-cli'],
+    ["/bin/zsh -lc 'cp evil .dispatc[[:alpha:]]/team.yml'", 'dispatch-files'],
+    ["/bin/zsh -lc 'cat ~/.dispatc[[:alpha:]]/daemons/x.json'", 'daemon-api'],
+    ["/bin/zsh -lc 'nscurl http://127.0.0.1:4000/api/runs'", 'daemon-api'],
+    ["/bin/zsh -lc 'curl http://lvh.me:4000/x'", 'daemon-api'],
+    ["/bin/zsh -lc 'xh :4000/api/runs'", 'daemon-api'],
+  ])('holds %p as %p', async (command, check) => {
+    const { seen } = await bypassAsk(command);
+    expect(seen.map((r) => r.check)).toEqual([check]);
+  });
+
+  // A simple command that hints at Dispatch, a loopback host or a glob bracket
+  // still asks (with no hold), so a gap in a hold costs an ask, not a bypass.
+  it.each([
+    ["/bin/zsh -lc 'ls ~/.dispatch'"],
+    ["/bin/zsh -lc 'unknown-client http://lvh.me:4000/x'"],
+    ["/bin/zsh -lc 'unknown-client http://app.nip.io/x'"],
+    ["/bin/zsh -lc 'ls src/[ab].ts'"],
+    ["/bin/zsh -lc 'unknown-client 127.0.0.1:4000'"],
+    ["/bin/zsh -lc 'unknown-client 0:4000/api'"],
+    ["/bin/zsh -lc 'ls /work/shop/../shop-dispatch'"],
+    ["/bin/zsh -lc 'cat ~/.Dis\\patch/x'"],
+  ])('asks about the hinting command %p', async (command) => {
+    const { seen } = await bypassAsk(command);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].check).toBeUndefined();
+  });
+
+  it.each([
     ["/bin/zsh -lc 'git status --short'"],
     ["/bin/zsh -lc 'pnpm test'"],
     [['/bin/zsh', '-lc', "git commit -m 'a b'"]],
+    ["/bin/zsh -lc 'ls /work/shop/src'"],
   ])('allows the simple command %p itself', async (command) => {
     const { seen, answer } = await bypassAsk(command);
     expect(seen).toEqual([]);

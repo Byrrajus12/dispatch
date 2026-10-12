@@ -156,6 +156,8 @@ const FIND_EXEC = /^-(?:exec|execdir|ok|okdir)$/;
 // git options that run a configured or given program.
 const GIT_EXEC_OPTION =
   /^(?:-c|--config-env|--exec-path|--upload-pack|--receive-pack)/;
+// ripgrep options that run a preprocessor program on each file.
+const RG_PREPROCESSOR = /^--pre(?:-glob)?(?:=|$)/;
 
 /** A program's name as a case-insensitive filesystem resolves it. */
 export function programName(word: string): string {
@@ -192,6 +194,9 @@ export function isSimpleCommand(command: string): boolean {
     return false;
   }
   if (program === 'git' && args.some((arg) => GIT_EXEC_OPTION.test(arg))) {
+    return false;
+  }
+  if (program === 'rg' && args.some((arg) => RG_PREPROCESSOR.test(arg))) {
     return false;
   }
   return true;
@@ -241,9 +246,17 @@ const KEYWORDS = new Set([
   'until',
   'do',
 ]);
-// Package-manager subcommands that run the next word as a program.
-const PACKAGE_RUN = new Set(['exec', 'dlx', 'x', 'run', 'create']);
-const RUN_PACKAGE_MANAGERS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
+// Package managers run their arguments as scripts, binaries or packages
+// (`pnpm dispatch`, `npm -y exec dispatch`), past any global options.
+const RUN_PACKAGE_MANAGERS = new Set([
+  'npm',
+  'pnpm',
+  'yarn',
+  'bun',
+  'npx',
+  'bunx',
+  'pnpx',
+]);
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 // Programs that run text they read (a pipe, a here-doc, a file): with one in a
 // line, any word of the line may end up run.
@@ -389,15 +402,12 @@ function runsItsArguments(
   program: string,
   args: readonly ScannedWord[]
 ): boolean {
-  const first = args.find((arg) => !arg.target)?.text.toLowerCase() ?? '';
   return (
     RUNNERS.has(program) ||
-    program === 'npx' ||
-    program === 'bunx' ||
-    program === 'pnpx' ||
-    (RUN_PACKAGE_MANAGERS.has(program) && PACKAGE_RUN.has(first)) ||
+    RUN_PACKAGE_MANAGERS.has(program) ||
     (program === 'find' && args.some((arg) => FIND_EXEC.test(arg.text))) ||
     (program === 'git' && args.some((arg) => GIT_EXEC_OPTION.test(arg.text))) ||
+    (program === 'rg' && args.some((arg) => RG_PREPROCESSOR.test(arg.text))) ||
     (INTERPRETERS.has(program) &&
       args.some((arg) => INLINE_CODE_FLAG.test(arg.text)))
   );
@@ -463,11 +473,54 @@ function namesFrom(command: string, readComments: boolean): string[] {
 
 const GLOB = /[*?[]/;
 const MAX_GLOB_LENGTH = 64;
-const globCache = new Map<string, RegExp | null>();
+// Each glob's pattern as written and folded to either letter case.
+const globCache = new Map<string, [RegExp, RegExp] | null>();
+// A bracket's character class, a collating symbol or an equivalence class
+// (`[:alpha:]`, `[.h.]`, `[=h=]`), which this reader does not evaluate.
+const POSIX_BRACKET_CLASS = /\[[:=.]/;
+
+// A glob as an anchored regular expression, or null for one this reader cannot
+// evaluate exactly (a POSIX class, an unclosed or invalid bracket).
+function globPattern(glob: string): RegExp | null {
+  let source = '';
+  let i = 0;
+  while (i < glob.length) {
+    const char = glob[i];
+    if (char === '*') {
+      source += '.*';
+      i += 1;
+    } else if (char === '?') {
+      source += '.';
+      i += 1;
+    } else if (char === '[') {
+      let j = i + 1;
+      const negate = glob[j] === '!' || glob[j] === '^';
+      if (negate) j += 1;
+      const start = j;
+      // A `]` first in the bracket is one of its characters.
+      if (glob[j] === ']') j += 1;
+      while (j < glob.length && glob[j] !== ']') j += 1;
+      if (j >= glob.length) return null;
+      const body = glob.slice(start, j);
+      if (POSIX_BRACKET_CLASS.test(body)) return null;
+      source += `[${negate ? '^' : ''}${body.replace(/[\\\]^[]/g, '\\$&')}]`;
+      i = j + 1;
+    } else {
+      source += char.replace(/[.+^${}()|\\\]]/g, '\\$&');
+      i += 1;
+    }
+  }
+  try {
+    return new RegExp(`^${source}$`);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Whether a word names `name` case-insensitively, or is a glob that could
- * expand to it. A glob too long to compile cheaply counts as a match.
+ * expand to it (in any letter case). A glob too long to compile cheaply, or
+ * one this reader cannot evaluate exactly, counts as a match.
  */
 export function globMatches(word: string, name: string): boolean {
   const lower = word.toLowerCase();
@@ -475,22 +528,19 @@ export function globMatches(word: string, name: string): boolean {
   if (!GLOB.test(lower)) return false;
   // A glob matches a leading dot only with a literal one (`.disp*`, not `*`).
   if (name.startsWith('.') && !lower.startsWith('.')) return false;
-  if (lower.length > MAX_GLOB_LENGTH) return true;
-  let pattern = globCache.get(lower);
-  if (pattern === undefined) {
-    const source = lower
-      .replace(/[.+^${}()|\\]/g, '\\$&')
-      .replace(/\*/g, '.*')
-      .replace(/\?/g, '.')
-      .replace(/\[!/g, '[^');
-    try {
-      pattern = new RegExp(`^${source}$`);
-    } catch {
-      pattern = null;
-    }
-    globCache.set(lower, pattern);
+  if (word.length > MAX_GLOB_LENGTH) return true;
+  let patterns = globCache.get(word);
+  if (patterns === undefined) {
+    const pattern = globPattern(word);
+    patterns =
+      pattern === null ? null : [pattern, new RegExp(pattern.source, 'i')];
+    globCache.set(word, patterns);
   }
-  return pattern === null || pattern.test(name);
+  if (patterns === null) return true;
+  const [exact, folded] = patterns;
+  return (
+    exact.test(name) || exact.test(name.toUpperCase()) || folded.test(name)
+  );
 }
 
 // Tokens that, inside a command the reader cannot fully see, may build or

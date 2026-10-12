@@ -34,7 +34,7 @@ import type {
   OverseerTurn,
   OverseerTurnOptions,
 } from '../overseerBackend.js';
-import { overseerHoldFor } from '../overseerHold.js';
+import { hintsAtHeldTarget, overseerHoldFor } from '../overseerHold.js';
 import type { OverseerHold } from '../overseerHold.js';
 import {
   EMPTY_REPLY_MESSAGE,
@@ -148,6 +148,8 @@ function isInside(root: string, path: string): boolean {
 
 // Answers the Overseer gives without asking, only for a readable ask with no hold:
 // bypass allows it, acceptEdits allows an edit inside the checkout; undefined means ask.
+// Accepted: under bypass a simple command may run a script the agent wrote
+// (`./x.sh`, `pnpm run x`), as Claude's Overseer may.
 function selfDecision(
   mode: string | undefined,
   approval: PendingCodexApproval,
@@ -156,6 +158,12 @@ function selfDecision(
   rootDir: string
 ): ApprovalDecision | undefined {
   if (held || !view.known) return undefined;
+  // A command that hints at Dispatch or a loopback host asks even when no hold
+  // fired, so a gap in a hold costs an ask, not a bypass.
+  const command = view.input.command;
+  if (typeof command === 'string' && hintsAtHeldTarget(command, rootDir)) {
+    return undefined;
+  }
   if (mode === 'bypassPermissions') return { allow: true };
   if (
     mode === 'acceptEdits' &&

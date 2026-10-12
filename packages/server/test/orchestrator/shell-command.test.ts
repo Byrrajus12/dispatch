@@ -10,6 +10,7 @@ import { grantKey } from '../../src/orchestrator/overseerGrants.js';
 import { overseerHoldFor } from '../../src/orchestrator/overseerHold.js';
 import {
   commandTokens,
+  globMatches,
   isSimpleCommand,
   mayHideFloorAct,
 } from '../../src/orchestrator/shellCommand.js';
@@ -57,6 +58,9 @@ describe('isSimpleCommand', () => {
     ['python -c', 'python3 -c "print(1)"'],
     ['deno eval', 'deno eval "1"'],
     ['git -c', 'git -c core.pager=less log'],
+    ['rg --pre', 'rg --pre ./x.sh foo'],
+    ['rg --pre=', 'rg --pre=./x.sh foo'],
+    ['rg --pre-glob', 'rg --pre-glob *.pdf foo'],
     ['a non-breaking space', 'dispatch task list'],
     ['a look-alike letter', 'gіt status'],
     ['a NUL', 'ls\u0000rm'],
@@ -186,5 +190,44 @@ describe('approval reading stays linear', () => {
       check();
       expect(performance.now() - started).toBeLessThan(500);
     }
+  });
+});
+
+describe('globMatches', () => {
+  it.each([
+    ['gi[[:alpha:]]', 'git'],
+    ['.dispatc[[:alpha:]]', '.dispatch'],
+    ['.dispatc[[=h=]]', '.dispatch'],
+    ['.dispatc[[.h.]]', '.dispatch'],
+    ['.dispatc[^x]', '.dispatch'],
+    ['.dispatc[!x]', '.dispatch'],
+    ['.dispatc[]h]', '.dispatch'],
+    ['.dis[o-q]atch', '.dispatch'],
+    ['.dispatc[H]', '.dispatch'],
+    ['.dispatc[^A-Z]', '.dispatch'],
+    ['.dispatc[[', '.dispatch'],
+    ['.dispatc[z-a]', '.dispatch'],
+  ])('%p may expand to %p', (word, name) => {
+    expect(globMatches(word, name)).toBe(true);
+  });
+
+  it.each([
+    ['.dispatc[xyz]', '.dispatch'],
+    ['gi[!t]', 'git'],
+    ['*', '.dispatch'],
+    ['g?', 'git'],
+  ])('%p cannot expand to %p', (word, name) => {
+    expect(globMatches(word, name)).toBe(false);
+  });
+});
+
+describe('a run command with a bracket glob', () => {
+  it.each([
+    '/usr/bin/gi[[:alpha:]] pus[[:alpha:]] --force origin main',
+    'gi[[=t=]] pus[[=h=]] --force origin main',
+    'gi[^x] push --force',
+  ])('waits for a human: %p', (command) => {
+    expect(mayHideFloorAct(command)).toBe(true);
+    expect(codexCommandNeedsHuman(`/bin/zsh -lc '${command}'`)).toBe(true);
   });
 });

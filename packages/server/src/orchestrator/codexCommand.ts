@@ -96,7 +96,8 @@ export function codexCommandFloor(command: unknown): FloorCheck | null {
  * otherwise answered: it is unreadable, trips the floor, or is not simple and
  * may hide a floor act. Runs work in their own worktree, so a non-simple
  * command with no floor-relevant part may proceed; the Overseer, in the main
- * checkout, asks about every non-simple command instead.
+ * checkout, asks about every non-simple command instead. Accepted: a name
+ * joined from variables (`g=gi; /usr/bin/${g}t push --force`) goes unseen.
  */
 export function codexCommandNeedsHuman(command: unknown): boolean {
   const reading = readCodexCommand(command);

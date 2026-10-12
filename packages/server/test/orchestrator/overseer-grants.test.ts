@@ -25,9 +25,13 @@ describe('grantKey', () => {
     expect(
       grantKey('Bash', { command: 'FOO=1 ./node_modules/.bin/vitest run' })
     ).toBe('Bash:FOO=1 ./node_modules/.bin/vitest run');
+    // A program named by a path keeps that path: `./x.sh` is not `/tmp/x.sh`.
     expect(
       grantKey('Bash', { command: './node_modules/.bin/vitest run' })
-    ).toBe('Bash:vitest');
+    ).toBe('Bash:./node_modules/.bin/vitest');
+    expect(grantKey('Bash', { command: './x.sh' })).not.toBe(
+      grantKey('Bash', { command: '/tmp/x.sh' })
+    );
     expect(grantKey('Bash', { command: '  git status' })).toBe('Bash:git');
   });
 
@@ -74,6 +78,39 @@ describe('grantKey', () => {
         `Bash:${command.replace(/[ \t]+/g, ' ')}`
       );
     }
+  });
+
+  test('blanks inside quotes stay as written in an exact-text key', () => {
+    for (const [a, b] of [
+      ['echo "a  b"; x', 'echo "a b"; x'],
+      ["echo 'a\tb'; x", "echo 'a b'; x"],
+      ["echo $'a\\'  b'; x", "echo $'a\\' b'; x"],
+      ['echo a\\  b; x', 'echo a\\ b; x'],
+    ]) {
+      expect(grantKey('Bash', { command: a })).not.toBe(
+        grantKey('Bash', { command: b })
+      );
+    }
+    expect(grantKey('Bash', { command: 'ls;  echo "a  b"  ' })).toBe(
+      'Bash:ls; echo "a  b"'
+    );
+  });
+
+  test('a simple command that names Dispatch or a loopback host grants only its text', () => {
+    expect(grantKey('Bash', { command: 'cat ~/.dispatch/config.yml' })).toBe(
+      'Bash:cat ~/.dispatch/config.yml'
+    );
+    expect(
+      grantKey('codex.commandExecution', { command: 'curl http://lvh.me/x' })
+    ).toBe('codex.commandExecution:curl http://lvh.me/x');
+    // The project's own path is not a hint.
+    expect(
+      grantKey(
+        'Bash',
+        { command: 'ls /Users/x/Sites/dispatch/src' },
+        '/Users/x/Sites/dispatch'
+      )
+    ).toBe('Bash:ls');
   });
 
   test('newlines stay distinct from spaces in an exact-text key', () => {
