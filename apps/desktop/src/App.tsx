@@ -18,6 +18,7 @@ import {
 } from 'react';
 
 import { AwayDigest, useNarratorSince } from './components/chat/AwayDigest';
+import { CapturedNotes } from './components/chat/CapturedNotes';
 import { ForYouPosts } from './components/chat/ForYouPosts';
 import { TasksComposer } from './components/chat/TasksComposer';
 import { ConversationTimeline } from './components/conversation/ConversationTimeline';
@@ -116,6 +117,7 @@ import {
 } from './lib/appNav';
 import { hideArchivedRuns } from './lib/archiveFilter';
 import { hasDispatchKey, launchRootKey } from './lib/bootWarm';
+import { openCaptures } from './lib/capturedNotes';
 import { dispatchConfigKey } from './lib/configEvents';
 import { mentions, subjectOf } from './lib/conversationScope';
 import { type DecisionItem, decisionTarget } from './lib/decisionFeed';
@@ -1956,6 +1958,7 @@ function App() {
           }),
     [data.me, mailbox, myTaskIds, followedRooms]
   );
+  const captures = useMemo(() => openCaptures(data.inbox), [data.inbox]);
   // An agent or narrator door: Tasks on a task, a milestone or a preset.
   const openDoor = (door: OverseerDoor) => {
     const taskId = door.taskId ?? door.milestoneId;
@@ -2122,7 +2125,7 @@ function App() {
             overseer={overseer}
             projectPath={activeProject?.path ?? null}
             asks={needs.count}
-            postsCount={posts.length}
+            postsCount={posts.length + captures.length}
             runs={data.runs}
             merges={data.mergeQueue?.entries ?? []}
             drafts={
@@ -2275,6 +2278,11 @@ function App() {
                   onOpen={openPost}
                   onReply={replyToPost}
                   holding={overseerTurnLive(overseer)}
+                />
+                <CapturedNotes
+                  items={captures}
+                  onMakeTask={rawData.handleConvertInbox}
+                  onDismiss={rawData.handleDismissInbox}
                 />
               </>
             }
