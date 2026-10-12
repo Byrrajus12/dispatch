@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 
-import { explainFailure } from '../src/setup/failures.js';
+import {
+  CODEX_SIGNED_OUT_MESSAGE,
+  explainFailure,
+} from '../src/setup/failures.js';
 
 // Captured from real failures; keep them verbatim when adding cases.
 const CASES: [string, string | undefined, ReturnType<typeof explainFailure>][] =
@@ -195,5 +198,17 @@ describe('explainFailure', () => {
 
   it('returns null for text it does not recognise', () => {
     expect(explainFailure('TypeError: x is undefined')).toBeNull();
+  });
+});
+
+describe('Codex sign-in', () => {
+  it('maps the Codex signed-out message to Codex sign-in, even behind a prefix', () => {
+    expect(
+      explainFailure(`planning failed: ${CODEX_SIGNED_OUT_MESSAGE}`)
+    ).toEqual({
+      reason: 'Codex needs you to sign in again.',
+      fix: 'setup-agent',
+      providerId: 'codex',
+    });
   });
 });
