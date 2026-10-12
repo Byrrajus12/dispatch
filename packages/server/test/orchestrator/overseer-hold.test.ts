@@ -407,6 +407,10 @@ describe('more ways to reach the daemon', () => {
     'curl http://0000000000000177.1:4000/',
     'curl http://lvh.me:4000/x',
     'curl http://localh.st:4000/x',
+    // curl percent-decodes the host name.
+    'curl http://l%6fcalhost:4000/api/runs',
+    'curl http://127%2e0%2e0%2e1:4000/',
+    'curl http://%31%32%37.0.0.1:4000/',
     'curl http://app.localho.st:4000/x',
     'curl http://lacolhost.com:4000/x',
     'curl http://www.lacolhost.com:4000/x',

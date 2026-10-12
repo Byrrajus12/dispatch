@@ -160,8 +160,20 @@ function isLocalHost(host: string): boolean {
   );
 }
 
-// The host a token names: past a scheme and user, up to a port or path.
+// One pass of %XX decoding, as curl applies to a URL's host name.
+function percentDecoded(text: string): string {
+  return text.replace(/%([0-9a-f]{2})/gi, (_match, hex: string) =>
+    String.fromCharCode(parseInt(hex, 16))
+  );
+}
+
+// The host a token names: past a scheme and user, up to a port or path,
+// percent-decoded, since curl decodes an encoded host name.
 function hostOf(token: string): string {
+  return percentDecoded(rawHostOf(token)).toLowerCase();
+}
+
+function rawHostOf(token: string): string {
   const rest = token.toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
   const slash = rest.indexOf('/');
   const authority = slash === -1 ? rest : rest.slice(0, slash);
@@ -283,6 +295,7 @@ export function hintsAtHeldTarget(command: string, rootDir?: string): boolean {
     shellWords(command)?.join(' ') ?? '',
     dequotedCommand(command),
   ].map((text) => strip(text).toLowerCase());
+  texts.push(percentDecoded(texts[0]).toLowerCase());
   if (
     texts.some((text) => HELD_TARGET_HINTS.some((hint) => text.includes(hint)))
   ) {

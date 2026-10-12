@@ -1224,6 +1224,7 @@ describe('CodexOverseer allows itself only simple commands', () => {
     ["/bin/zsh -lc 'nscurl http://127.0.0.1:4000/api/runs'", 'daemon-api'],
     ["/bin/zsh -lc 'curl http://lvh.me:4000/x'", 'daemon-api'],
     ["/bin/zsh -lc 'xh :4000/api/runs'", 'daemon-api'],
+    ["/bin/zsh -lc 'curl http://l%6fcalhost:4000/api/runs'", 'daemon-api'],
   ])('holds %p as %p', async (command, check) => {
     const { seen } = await bypassAsk(command);
     expect(seen.map((r) => r.check)).toEqual([check]);
@@ -1240,6 +1241,8 @@ describe('CodexOverseer allows itself only simple commands', () => {
     ["/bin/zsh -lc 'unknown-client 0:4000/api'"],
     ["/bin/zsh -lc 'ls /work/shop/../shop-dispatch'"],
     ["/bin/zsh -lc 'cat ~/.Dis\\patch/x'"],
+    ["/bin/zsh -lc 'unknown-client http://l%6fcalhost:4000/'"],
+    ["/bin/zsh -lc 'curl file:///work/shop/%2e%64%69%73%70%61%74%63%68/x'"],
     // Paths outside the checkout: home, the root, other absolute paths, `..` out.
     ["/bin/zsh -lc 'grep -r token ~'"],
     ["/bin/zsh -lc 'cat ~/.ssh/id_rsa'"],
