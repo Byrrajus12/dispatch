@@ -101,7 +101,7 @@ export function openClaudeQuery(
   } catch (err) {
     const message = (err as Error).message;
     if (!isMissingCliError(message)) throw err;
-    const onPath = Bun.which('claude');
+    const onPath = Bun.which('claude', { PATH: process.env.PATH });
     if (onPath === null) throw new Error(CLAUDE_INSTALL_HINT);
     try {
       return queryFn({ prompt, options: withExecutable(onPath) });
@@ -199,7 +199,7 @@ export async function resolveClaudeCli(): Promise<{
     return { path: override, version: await cachedVersion(override) };
   const bundled = bundledCli();
   if (bundled !== null) return bundled;
-  const onPath = Bun.which('claude');
+  const onPath = Bun.which('claude', { PATH: process.env.PATH });
   if (onPath === null) return { path: null, version: null };
   return { path: onPath, version: await cachedVersion(onPath) };
 }

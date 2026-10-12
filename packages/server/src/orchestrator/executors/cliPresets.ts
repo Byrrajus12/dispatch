@@ -49,7 +49,8 @@ export const CLI_AGENT_PRESETS: Record<string, ExecutorCommand> = {
  * agents and six of them would fail at dispatch with a spawn error.
  */
 export function availableCliPresets(
-  which: (name: string) => string | null = (name) => Bun.which(name)
+  which: (name: string) => string | null = (name) =>
+    Bun.which(name, { PATH: process.env.PATH })
 ): Record<string, ExecutorCommand> {
   const found: Record<string, ExecutorCommand> = {};
   for (const [name, command] of Object.entries(CLI_AGENT_PRESETS)) {

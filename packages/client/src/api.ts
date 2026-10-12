@@ -32,6 +32,7 @@ import type {
   Priority,
   ProposalState,
   RunStep,
+  SetupReport,
   TaskComment,
   TaskDoc,
   TaskListItem,
@@ -3411,6 +3412,9 @@ export interface ApiClient {
   // The executors this daemon registered (`GET /api/executors`) and which
   // one a dispatch that names none runs on.
   fetchExecutors(): Promise<ExecutorsResponse>;
+  fetchSetup(): Promise<SetupReport>;
+  saveAgentKey(provider: string, apiKey: string | null): Promise<SetupReport>;
+  refreshSetup(): Promise<{ added: string[] }>;
   // Every in-memory conversation agent (planner chats, enrich agents, task
   // drafts, overseer chats), newest activity first — the non-run half of the
   // All agents page; merge with `fetchRuns` for the full picture. Refetch on
@@ -4491,6 +4495,17 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
       }),
     fetchRuns: () => request(target, '/api/runs'),
     fetchExecutors: () => request(target, '/api/executors'),
+    fetchSetup: () => request(target, '/api/setup'),
+    saveAgentKey: (provider, apiKey) =>
+      request(target, '/api/setup/agent-key', {
+        method: 'POST',
+        ...jsonBody({ provider, apiKey }),
+      }),
+    refreshSetup: () =>
+      request(target, '/api/setup/refresh', {
+        method: 'POST',
+        ...jsonBody({}),
+      }),
     judgmentStatus: (probe = false) =>
       request(target, `/api/judgments/status${probe ? '?probe=1' : ''}`),
     fetchAgentSessions: () => request(target, '/api/agents'),

@@ -85,6 +85,10 @@ export function openPath(path: string): Promise<void> {
   return invoke('open_url', { url: path });
 }
 
+export function openUrl(url: string): Promise<void> {
+  return invoke('open_url', { url });
+}
+
 export function getDashboardStats(): Promise<DashboardStats> {
   return invoke('dashboard_stats');
 }
@@ -310,4 +314,51 @@ export function cloneGithubRepo(
     );
   }
   return invoke('clone_github_repo', { nameWithOwner, parentDir });
+}
+
+export interface GitSetupStatus {
+  installed: boolean;
+  version: string | null;
+  name: string | null;
+  email: string | null;
+  installHint: string | null;
+}
+
+export interface FolderState {
+  isDir: boolean;
+  isGitRepo: boolean;
+  hasCommits: boolean;
+  hasGitignore: boolean;
+  /** `/`, the home folder or one of its standard folders: never one project. */
+  tooBroad: boolean;
+}
+
+export interface CliInstall {
+  path: string;
+  /** False when the linked folder isn't on PATH, so a terminal won't find it yet. */
+  onPath: boolean;
+}
+
+export function gitSetupStatus(): Promise<GitSetupStatus> {
+  return invoke('git_setup_status');
+}
+
+export function installGit(): Promise<void> {
+  return invoke('install_git');
+}
+
+export function setGitIdentity(name: string, email: string): Promise<void> {
+  return invoke('set_git_identity', { name, email });
+}
+
+export function projectFolderState(path: string): Promise<FolderState> {
+  return invoke('project_folder_state', { path });
+}
+
+export function prepareProjectFolder(path: string): Promise<void> {
+  return invoke('prepare_project_folder', { path });
+}
+
+export function installCliCommand(): Promise<CliInstall> {
+  return invoke('install_cli_command');
 }

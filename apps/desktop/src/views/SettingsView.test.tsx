@@ -119,6 +119,7 @@ test('the rail groups every page, and the page title is the H1', () => {
     expect(screen.getByText(heading)).toBeDefined();
   }
   expect(navRows().map((row) => row.textContent)).toEqual([
+    'Setup',
     'General',
     'Agents',
     'Checks',

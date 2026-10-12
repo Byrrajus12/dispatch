@@ -1,6 +1,6 @@
 import type { TaskListItem } from '@dispatch-foo/core/browser';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, Coins, Plus, TriangleAlert, Wrench } from 'lucide-react';
+import { Bot, Coins, TriangleAlert, Wrench } from 'lucide-react';
 import {
   type ReactNode,
   useCallback,
@@ -34,6 +34,8 @@ import { PersonPeek } from './components/peek/PersonPeek';
 import { ThreadPeek } from './components/peek/ThreadPeek';
 import { PeopleProvider } from './components/people/PeopleContext';
 import { OverseerGrantsGroup } from './components/settings/OverseerGrantsGroup';
+import { AgentStep } from './components/setup/AgentStep';
+import { SetupBanner } from './components/setup/SetupBanner';
 import { AddProjectDialog } from './components/shell/AddProjectDialog';
 import { CommandPalette } from './components/shell/CommandPalette';
 import { DaemonUnavailable } from './components/shell/DaemonUnavailable';
@@ -98,6 +100,7 @@ import {
 } from './lib/appNav';
 import { hideArchivedRuns } from './lib/archiveFilter';
 import { hasDispatchKey, launchRootKey } from './lib/bootWarm';
+import { dispatchConfigKey } from './lib/configEvents';
 import { mentions, subjectOf } from './lib/conversationScope';
 import { type DecisionItem, decisionTarget } from './lib/decisionFeed';
 import { draftTrayViewModel } from './lib/draftTray';
@@ -118,12 +121,20 @@ import { buildPosts, type Post } from './lib/posts';
 import { basename } from './lib/projectName';
 import { prNumberFromUrl } from './lib/reviewTarget';
 import { isTerminalRunState } from './lib/runState';
+import {
+  autoCompleteAction,
+  readSetupComplete,
+  SETUP_REPORT_STALE_MS,
+  setupReportKey,
+  writeSetupComplete,
+} from './lib/setupState';
 import { useStatusModelOf } from './lib/statusModel';
 import { computeBlockedIds } from './lib/taskGraph';
 import { itemBucket, queuedTaskIds, taskStatusCounts } from './lib/taskStatus';
 import {
   addProject,
   currentProjectRoot,
+  ensureDispatchd,
   hasDispatch,
   listProjects,
   listRegisteredProjects,
@@ -152,28 +163,19 @@ import { DraftView } from './views/DraftView';
 import { FilesView } from './views/FilesView';
 import { FirstRunView } from './views/FirstRunView';
 import { GalleryView } from './views/GalleryView';
-import { GetStartedView } from './views/GetStartedView';
 import { ImpactView } from './views/ImpactView';
 import { OverseerFocusView } from './views/OverseerFocusView';
 import { PlansView } from './views/PlansView';
 import { PrReviewView } from './views/PrReviewView';
 import { SessionsHubView } from './views/SessionsHubView';
 import type { HostedSettingsPage } from './views/SettingsView';
+import { SetupView } from './views/SetupView';
 import { type TasksSidePage, TasksView } from './views/TasksView';
 import { TerminalsView } from './views/TerminalsView';
 import { ThreadsView } from './views/ThreadsView';
 import { type OverseerFocus, TwoViewOverseer } from './views/TwoViewOverseer';
 import { PageHeaderShellContext } from '@/ui/ai/page-header';
-import { Button } from '@/ui/button';
 import { EmptyState, SectionLabel } from '@/ui/chrome';
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from '@/ui/empty';
 import { Spinner } from '@/ui/spinner';
 import { TooltipProvider } from '@/ui/tooltip';
 
@@ -371,6 +373,7 @@ function App() {
       const normalized = await addProject(path);
       setAddProjectOpen(false);
       selectSwitchProject(normalized);
+      return normalized;
     },
     [selectSwitchProject]
   );
@@ -1232,45 +1235,120 @@ function App() {
         <TriangleAlert className="text-destructive size-5" />
         <EmptyState message={resolutionError} className="p-0" />
       </div>
-    ) : noProjectYet ? (
-      <Empty className="h-full gap-4 rounded-none border-none p-0 md:p-0">
-        {/* The Hydrogen mark — the app's wordmark icon, scaled up — so the
-                    empty first-run state still reads as "Dispatch", not a generic error page. */}
-        <EmptyMedia className="border-border mb-0 size-12 rounded-xl border bg-white p-0">
-          <svg
-            viewBox="0 0 34 36"
-            className="size-7"
-            fill="none"
-            aria-hidden="true"
-          >
-            <path
-              d="M17 0C26.3888 0 34 7.61116 34 17C34 19.6624 33.3869 22.1813 32.2959 24.4248C33.3569 25.6519 34 27.2505 34 29C34 32.866 30.866 36 27 36C24.7943 36 22.828 34.979 21.5449 33.3848C20.0982 33.7852 18.5742 34 17 34C7.61116 34 0 26.3888 0 17C0 13.7085 0.935188 10.6354 2.55469 8.03223C2.20259 7.43659 2 6.74205 2 6C2 3.79086 3.79086 2 6 2C6.74205 2 7.43659 2.20259 8.03223 2.55469C10.6354 0.935188 13.7085 0 17 0ZM17 3.40039C14.4188 3.40039 12.0051 4.11849 9.94922 5.36719C9.98199 5.57335 10 5.78461 10 6C10 8.20914 8.20914 10 6 10C5.78461 10 5.57335 9.98199 5.36719 9.94922C4.11849 12.0051 3.40039 14.4188 3.40039 17C3.40039 24.5111 9.48893 30.5996 17 30.5996C18.0707 30.5996 19.112 30.4741 20.1113 30.2402C20.0393 29.8376 20 29.4233 20 29C20 25.134 23.134 22 27 22C27.8672 22 28.6974 22.158 29.4639 22.4463C30.1936 20.7786 30.5996 18.9369 30.5996 17C30.5996 9.48893 24.5111 3.40039 17 3.40039Z"
-              fill="#000000"
-            />
-          </svg>
-        </EmptyMedia>
-        <EmptyHeader className="gap-1">
-          <EmptyTitle className="text-[15px] tracking-normal">
-            No project yet
-          </EmptyTitle>
-          <EmptyDescription className="max-w-sm text-[13px]">
-            Add a local folder or clone a repository from GitHub to get started.
-          </EmptyDescription>
-        </EmptyHeader>
-        <EmptyContent>
-          <Button onClick={() => setAddProjectOpen(true)}>
-            <Plus className="size-4" />
-            Add project
-          </Button>
-        </EmptyContent>
-      </Empty>
+    ) : noProjectYet || showGetStarted ? (
+      <SetupView
+        projectPath={showGetStarted ? root : null}
+        onProjectChosen={async (path) => {
+          const normalized = await handleAddProject(path);
+          await ensureDispatchd(normalized);
+          await queryClient.invalidateQueries({
+            queryKey: hasDispatchKey(normalized),
+          });
+        }}
+      />
     ) : stillResolving ? (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
         <Spinner className="text-muted-foreground size-5" />
         <EmptyState message="Loading project…" className="p-0" />
       </div>
-    ) : showGetStarted ? (
-      <GetStartedView projectPath={root} />
+    ) : null;
+
+  const [setupComplete, setSetupComplete] = useState(readSetupComplete);
+  // First run on this machine: once the project is up, check the agent. Completes
+  // silently when nothing needs attention (an equipped developer sees nothing).
+  const setupClient = data.client;
+  const { data: setupReport } = useQuery({
+    queryKey: setupReportKey(data.port),
+    queryFn: () => {
+      if (setupClient === null) throw new Error('dispatchd client not ready');
+      return setupClient.fetchSetup();
+    },
+    enabled: !setupComplete && setupClient !== null && gateScreen === null,
+    staleTime: SETUP_REPORT_STALE_MS,
+  });
+  // Background re-check once setup is done (signed out later, etc.). Shares the
+  // report key but never feeds the first-run decision below.
+  const { data: setupBannerReport } = useQuery({
+    queryKey: setupReportKey(data.port),
+    queryFn: () => {
+      if (setupClient === null) throw new Error('dispatchd client not ready');
+      return setupClient.fetchSetup();
+    },
+    enabled: setupComplete && setupClient !== null,
+    staleTime: SETUP_REPORT_STALE_MS,
+    refetchInterval: 5 * 60_000,
+    refetchOnWindowFocus: true,
+  });
+  // Saves `executor` as the default agent and refetches what reads the default.
+  // Callers refresh the daemon's agents first so a newly installed one is known.
+  const saveDefaultAgent = useCallback(
+    async (executor: string) => {
+      if (setupClient === null) throw new Error('dispatchd client not ready');
+      await setupClient.updateConfig({ executor });
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: dispatchConfigKey(data.port),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['dispatch-executors', data.port],
+        }),
+      ]);
+    },
+    [setupClient, queryClient, data.port]
+  );
+  // Decided once, from the first report (and the config it's judged against): later
+  // reports (after an install or sign-in) must not dismiss Setup before the chosen
+  // agent is saved.
+  const [setupShown, setSetupShown] = useState(false);
+  const setupDecided = useRef(false);
+  const configuredExecutor =
+    data.config?.orchestrator.executor ?? data.executors?.default;
+  useEffect(() => {
+    if (
+      setupReport === undefined ||
+      configuredExecutor === undefined ||
+      setupDecided.current
+    )
+      return;
+    setupDecided.current = true;
+    const action = autoCompleteAction(setupReport, configuredExecutor);
+    if (!action.complete) {
+      setSetupShown(true);
+      return;
+    }
+    const finish = () => {
+      writeSetupComplete();
+      setSetupComplete(true);
+    };
+    if (action.setDefault === undefined) return finish();
+    // A failed save shows Setup instead, so the agent gets picked by hand.
+    const fallback = action.setDefault;
+    (async () => {
+      if (setupClient === null) throw new Error('dispatchd client not ready');
+      await setupClient.refreshSetup();
+      await saveDefaultAgent(fallback);
+    })().then(finish, () => setSetupShown(true));
+  }, [setupReport, configuredExecutor, saveDefaultAgent, setupClient]);
+  const agentSetupScreen: ReactNode =
+    !setupComplete &&
+    gateScreen === null &&
+    setupClient !== null &&
+    setupShown ? (
+      <SetupView
+        projectPath={root ?? null}
+        onProjectChosen={() => Promise.resolve()}
+        agentStep={
+          <AgentStep
+            client={setupClient}
+            port={data.port}
+            onSetDefault={saveDefaultAgent}
+            onContinue={() => {
+              writeSetupComplete();
+              setSetupComplete(true);
+            }}
+          />
+        }
+      />
     ) : null;
 
   const projectSwitcher = (
@@ -1737,7 +1815,17 @@ function App() {
     <>
       <TwoViewShell
         view={twoViewsState.mainView}
-        gate={gateScreen}
+        gate={gateScreen ?? agentSetupScreen}
+        banner={
+          setupComplete ? (
+            <SetupBanner
+              report={setupBannerReport}
+              onOpen={() =>
+                dispatchNav({ type: 'tv/openSettings', page: 'setup' })
+              }
+            />
+          ) : undefined
+        }
         topBar={{
           view: twoViewsState.mainView,
           orb,
@@ -2068,7 +2156,9 @@ function App() {
 
                     {addProjectOpen && (
                       <AddProjectDialog
-                        onAdd={handleAddProject}
+                        onAdd={async (path) => {
+                          await handleAddProject(path);
+                        }}
                         onClose={() => setAddProjectOpen(false)}
                       />
                     )}

@@ -116,7 +116,8 @@ export type SettingsPage =
   | 'license'
   | 'remotes'
   | 'daemon'
-  | 'diffs';
+  | 'diffs'
+  | 'setup';
 
 export interface NavState {
   /** Which side of the sidebar's split is active — a project's own work, or one of the

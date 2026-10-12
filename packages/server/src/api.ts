@@ -137,6 +137,7 @@ import { getQueue } from './api/queue.js';
 import { listTaskFindings, startTaskReview } from './api/review.js';
 import { listRunClaims } from './api/runClaims.js';
 import { createRunEvidence, createRunMutation } from './api/runEvidence.js';
+import { handleSetupRoute } from './api/setup.js';
 import { storageErrorResponse } from './api/storageErrors.js';
 import {
   closeTerminal,
@@ -4656,6 +4657,9 @@ const ELEVATED_ROUTES: ReadonlyArray<{
   segments: readonly string[];
   tier: Exclude<AuthTier, 'request'>;
 }> = [
+  // Saving an agent key writes a machine-wide secret; refresh changes what runs can spawn.
+  { method: 'POST', segments: ['setup', 'agent-key'], tier: 'operator' },
+  { method: 'POST', segments: ['setup', 'refresh'], tier: 'operator' },
   // ---- decide: adjudication -------------------------------------------------
   // Starting a preview runs a command out of the run's own worktree — a
   // worktree the agent just wrote to, including its package.json. On the
@@ -6976,6 +6980,12 @@ export async function handleApi(
         executors: ctx.orchestrator.describeExecutors(),
         default: ctx.orchestrator.defaultExecutorName(),
       });
+    }
+
+    // /api/setup — what this machine still needs before an agent can run.
+    if (segments[0] === 'setup') {
+      const res = await handleSetupRoute(req, method, segments, ctx);
+      if (res !== null) return res;
     }
 
     if (segments[0] === 'agents' && segments.length === 1 && method === 'GET') {

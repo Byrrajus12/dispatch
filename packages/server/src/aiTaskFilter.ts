@@ -1,6 +1,6 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Options, Query } from '@anthropic-ai/claude-agent-sdk';
-import { loadConfig } from '@dispatch-foo/core';
+import { agentEnv, loadConfig } from '@dispatch-foo/core';
 
 import { openClaudeQuery } from './orchestrator/claudeCli.js';
 
@@ -157,6 +157,7 @@ export class ClaudeAiTaskFilter implements AiTaskFilterPort {
     try {
       const options: Options = {
         cwd: this.rootDir,
+        env: agentEnv(),
         // Read per call, so a settings change applies with no daemon restart. The
         // summarize model is the cheap one-shot slot; a filter needs nothing more.
         model: loadConfig(this.rootDir).models.summarize,

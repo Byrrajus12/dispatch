@@ -3,6 +3,7 @@ import {
   initProjectStores,
   registerMergeDriverGitConfig,
   registerTeamMergeDriverGitConfig,
+  widenedPath,
   writeGitAttributes,
 } from '@dispatch-foo/core';
 import { existsSync, writeFileSync } from 'node:fs';
@@ -648,6 +649,9 @@ function restartForSharing(rollback: () => void): Promise<void> {
   return restarting;
 }
 
+// A Finder-launched app hands us a minimal PATH; agents installed via nvm, npm
+// or the Claude installer must still be found by every spawn and `which`.
+process.env.PATH = widenedPath();
 // A root another daemon serves is a refusal to print, not a crash to trace.
 let handle = await startServer({
   ...serverOpts,

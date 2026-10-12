@@ -437,3 +437,28 @@ export type {
   SyncSpawnResult,
 } from './syncSpawn.js';
 export { setSyncSpawner, spawnSyncText } from './syncSpawn.js';
+export {
+  PROVIDERS,
+  providerById,
+  providerForBinary,
+  resolveInstallFix,
+} from './setup/providers.js';
+export type {
+  AuthState,
+  InstallMethod,
+  ProbeResult,
+  ProviderSpec,
+  ProviderState,
+  SetupFix,
+  SetupReport,
+  SetupStatus,
+  SetupStep,
+  SetupStepId,
+} from './setup/types.js';
+export { explainFailure } from './setup/failures.js';
+export type { FailureExplanation } from './setup/failures.js';
+export { whichOnPath, widenPath, widenedPath } from './setup/path.js';
+export type { PathIo } from './setup/path.js';
+export { agentEnv, readAgentKeys, writeAgentKey } from './setup/agentEnv.js';
+export { defaultSetupCheckDeps, runSetupCheck } from './setup/check.js';
+export type { SetupCheckDeps, SetupCheckInput } from './setup/check.js';

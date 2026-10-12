@@ -92,3 +92,23 @@ export {
 } from './team.js';
 export type { DroppedEntry, TeamMember } from './team.js';
 export { untrustedFenced } from './untrusted.js';
+export {
+  PROVIDERS,
+  providerById,
+  providerForBinary,
+  resolveInstallFix,
+} from './setup/providers.js';
+export type {
+  AuthState,
+  InstallMethod,
+  ProbeResult,
+  ProviderSpec,
+  ProviderState,
+  SetupFix,
+  SetupReport,
+  SetupStatus,
+  SetupStep,
+  SetupStepId,
+} from './setup/types.js';
+export { explainFailure } from './setup/failures.js';
+export type { FailureExplanation } from './setup/failures.js';
