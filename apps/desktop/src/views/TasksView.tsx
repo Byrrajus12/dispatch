@@ -54,7 +54,6 @@ import {
   writeTwoViewsFilters,
 } from '../lib/twoViewsTasksPrefs';
 import { LiveView } from './LiveView';
-import { MilestoneBranchesView } from './MilestoneBranchesView';
 import { ProjectsView } from './ProjectsView';
 import { TasksListView } from './TasksListView';
 import { IconButton } from '@/ui/ai/icon-button';
@@ -484,16 +483,6 @@ export function TasksView({
                           <Plus className="size-3.5" />
                           New project
                         </Button>
-                      ),
-                    },
-                    branches: {
-                      body: (
-                        <MilestoneBranchesView
-                          data={data}
-                          onOpenTask={onSelectTask}
-                          display={TWO_VIEWS_TASKS_DISPLAY}
-                          taskFilter={taskFilter}
-                        />
                       ),
                     },
                     live: {

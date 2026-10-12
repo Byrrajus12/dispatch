@@ -64,7 +64,7 @@ export function layoutForMode(mode: TasksMode): TasksViewMode {
   return mode === 'graph' ? 'milestones' : mode;
 }
 
-/** The Two views mode a saved view opens in; Milestones and Branches open the graph. */
+/** The Two views mode a saved view opens in; Milestones opens the graph. */
 export function modeForLayout(layout: TasksViewMode): TasksMode {
-  return layout === 'milestones' || layout === 'branches' ? 'graph' : layout;
+  return layout === 'milestones' ? 'graph' : layout;
 }

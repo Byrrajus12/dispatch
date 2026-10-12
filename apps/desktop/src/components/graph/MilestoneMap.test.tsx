@@ -124,7 +124,6 @@ const LAYOUTS: MilestoneMapViewProps['layouts'] = {
     body: <div data-testid="projects-body" />,
     actions: <span data-testid="projects-action" />,
   },
-  branches: { body: <div data-testid="branches-body" /> },
   live: { body: <div data-testid="live-body" /> },
 };
 
@@ -143,13 +142,7 @@ describe('MilestoneMapView layouts', () => {
 
   test('every layout is offered, map modes in between', () => {
     mount(LAYOUTS);
-    expect(layoutNames()).toEqual([
-      'Projects',
-      'Milestones',
-      'Branches',
-      'Tasks',
-      'Live',
-    ]);
+    expect(layoutNames()).toEqual(['Projects', 'Milestones', 'Tasks', 'Live']);
   });
 
   test('a layout swaps the map, its summary and Copy for its own body and actions', () => {
@@ -172,7 +165,7 @@ describe('MilestoneMapView layouts', () => {
 
   test('a remembered layout no longer offered falls back to Milestones', () => {
     const first = mount(LAYOUTS);
-    fireEvent.click(screen.getByRole('button', { name: 'Branches' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Live' }));
     first.unmount();
     mount();
     expect(screen.getAllByTestId('milestone-node')).toHaveLength(2);

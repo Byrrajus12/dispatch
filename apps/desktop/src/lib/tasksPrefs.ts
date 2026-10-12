@@ -4,7 +4,7 @@ import { TASKS_VIEW_TABS, type TasksViewMode } from './tasksViewMode';
 
 /**
  * The Tasks page's persisted preferences: the status/priority filter chips and the one
- * display model the list, board, milestones and branches layouts share (Linear's Display
+ * display model the list, board and milestones layouts share (Linear's Display
  * popover — grouping, ordering, sub-task handling, which properties a row shows). Everything
  * is parsed defensively from localStorage — a bad or stale payload falls back to defaults
  * rather than throwing during render.
@@ -199,7 +199,12 @@ export function tasksDisplayFromValue(
         )
       )
     : d.properties;
-  const layout = oneOf(record.layout, LAYOUTS, d.layout);
+  // The retired Branches layout reads as Milestones, the layout it drew from.
+  const layout = oneOf(
+    record.layout === 'branches' ? 'milestones' : record.layout,
+    LAYOUTS,
+    d.layout
+  );
   const grouping = oneOf(record.grouping, GROUPINGS, d.grouping);
   let subGrouping = oneOf(record.subGrouping, SUB_GROUPINGS, d.subGrouping);
   // Board lanes moved from `grouping` to `subGrouping`: a board stored as grouped by epic
