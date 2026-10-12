@@ -4,8 +4,10 @@ import { createContext, type ReactNode, useContext, useState } from 'react';
 import { useRunStep } from '../../hooks/useRunStep';
 import { formatUsd, spendPillLabel } from '../../lib/epicSession';
 import { type FlowRow, useFlowRows } from '../../lib/flowList';
+import type { GlossaryKey } from '../../lib/glossary';
 import { type LiveCeilings, liveCeilingsLabel } from '../../lib/liveSpend';
 import { isTerminalRunState } from '../../lib/runState';
+import { GlossaryTerm } from '../guide/GlossaryTerm';
 import { cn } from '@/lib/utils';
 import { GroupHeader } from '@/ui/ai/group-header';
 import { ListRow } from '@/ui/ai/list-row';
@@ -42,11 +44,25 @@ function FlowChevrons({ active }: { active: boolean }) {
 
 /** A column title with its count and the direction its items travel. */
 // Both point right: in travels toward the talk, out travels away from it.
-function ColumnHead({ label, count }: { label: string; count: number }) {
+function ColumnHead({
+  label,
+  count,
+  term,
+}: {
+  label: string;
+  count: number;
+  term?: GlossaryKey;
+}) {
   return (
     <h2 className="contents">
       <GroupHeader
-        name={label}
+        name={
+          term === undefined ? (
+            label
+          ) : (
+            <GlossaryTerm term={term}>{label}</GlossaryTerm>
+          )
+        }
         count={count}
         actions={<FlowChevrons active={count > 0} />}
       />
@@ -66,6 +82,7 @@ export function ColumnInSheet({ children }: { children: ReactNode }) {
 /** A column: the head pinned on top, the rest scrolling under it. */
 function Column({
   label,
+  term,
   count,
   testId,
   sub,
@@ -74,6 +91,7 @@ function Column({
   label: string;
   count: number;
   testId: string;
+  term?: GlossaryKey;
   /** A quiet line under the head, e.g. what the work is costing. */
   sub?: ReactNode;
   children: ReactNode;
@@ -89,7 +107,7 @@ function Column({
           : 'hidden min-h-0 w-[300px] shrink-0 flex-col gap-2 min-[1440px]:w-[340px] xl:flex'
       }
     >
-      <ColumnHead label={label} count={count} />
+      <ColumnHead label={label} count={count} term={term} />
       {sub}
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-3">{children}</div>
@@ -116,7 +134,12 @@ export function InflowColumn({
   children: ReactNode;
 }) {
   return (
-    <Column label="Coming in" count={count} testId="overseer-inflow">
+    <Column
+      label="Coming in"
+      term="comingIn"
+      count={count}
+      testId="overseer-inflow"
+    >
       {count === 0 && <EmptyLine>Nothing is waiting on you.</EmptyLine>}
       <div
         className={cn(
@@ -282,6 +305,7 @@ export function OutflowColumn({
   return (
     <Column
       label="Going out"
+      term="goingOut"
       count={count}
       testId="overseer-outflow"
       sub={
@@ -303,7 +327,9 @@ export function OutflowColumn({
         !canMergeAll && <EmptyLine>Nothing is running.</EmptyLine>}
       {sessionRows.length > 0 && (
         <section className="flex flex-col">
-          <SectionLabel className="px-2 pb-0.5">Milestones</SectionLabel>
+          <SectionLabel className="px-2 pb-0.5">
+            <GlossaryTerm term="milestone">Milestones</GlossaryTerm>
+          </SectionLabel>
           <div role="list" className="flex flex-col">
             <Rows
               rows={sessionRows}
@@ -350,7 +376,7 @@ export function OutflowColumn({
               )
             }
           >
-            Landing
+            <GlossaryTerm term="mergeQueue">Landing</GlossaryTerm>
           </SectionLabel>
           <div role="list" className="flex flex-col">
             <Rows

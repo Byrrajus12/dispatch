@@ -1,4 +1,5 @@
 ---
+import { DMG, RELEASES } from '../../lib/downloads';
 import InstallCommand from './InstallCommand.astro';
 
 const demo = 'https://dispatch-demo-production-aed7.up.railway.app';
@@ -69,14 +70,12 @@ const shots = [
 <section class="closing" aria-labelledby="closing-title">
   <div class="wrap">
     <h2 id="closing-title">Give your agents a board.<br /><em>Available today.</em></h2>
-    <p>Install the app, run <code>dispatch init</code> in a repo, and hand over your first task.</p>
+    <p>Download the app, follow Setup, and hand over your first task.</p>
     <div class="actions">
       <InstallCommand />
-      <a class="btn btn-primary" href="https://github.com/wsoule/dispatch/releases/latest">
-        Download for Mac
-      </a>
+      <a class="btn btn-primary" href={DMG.arm}>Download for Mac</a>
     </div>
-    <p class="platforms">macOS and Linux. <a href="https://github.com/wsoule/dispatch/releases/latest">Linux packages</a> are on GitHub.</p>
+    <p class="platforms">Apple Silicon. <a href={DMG.x64}>Intel Mac</a> and <a href={RELEASES}>Linux packages</a> are on GitHub.</p>
   </div>
 </section>
 

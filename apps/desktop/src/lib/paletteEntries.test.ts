@@ -110,6 +110,26 @@ describe('buildPaletteEntries', () => {
     expect(has({ ...ctx, currentTaskId: null })).toBe(false);
     expect(has(context({ currentTaskId: 't-1' }).ctx)).toBe(false);
   });
+
+  test('Restart the first-task guide appears when the app offers it', () => {
+    const { ctx, calls } = context();
+    expect(
+      buildPaletteEntries(ctx).some((e) => e.id === 'action-restart-guide')
+    ).toBe(false);
+    const withGuide = {
+      ...ctx,
+      actions: {
+        ...ctx.actions,
+        restartGuide: () => calls.push('restart-guide'),
+      },
+    };
+    const entry = buildPaletteEntries(withGuide).find(
+      (e) => e.id === 'action-restart-guide'
+    );
+    expect(entry?.label).toBe('Restart the first-task guide');
+    entry?.run();
+    expect(calls).toContain('restart-guide');
+  });
 });
 
 describe('docHitEntries', () => {

@@ -1,4 +1,5 @@
 import type { OrbState, OrbTone } from '../../lib/agentPresence';
+import { GLOSSARY } from '../../lib/glossary';
 import { cn } from '@/lib/utils';
 import { Button } from '@/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/ui/tooltip';
@@ -90,7 +91,10 @@ export function Orb({ state, label, postsDot, onClick, active }: OrbProps) {
           )}
         </span>
       </TooltipTrigger>
-      <TooltipContent side="bottom">{label}</TooltipContent>
+      <TooltipContent side="bottom" className="max-w-72">
+        <span className="block">{label}</span>
+        <span className="block opacity-75">{GLOSSARY.overseer}</span>
+      </TooltipContent>
     </Tooltip>
   );
 }

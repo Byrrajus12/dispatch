@@ -1,4 +1,4 @@
-import { foldSubagents } from '@dispatch-foo/core/browser';
+import { foldSubagents, providerById } from '@dispatch-foo/core/browser';
 import type { NormalizedEntry, RunMeta } from '@dispatch/client';
 import {
   Info,
@@ -24,6 +24,7 @@ import {
   postFailWorkLabel,
 } from '../../lib/runState';
 import { kindLabel } from '../../lib/threadSources';
+import { askAgentToFix, FailureNotice } from '../failure/FailureNotice';
 import { ApprovalCard } from './ApprovalCard';
 import { Markdown } from './Markdown';
 import { QuestionCard } from './QuestionCard';
@@ -299,6 +300,11 @@ export function RunLogView({
   // resume gate checks, so the button never offers what would 400.
   const canContinue = deriveRunDisposition(meta) === 'stopped-short';
   const orphanWork = postFailWorkLabel(meta);
+  // Why the run stopped, when it failed; a const so the fix's closure keeps the narrowing.
+  const stopError =
+    meta.state === 'failed' || meta.state === 'interrupted-dirty'
+      ? meta.error
+      : undefined;
 
   async function send(text: string, resume: boolean) {
     setSending(true);
@@ -405,13 +411,18 @@ export function RunLogView({
               daemon restart, not the agent's doing) reads as "failed, $0" with zero
               explanation. Rendered at the end of the transcript because the failure is
               chronologically the run's last event. */}
-          {(meta.state === 'failed' || meta.state === 'interrupted-dirty') &&
-            meta.error !== undefined && (
-              <div className="bg-state-failed-surface text-state-failed rounded-card font-book flex items-start gap-2 px-3 py-2 text-[12px]">
-                <Info className="size-3.5 shrink-0 translate-y-0.5" />
-                {meta.error}
-              </div>
-            )}
+          {stopError !== undefined && (
+            <FailureNotice
+              error={stopError}
+              providerId={providerById(meta.executor)?.id}
+              // Continue (below) already retries; this hands the error itself to the agent.
+              onAskAgent={
+                meta.sessionId === undefined
+                  ? undefined
+                  : () => onRequestChanges(askAgentToFix(stopError))
+              }
+            />
+          )}
 
           {/* A merge or discard that threw partway (a squash conflict, say) leaves the
               run unreviewed and resumable — but the operator has to be told why, or a

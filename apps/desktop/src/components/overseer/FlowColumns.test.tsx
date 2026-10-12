@@ -165,3 +165,21 @@ test('the head reads today’s spend and the live ceilings, and hides at zero', 
   );
   expect(screen.getByTestId('overseer-spend').textContent).toBe('$4.50 today');
 });
+
+test('the column heads carry their glossary hints', () => {
+  render(
+    <>
+      <InflowColumn count={0}>{null}</InflowColumn>
+      <OutflowColumn
+        runs={[]}
+        merges={[]}
+        setAside={[]}
+        onOpenTask={() => {}}
+      />
+    </>
+  );
+  expect(document.querySelector('[data-glossary="comingIn"]')).not.toBeNull();
+  expect(document.querySelector('[data-glossary="goingOut"]')).not.toBeNull();
+  // The heading's name is unchanged by the hint.
+  expect(screen.getByRole('heading', { name: /Coming in\s*0/ })).toBeTruthy();
+});

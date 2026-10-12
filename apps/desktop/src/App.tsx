@@ -1,4 +1,9 @@
-import type { TaskListItem } from '@dispatch-foo/core/browser';
+import {
+  type CreateInput,
+  providerById,
+  type TaskListItem,
+} from '@dispatch-foo/core/browser';
+import type { DraftRecord } from '@dispatch/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bot, Coins, TriangleAlert, Wrench } from 'lucide-react';
 import {
@@ -20,10 +25,16 @@ import {
   RoomHome,
   TaskConversationHome,
 } from './components/conversation/Homes';
+import { askAgentToFix } from './components/failure/FailureNotice';
 import {
   type FlightPlanHost,
   FlightPlanHostContext,
 } from './components/flightplan/ContainerFlightPlanSection';
+import { FirstTaskGuide } from './components/guide/FirstTaskGuide';
+import type {
+  SendChoice,
+  SendToAgentOptions,
+} from './components/guide/SendToAgent';
 import { MemoryRecent } from './components/memory/MemoryRecent';
 import {
   DraftsSection,
@@ -74,9 +85,14 @@ import { useAdminItems } from './hooks/useAdminItems';
 import { useDataChangedEvents } from './hooks/useDataChangedEvents';
 import { useDeepLinkRouter } from './hooks/useDeepLinkRouter';
 import { useDispatchProject } from './hooks/useDispatchProject';
+import {
+  useFirstTaskGuide,
+  useFreshEmptyProject,
+} from './hooks/useFirstTaskGuide';
 import { useGlobalKeyboard } from './hooks/useGlobalKeyboard';
 import { useOverseerSession } from './hooks/useOverseerSession';
 import { useSavedViews } from './hooks/useSavedViews';
+import { tasksKey } from './hooks/useTaskDoc';
 import {
   threadListsKey,
   useA2APeers,
@@ -104,10 +120,12 @@ import { dispatchConfigKey } from './lib/configEvents';
 import { mentions, subjectOf } from './lib/conversationScope';
 import { type DecisionItem, decisionTarget } from './lib/decisionFeed';
 import { draftTrayViewModel } from './lib/draftTray';
+import { formTaskInput, guideProvider } from './lib/firstTaskGuide';
 import type { InboxEntry, InboxTarget } from './lib/inbox';
 import { projectViewForInboxTarget, unreadCount } from './lib/inbox';
 import { liveCeilingsOf, spendToday } from './lib/liveSpend';
 import { countMergeReady } from './lib/mergeReady';
+import { resolveExecuteModel } from './lib/models';
 import { awayDigest } from './lib/narrator';
 import { needsYou } from './lib/needsYou';
 import type { OverseerDoor } from './lib/overseerThread';
@@ -1132,6 +1150,8 @@ function App() {
   // A teammate below the operator tier never gets Terminals or Design: the
   // daemon would 403 both. The palette and the hosted pages agree.
   const hideHostViews = isTeamLocalPage() && data.myTier !== 'operator';
+  // The guide is set up further down (it needs Setup's state); the palette calls through this.
+  const restartGuideRef = useRef<() => void>(() => {});
   const paletteEntries = useMemo(
     () => [
       ...buildPaletteEntries({
@@ -1155,6 +1175,7 @@ function App() {
           openShortcuts,
           openSavedView,
           copyTaskLink,
+          restartGuide: () => restartGuideRef.current(),
         },
       }),
       ...addressEntries({
@@ -1351,6 +1372,188 @@ function App() {
       />
     ) : null;
 
+  // The first-task guide follows one task from a sentence to landed. It starts on a
+  // fresh, empty project once Setup is done, and its progress lives in this browser.
+  const projectEmpty = useFreshEmptyProject(activeProject?.path ?? null, {
+    ready: data.tasksReady,
+    count: data.tasksIncludingArchived.length,
+    queryKey: tasksKey(data.port),
+  });
+  const guide = useFirstTaskGuide({
+    projectPath: activeProject?.path ?? null,
+    enabled: setupComplete && gateScreen === null && activeProject !== null,
+    projectEmpty,
+    drafts: data.drafts,
+    tasks: data.tasksIncludingArchived,
+    runs: data.runs,
+  });
+  const guideAgent = guideProvider(setupBannerReport, configuredExecutor);
+  const sendOptions: SendToAgentOptions = {
+    // The model list is Claude's, as DispatchCard decides it.
+    modelChoice: configuredExecutor === 'claude',
+    defaultModel: resolveExecuteModel(data.config),
+    defaultEffort: data.config?.effort?.execute,
+  };
+  // The draft the first-run box started last, so its failure shows there after the box empties.
+  const [firstRunDraftId, setFirstRunDraftId] = useState<string | null>(null);
+  const firstRunDraft = data.drafts.find((d) => d.id === firstRunDraftId);
+  const failedFirstRun =
+    firstRunDraft?.state === 'failed' ? firstRunDraft : undefined;
+  const guidePath = activeProject?.path ?? null;
+  // The latest guide and project, for handlers that pick up again after an await.
+  const guideRef = useRef(guide);
+  const guidePathRef = useRef(guidePath);
+  // The guide as it is now, or null once the project has changed since `path`.
+  const guideFor = (path: string | null) =>
+    guidePathRef.current === path ? guideRef.current : null;
+
+  // Clears a draft something newer replaced; a failure says so rather than leaving it listed.
+  const dismissReplacedDraft = async (draftId: string) => {
+    try {
+      await rawData.handleDismissDraft(draftId);
+    } catch (err) {
+      toasts.push({
+        title: "Couldn't remove the old draft",
+        description: describeError(err),
+        tone: 'error',
+      });
+    }
+  };
+  // A failed draft's Try again: the same sentence as a fresh draft, opened in its place.
+  const startRetryDraft = async (draft: DraftRecord) => {
+    const path = guidePath;
+    const next = await rawData.handleStartDraft(draft.prompt, {
+      parent: draft.parent ?? null,
+    });
+    const latest = guideFor(path);
+    if (latest === null) return;
+    if (latest.draftId === draft.id) latest.linkDraft(next.id);
+    setFirstRunDraftId((id) => (id === draft.id ? next.id : id));
+    dispatchNav({ type: 'openDraft', draftId: next.id });
+    await dismissReplacedDraft(draft.id);
+  };
+  // Retries in flight by draft, so the card's and the first-run box's Try again share one.
+  const draftRetries = useRef(new Map<string, Promise<void>>());
+  const retryDraft = (draft: DraftRecord): Promise<void> => {
+    const pending = draftRetries.current.get(draft.id);
+    if (pending !== undefined) return pending;
+    const attempt = startRetryDraft(draft).finally(() =>
+      draftRetries.current.delete(draft.id)
+    );
+    draftRetries.current.set(draft.id, attempt);
+    return attempt;
+  };
+  // The guide's Send to agent on a task; a refusal stays on the card with the task open.
+  const sendGuidedTask = async (taskId: string, choice: SendChoice) => {
+    const path = guidePath;
+    guide.setSendError(null);
+    try {
+      if (choice.writes.length > 0) {
+        await rawData.handleUpdate(taskId, { writes: choice.writes });
+      }
+      await rawData.handleDispatch(taskId, undefined, choice.model, {
+        effort: choice.effort,
+      });
+    } catch (err) {
+      const latest = guideFor(path);
+      if (latest === null) return;
+      latest.setSendError(describeError(err));
+      openTaskView(taskId, 'spec');
+    }
+  };
+  // The guided draft's Send to agent: the edited draft becomes the task, then it goes out.
+  const sendGuidedDraft = async (
+    draftId: string,
+    input: CreateInput,
+    choice: SendChoice
+  ) => {
+    const path = guidePath;
+    const doc = await rawData.handleCreate(input);
+    if (doc === null) {
+      throw new Error('The project is still starting. Try again in a moment.');
+    }
+    const latest = guideFor(path);
+    // A switch mid-send leaves the new task on its own project's board.
+    if (latest === null) return;
+    latest.linkTask(doc.meta.id);
+    // Sending first moves off the draft's page, so it never flashes as gone.
+    await sendGuidedTask(doc.meta.id, { ...choice, writes: [] });
+    await dismissReplacedDraft(draftId);
+  };
+  const showFirstRunBox = () => {
+    setFirstRunSetAsideFor(null);
+    dispatchNav({ type: 'tv/showOverseer' });
+  };
+  const restartGuide = () => {
+    guide.restart();
+    showFirstRunBox();
+  };
+  useEffect(() => {
+    restartGuideRef.current = restartGuide;
+    guideRef.current = guide;
+    guidePathRef.current = guidePath;
+  });
+  // The first-run box also shows while the guide waits at Describe it (after a Restart).
+  const showFirstRun =
+    twoViewsFirstRun ||
+    (guide.view?.stage === 'describe' &&
+      activeProject !== null &&
+      firstRunSetAsideFor !== activeProject.path);
+  const guideCard =
+    guide.view === null ? null : (
+      <FirstTaskGuide
+        view={guide.view}
+        provider={guideAgent}
+        sendOptions={sendOptions}
+        sendError={guide.sendError}
+        collapsed={guide.collapsed}
+        onCollapsedChange={guide.setCollapsed}
+        actions={{
+          showDescribe: showFirstRunBox,
+          openDraft: (draftId) => dispatchNav({ type: 'openDraft', draftId }),
+          openTask: (taskId, tab, runId) => openTaskView(taskId, tab, runId),
+          send: sendGuidedTask,
+          retryDraft,
+          // The same agent, model and effort the failed run had.
+          retryRun: (taskId) => {
+            const failed =
+              guide.view?.run?.taskId === taskId ? guide.view.run : undefined;
+            return rawData.handleDispatch(
+              taskId,
+              failed?.executor,
+              failed?.model,
+              { effort: failed?.effort }
+            );
+          },
+          askAgentToFix: (runId, error) =>
+            rawData.handleRequestChanges(runId, askAgentToFix(error)),
+          looksGood: guide.approve,
+          askForChanges: (runId, text) =>
+            rawData.handleRequestChanges(runId, text),
+          land: (runId) => rawData.handleReview(runId, 'merge'),
+          // The daemon refuses to discard a run with a pull request, so this stays local.
+          startOver: (runId) => {
+            guide.startOver(runId);
+            return Promise.resolve();
+          },
+          dismiss: guide.dismiss,
+          closeCompletion: guide.closeCompletion,
+          openBoard: () => {
+            guide.closeCompletion();
+            dispatchNav({ type: 'tv/showTasks' });
+          },
+          openOverseer: () => {
+            guide.closeCompletion();
+            dispatchNav({ type: 'tv/showOverseer' });
+          },
+          inviteTeammate: () => {
+            guide.closeCompletion();
+            setGlobalView('settings', { page: 'team' });
+          },
+        }}
+      />
+    );
+
   const projectSwitcher = (
     <ProjectSwitcher
       teamSession={teamSession}
@@ -1369,6 +1572,7 @@ function App() {
       onOpenGallery={
         import.meta.env.DEV ? () => setGlobalView('gallery') : undefined
       }
+      onRestartGuide={activeProject === null ? undefined : restartGuide}
     />
   );
 
@@ -1540,9 +1744,32 @@ function App() {
             projectName={activeProject?.name}
             key={draft.id}
             data={data}
-            onCreate={rawData.handleCreate}
+            onCreate={async (input) => {
+              const path = guidePath;
+              const doc = await rawData.handleCreate(input);
+              const latest = guideFor(path);
+              if (
+                doc !== null &&
+                latest !== null &&
+                latest.active &&
+                latest.draftId === draft.id
+              ) {
+                latest.linkTask(doc.meta.id);
+              }
+              return doc;
+            }}
             draft={draft}
             onDone={closeTwoViewsPage}
+            onRetry={() => retryDraft(draft)}
+            send={
+              guide.active && guide.draftId === draft.id
+                ? {
+                    options: sendOptions,
+                    onSend: (input, choice) =>
+                      sendGuidedDraft(draft.id, input, choice),
+                  }
+                : undefined
+            }
           />
         );
       }
@@ -1816,6 +2043,7 @@ function App() {
       <TwoViewShell
         view={twoViewsState.mainView}
         gate={gateScreen ?? agentSetupScreen}
+        guide={guideCard}
         banner={
           setupComplete ? (
             <SetupBanner
@@ -1973,15 +2201,53 @@ function App() {
                 : () => dispatchNav({ type: 'setProjectView', view: 'plans' })
             }
             firstRun={
-              twoViewsFirstRun ? (
+              showFirstRun ? (
                 <FirstRunView
                   projectName={activeProject?.name ?? null}
+                  planner={guideAgent === null || guideAgent.plans}
                   // The draft opens under Tasks: Two views has no drafts tray.
                   onStartDraft={async (prompt) => {
+                    // A new draft replaces the last one's failure.
+                    setFirstRunDraftId(null);
+                    const path = guidePath;
                     const draft = await rawData.handleStartDraft(prompt);
+                    const latest = guideFor(path);
+                    if (latest === null) return draft;
+                    setFirstRunDraftId(draft.id);
+                    if (latest.active) latest.linkDraft(draft.id);
                     dispatchNav({ type: 'openDraft', draftId: draft.id });
                     return draft;
                   }}
+                  onCreateTask={async ({ what, done }) => {
+                    const path = guidePath;
+                    const doc = await rawData.handleCreate(
+                      formTaskInput(
+                        what,
+                        done,
+                        data.config?.statuses[0] ?? 'backlog'
+                      )
+                    );
+                    if (doc === null) {
+                      throw new Error(
+                        'The project is still starting. Try again in a moment.'
+                      );
+                    }
+                    const latest = guideFor(path);
+                    if (latest === null) return;
+                    if (latest.active) latest.linkTask(doc.meta.id);
+                    openTaskView(doc.meta.id, 'spec');
+                  }}
+                  failure={
+                    failedFirstRun === undefined
+                      ? undefined
+                      : {
+                          error:
+                            failedFirstRun.error ?? 'Drafting the task failed.',
+                          providerId: providerById(failedFirstRun.plannerName)
+                            ?.id,
+                          onRetry: () => retryDraft(failedFirstRun),
+                        }
+                  }
                   onBrowseBoard={() => dispatchNav({ type: 'tv/showTasks' })}
                   onTalkToAgent={() =>
                     setFirstRunSetAsideFor(activeProject?.path ?? null)

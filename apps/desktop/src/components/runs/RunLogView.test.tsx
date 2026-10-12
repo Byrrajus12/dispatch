@@ -6,6 +6,7 @@ import type { DecideAvailability } from '../../lib/daemonAuth';
 import { ATTACHED_DAEMON_EXPLANATION } from '../../lib/daemonAuth';
 import type { PendingApproval } from '../../lib/pendingApprovals';
 import { CONTINUE_PROMPT } from '../../lib/runState';
+import { askAgentToFix } from '../failure/FailureNotice';
 import { RunLogView } from './RunLogView';
 
 const noop = () => Promise.resolve();
@@ -649,4 +650,28 @@ test('framed text with no messageId, and a digest that does not parse, keep thei
       .queryAllByRole('button', { name: /Open thread/ })
       .map((button) => button.getAttribute('aria-label'))
   ).toEqual([]);
+});
+
+test("a failed run's error reads as a sentence that names the agent", () => {
+  renderLog(
+    meta({ state: 'failed', executor: 'codex', error: 'Not logged in' })
+  );
+  expect(screen.getByText('Codex needs you to sign in again.')).toBeDefined();
+});
+
+test('a resumable failed run can ask its agent to fix the failure', async () => {
+  const sent: string[] = [];
+  const error = 'git worktree add failed: fatal: could not create directory';
+  renderLog(meta({ state: 'failed', sessionId: 'sess-1', error }), (text) => {
+    sent.push(text);
+    return Promise.resolve();
+  });
+  // An async act, so the click's settled promise flushes inside it.
+  await act(() => {
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Ask the agent to fix it' })
+    );
+    return Promise.resolve();
+  });
+  expect(sent).toEqual([askAgentToFix(error)]);
 });

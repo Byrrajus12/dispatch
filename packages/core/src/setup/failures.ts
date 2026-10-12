@@ -6,9 +6,24 @@ export interface FailureExplanation {
   providerId?: string;
 }
 
+// Sign-in failures as agent CLIs print them; `\b` keeps gh's "not logged into" out.
 const AUTH =
-  /not logged in|please run \/login|invalid api key|authentication_error|oauth token has expired|login required|unauthorized/i;
-const LIMIT = /usage limit|rate limit|429 too many/i;
+  /not logged in\b|please run \/login|invalid api key|authentication_error|oauth token has expired|login required/i;
+// Model-provider hosts: a 401 or 429 naming one is the agent's, not GitHub's or an MCP server's.
+const PROVIDER_HOST =
+  '(?:api\\.anthropic\\.com|api\\.openai\\.com|chatgpt\\.com|generativelanguage\\.googleapis\\.com)';
+const PROVIDER_401 = new RegExp(
+  `unexpected status 401|401 unauthorized[^\\n]*${PROVIDER_HOST}`,
+  'i'
+);
+// Plan limits as agents report them (Codex's "last status: 429"); GitHub's rate limit is not one.
+const LIMIT = new RegExp(
+  `usage limit|rate_limit_error|last status: 429|429 too many requests[^\\n]*${PROVIDER_HOST}`,
+  'i'
+);
+// `git worktree add` in a repo with no commit yet: the base branch doesn't exist.
+const NO_FIRST_COMMIT =
+  /invalid reference: \S+|not a valid object name:? '?HEAD'?|ambiguous argument 'HEAD'|does not have any commits yet/i;
 
 // The agent a spawn failure names: a bare binary (`spawn gemini ENOENT`) or a path
 // under a package directory (`.../@openai/codex/vendor/.../codex ENOENT`).
@@ -39,6 +54,12 @@ export function explainFailure(
       providerId: 'claude',
     };
   }
+  if (/spawn git ENOENT/.test(text)) {
+    return {
+      reason: "Git isn't installed, or Dispatch can't find it.",
+      fix: 'setup-git',
+    };
+  }
   const spawned = spawnedProvider(text);
   if (spawned !== null) {
     const name = providerById(spawned.id)!.name;
@@ -62,7 +83,7 @@ export function explainFailure(
     };
   }
   if (/git worktree add failed/.test(text)) {
-    if (/invalid reference|not a valid object name|HEAD/.test(text)) {
+    if (NO_FIRST_COMMIT.test(text)) {
       return {
         reason:
           'Your project needs a first saved snapshot before an agent can work on it.',
@@ -89,7 +110,7 @@ export function explainFailure(
       ...(named === undefined ? {} : { providerId: named.id }),
     };
   }
-  if (AUTH.test(text)) {
+  if (AUTH.test(text) || PROVIDER_401.test(text)) {
     const who = named?.name ?? 'Your AI agent';
     return {
       reason: `${who} needs you to sign in again.`,

@@ -64,3 +64,8 @@ export function useShellActions(): ShellActions {
   }
   return actions;
 }
+
+/** The same verbs, or null outside the provider — for leaf components that also render alone. */
+export function useOptionalShellActions(): ShellActions | null {
+  return useContext(ShellActionsContext);
+}

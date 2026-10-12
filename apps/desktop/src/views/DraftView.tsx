@@ -1,8 +1,18 @@
-import type { CreateInput, Priority } from '@dispatch-foo/core/browser';
+import {
+  type CreateInput,
+  type Priority,
+  providerById,
+} from '@dispatch-foo/core/browser';
 import type { DraftRecord } from '@dispatch/client';
 import { Plus, Sparkles, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
+import { FailureNotice } from '../components/failure/FailureNotice';
+import {
+  type SendChoice,
+  SendToAgent,
+  type SendToAgentOptions,
+} from '../components/guide/SendToAgent';
 import { PlanQuestionsForm } from '../components/plans/PlanQuestionsForm';
 import {
   EpicControl,
@@ -42,6 +52,13 @@ interface DraftViewProps {
    * notifications, history restore, and the tray can all land here mid-turn. */
   draft: DraftRecord;
   onDone: () => void;
+  /** A failed draft's Try again: a fresh draft from the same sentence. */
+  onRetry?: () => Promise<void>;
+  /** The first-task guide's draft: Send to agent replaces Create task, which moves into More options. */
+  send?: {
+    options: SendToAgentOptions;
+    onSend: (input: CreateInput, choice: SendChoice) => Promise<void>;
+  };
 }
 
 /** A settled AI task draft's review page on the issue-page grammar (§8): the task title is the
@@ -54,6 +71,8 @@ export function DraftView({
   onCreate,
   draft,
   onDone,
+  onRetry,
+  send,
 }: DraftViewProps) {
   const proposal = draft.proposal;
   const task = proposal?.tasks[0];
@@ -85,6 +104,7 @@ export function DraftView({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [discarding, setDiscarding] = useState(false);
+  const [sendingToAgent, setSendingToAgent] = useState(false);
 
   // Selection actions over the original prompt (the one piece of text on this page that
   // is plain rendered prose rather than an `<input>`/`<textarea>` — the Selection API this
@@ -198,7 +218,11 @@ export function DraftView({
       ? [projectName, 'Drafts', 'Draft']
       : ['Drafts', 'Draft'];
   const canCreate =
-    !saving && !discarding && task !== undefined && isDraftSaveable(editable);
+    !saving &&
+    !discarding &&
+    !sendingToAgent &&
+    task !== undefined &&
+    isDraftSaveable(editable);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -208,7 +232,9 @@ export function DraftView({
           <span className="font-book text-muted-foreground px-2 text-[12px]">
             {draft.state === 'running'
               ? 'The planner is working on this draft…'
-              : 'Nothing is written until you create the task.'}
+              : send !== undefined
+                ? 'This is what the agent will do. Edit anything, then send it.'
+                : 'Nothing is written until you create the task.'}
           </span>
         }
       />
@@ -216,6 +242,14 @@ export function DraftView({
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1 overflow-y-auto px-10 py-6">
           <div className="mx-auto flex w-full max-w-[800px] flex-col gap-4">
+            {draft.state === 'failed' && (
+              <FailureNotice
+                error={draft.error ?? 'Drafting the task failed.'}
+                providerId={providerById(draft.plannerName)?.id}
+                onRetry={onRetry}
+              />
+            )}
+
             {draft.questions.length > 0 && (
               <PlanQuestionsForm
                 questions={draft.questions}
@@ -227,11 +261,14 @@ export function DraftView({
             )}
 
             {task === undefined ? (
-              <p className="font-book text-muted-foreground text-[13px]">
-                {draft.questions.length > 0
-                  ? 'Answer the question above to get a proposed task.'
-                  : 'No proposed task yet.'}
-              </p>
+              // A failed draft's notice says it all; no empty line under it.
+              (draft.questions.length > 0 || draft.state !== 'failed') && (
+                <p className="font-book text-muted-foreground text-[13px]">
+                  {draft.questions.length > 0
+                    ? 'Answer the question above to get a proposed task.'
+                    : 'No proposed task yet.'}
+                </p>
+              )
             ) : (
               <>
                 <div
@@ -367,7 +404,7 @@ export function DraftView({
         )}
       </div>
 
-      <div className="shadow-hairline-top flex h-12 shrink-0 items-center justify-end gap-2 px-6">
+      <div className="shadow-hairline-top flex min-h-12 shrink-0 flex-wrap items-center justify-end gap-2 px-6 py-2">
         {saveError !== null && (
           <p role="alert" className="text-red mr-auto text-[13px]">
             {saveError}
@@ -375,20 +412,53 @@ export function DraftView({
         )}
         <PillButton
           onClick={() => void discard()}
-          disabled={saving || discarding}
+          disabled={saving || discarding || sendingToAgent}
         >
           {discarding && <Spinner className="size-3.5" />}
           Discard
         </PillButton>
-        <Button disabled={!canCreate} onClick={() => void save()}>
-          {saving ? (
-            <>
-              <Spinner className="size-3.5" /> Creating…
-            </>
-          ) : (
-            'Create task'
-          )}
-        </Button>
+        {send !== undefined && task !== undefined ? (
+          <SendToAgent
+            options={send.options}
+            disabled={!canCreate}
+            onSend={async (choice) => {
+              setSendingToAgent(true);
+              try {
+                await send.onSend(
+                  {
+                    ...editableDraftToCreateInput(editable),
+                    ...(choice.writes.length > 0
+                      ? { writes: choice.writes }
+                      : {}),
+                  },
+                  choice
+                );
+              } finally {
+                setSendingToAgent(false);
+              }
+            }}
+            extra={
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!canCreate}
+                onClick={() => void save()}
+              >
+                Just create the task
+              </Button>
+            }
+          />
+        ) : (
+          <Button disabled={!canCreate} onClick={() => void save()}>
+            {saving ? (
+              <>
+                <Spinner className="size-3.5" /> Creating…
+              </>
+            ) : (
+              'Create task'
+            )}
+          </Button>
+        )}
       </div>
     </div>
   );
