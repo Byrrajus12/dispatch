@@ -1,6 +1,7 @@
 import type { ApiClient } from '@dispatch/client';
 
 import { usePrs } from '../data';
+import { safeText } from '../safe';
 import { color } from '../theme';
 import { List } from './List';
 import { Patch } from './Patch';
@@ -60,9 +61,9 @@ export function PrsView({
           <text fg={color.dim}>loading…</text>
         ) : (
           <scrollbox flexGrow={1}>
-            <text
-              fg={color.text}
-            >{`#${detail.status.number}  ${detail.status.title}`}</text>
+            <text fg={color.text}>
+              {safeText(`#${detail.status.number}  ${detail.status.title}`)}
+            </text>
             <text
               fg={
                 detail.status.mergeable === 'CONFLICTING'
@@ -86,7 +87,9 @@ export function PrsView({
               </text>
             )}
             {detail.conversation.map((c, i) => (
-              <text key={i} fg={color.text}>{`${c.author}: ${c.body}`}</text>
+              <text key={i} fg={color.text}>
+                {safeText(`${c.author}: ${c.body}`)}
+              </text>
             ))}
             <text fg={color.dim}>d to see the diff</text>
           </scrollbox>

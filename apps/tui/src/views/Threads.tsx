@@ -1,6 +1,7 @@
 import type { ApiClient } from '@dispatch/client';
 
 import { useThreads } from '../data';
+import { safeText } from '../safe';
 import { color } from '../theme';
 import { List } from './List';
 
@@ -65,7 +66,7 @@ export function ThreadsView({
                 key={m.id}
                 fg={m.from.startsWith('human:') ? color.accent : color.text}
               >
-                {`${m.from}: ${m.body}`}
+                {safeText(`${m.from}: ${m.body}`)}
               </text>
             ))}
           </scrollbox>

@@ -1,6 +1,7 @@
 import type { ApiClient } from '@dispatch/client';
 
 import { useDocs } from '../data';
+import { safeText } from '../safe';
 import { color } from '../theme';
 import { List } from './List';
 
@@ -45,7 +46,7 @@ export function DocsView({
           <text fg={color.dim}>loading…</text>
         ) : (
           <scrollbox flexGrow={1}>
-            <text fg={color.text}>{text}</text>
+            <text fg={color.text}>{safeText(text)}</text>
           </scrollbox>
         )}
       </box>

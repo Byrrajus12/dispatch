@@ -580,3 +580,48 @@ test('ctrl+p lists running projects and enter switches to one, read-only', async
   expect(switched).toContain('dispatch · billing');
   expect(switched).toContain('read-only');
 });
+
+test('control sequences in PR comments, docs and threads never reach the terminal', async () => {
+  const { client } = fakeClient({
+    fetchRepoPrDetail: () =>
+      Promise.resolve({
+        status: {
+          number: 42,
+          title: 'pr\x1b]0;owned\x07title',
+          state: 'OPEN',
+          isDraft: false,
+          reviewDecision: null,
+          mergeable: 'MERGEABLE',
+          checks: { passed: 1, failed: 0, pending: 0, total: 1, runs: [] },
+        },
+        conversation: [
+          {
+            kind: 'comment',
+            author: 'x\x1b[2J',
+            body: 'hi\x1b]52;c;ZXZpbA==\x07there',
+            createdAt: '',
+          },
+        ],
+      }),
+    getDoc: () =>
+      Promise.resolve({ doc: {}, text: 'doc\x1b]0;docpwn\x07body' }),
+    getThread: () =>
+      Promise.resolve({
+        messages: [{ ...runAsk, id: 'm-t1', body: 'msg\x1b]0;thrpwn\x07body' }],
+        deliveries: [],
+      }),
+  });
+  const { frame, press } = await mount(120, 40, client);
+  await frame();
+  const prs = await press('6');
+  expect(prs).toContain('hithere');
+  expect(prs).toContain('prtitle');
+  expect(prs).not.toContain('ZXZpbA');
+  expect(prs).not.toContain('owned');
+  const docs = await press('4');
+  expect(docs).toContain('docbody');
+  expect(docs).not.toContain('docpwn');
+  const threads = await press('5');
+  expect(threads).toContain('msgbody');
+  expect(threads).not.toContain('thrpwn');
+});
