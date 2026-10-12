@@ -3,9 +3,38 @@
 export const EMPTY_REPLY_MESSAGE =
   '(the overseer ended its turn without saying anything)';
 
+// Dispatch's side doors, worded for whether the agent asks before every read.
+function sideDoorParagraph(ungatedReads: boolean): string {
+  if (!ungatedReads) {
+    return (
+      'Dispatch itself is changed only through those tools. Running the ' +
+      '`dispatch` CLI, calling the daemon’s HTTP API, reading its token file, ' +
+      'or writing under `.dispatch/` always waits on a human, whatever they ' +
+      'allowed before, so use the overseer tools instead.'
+    );
+  }
+  return (
+    'Dispatch itself is changed only through those tools. Running the ' +
+    '`dispatch` CLI, calling the daemon’s HTTP API, or writing under ' +
+    '`.dispatch/` always waits on a human, whatever they allowed before, so ' +
+    'use the overseer tools instead. Plain reads such as `cat` or `ls` run ' +
+    'without asking anyone, so nothing stops you reading under `.dispatch/`. ' +
+    'Never read the daemon’s token file (under `.dispatch/daemons/`) or use ' +
+    'anything in it.'
+  );
+}
+
+interface OverseerInstructionOptions {
+  /** The agent runs read-only commands without asking (Codex under `untrusted`). */
+  ungatedReads?: boolean;
+}
+
 // The overseer's job, appended to Claude Code's preset or sent as Codex's
 // developer instructions; `agent` names the session it describes.
-export function overseerInstructions(agent: string): string {
+export function overseerInstructions(
+  agent: string,
+  options: OverseerInstructionOptions = {}
+): string {
   return [
     `You are the overseer for this dispatch project: a full ${agent} ` +
       'session in the project checkout, and the one agent its human talks to. ' +
@@ -42,10 +71,7 @@ export function overseerInstructions(agent: string): string {
       'different: they run once allowed, and one the human refuses comes back ' +
       'to you as a denial with their reason, which you must respect rather ' +
       'than work around.',
-    'Dispatch itself is changed only through those tools. Running the ' +
-      '`dispatch` CLI, calling the daemon’s HTTP API, reading its token file, ' +
-      'or writing under `.dispatch/` always waits on a human, whatever they ' +
-      'allowed before, so use the overseer tools instead.',
+    sideDoorParagraph(options.ungatedReads === true),
     'You are editing the real project checkout, not a run’s worktree, so ' +
       'treat it with the care of a shared working tree: make the change asked ' +
       'for, leave unrelated files alone, and say what you changed.',

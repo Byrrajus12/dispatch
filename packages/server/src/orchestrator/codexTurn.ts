@@ -65,6 +65,11 @@ export interface CodexTurnRequest {
   signal?: AbortSignal;
   /** Ends the turn with an error after this long; 10 minutes by default. */
   timeoutMs?: number;
+  /**
+   * Makes `timeoutMs` an idle limit: it restarts on every Codex message and is
+   * paused while a claimed server request (an approval, a tool call) awaits its answer.
+   */
+  idle?: boolean;
   spawnProcess?: SpawnCodexAppServer;
   /** The env the sign-in check reads for an API key; agentEnv() by default. */
   env?: Record<string, string>;
@@ -156,8 +161,9 @@ function turnUsageOf(
       });
 }
 
-function describeMinutes(ms: number): string {
-  const minutes = ms / 60_000;
+function describeDuration(ms: number): string {
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  const minutes = Math.round(ms / 60_000);
   return minutes === 1 ? '1 minute' : `${minutes} minutes`;
 }
 
@@ -231,11 +237,37 @@ export async function runCodexTurn(
   const done = new Promise<void>((resolve) => {
     resolveDone = resolve;
   });
+  const timeoutMs = req.timeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
+  const idle = req.idle === true;
+  // Claimed server requests still waiting on their answer; an idle limit pauses for them.
+  let unanswered = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const end = (error?: Error): void => {
     if (settled) return;
     settled = true;
     failure = error;
+    clearTimeout(timer);
     resolveDone();
+  };
+  const arm = (): void => {
+    clearTimeout(timer);
+    timer = undefined;
+    if (settled || (idle && unanswered > 0)) return;
+    timer = setTimeout(
+      () =>
+        end(
+          new Error(
+            idle
+              ? `Codex sent nothing for ${describeDuration(timeoutMs)}.`
+              : `Codex didn't finish within ${describeDuration(timeoutMs)}.`
+          )
+        ),
+      timeoutMs
+    );
+  };
+  // Codex said something: an idle limit starts over; a hard one keeps running.
+  const touch = (): void => {
+    if (idle) arm();
   };
   const sendSteer = (text: string): void => {
     if (threadId === undefined || turnId === undefined) return;
@@ -262,11 +294,18 @@ export async function runCodexTurn(
 
   server.onServerRequest((request) => {
     if (settled || req.onServerRequest === undefined) return false;
+    touch();
+    let answered = false;
+    let counted = false;
     try {
-      return req.onServerRequest(
+      const claimed = req.onServerRequest(
         request,
         (result) => {
+          if (answered) return;
+          answered = true;
+          if (counted) unanswered -= 1;
           if (settled) return;
+          touch();
           try {
             server.respond(request.id, result);
           } catch {
@@ -275,6 +314,12 @@ export async function runCodexTurn(
         },
         controls
       );
+      if (claimed && !answered) {
+        counted = true;
+        unanswered += 1;
+        touch();
+      }
+      return claimed;
     } catch (error) {
       end(toError(error));
       return true;
@@ -282,7 +327,9 @@ export async function runCodexTurn(
   });
 
   server.onMessage((message) => {
-    if (settled || message.id !== undefined) return;
+    if (settled) return;
+    touch();
+    if (message.id !== undefined) return;
     const params = objectValue(message.params);
     if (
       threadId !== undefined &&
@@ -384,7 +431,9 @@ export async function runCodexTurn(
           : null,
     });
     server.notify('initialized');
+    touch();
     await assertSignedIn(server, req.env ?? agentEnv());
+    touch();
     const thread = {
       model: req.model,
       cwd: req.cwd,
@@ -406,6 +455,7 @@ export async function runCodexTurn(
               : { dynamicTools: req.dynamicTools }),
           }
     );
+    touch();
     const id = response.thread?.id;
     if (typeof id !== 'string' || id === '') {
       throw new Error('Codex App Server returned no thread.id');
@@ -427,19 +477,13 @@ export async function runCodexTurn(
           : { outputSchema: req.outputSchema }),
       }
     );
+    touch();
     if (typeof turn.turn?.id === 'string') turnId = turn.turn.id;
     for (const text of queuedSteers.splice(0)) sendSteer(text);
   };
+  arm();
   void drive().catch((error: unknown) => end(toError(error)));
 
-  const timeoutMs = req.timeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
-  const timer = setTimeout(
-    () =>
-      end(
-        new Error(`Codex didn't finish within ${describeMinutes(timeoutMs)}.`)
-      ),
-    timeoutMs
-  );
   await done;
   clearTimeout(timer);
   req.signal?.removeEventListener('abort', onAbort);

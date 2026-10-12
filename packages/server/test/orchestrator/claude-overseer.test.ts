@@ -499,6 +499,17 @@ describe('shared overseer pieces', () => {
     );
   });
 
+  it('promises gated reads only to an agent that asks before reading', () => {
+    const gated = overseerInstructions('Claude Code');
+    expect(gated).toContain('reading its token file');
+    const ungated = overseerInstructions('Codex', { ungatedReads: true });
+    expect(ungated).not.toContain('reading its token file');
+    expect(ungated).toContain('without asking');
+    expect(ungated).toContain('Never read the daemon’s token file');
+    // Only that paragraph differs.
+    expect(ungated.split('\n\n').length).toBe(gated.split('\n\n').length);
+  });
+
   it('tells the model a mutating tool only queues', () => {
     const { toolset } = stubToolset();
     const [listRuns, cancelRun] = toolset.tools;

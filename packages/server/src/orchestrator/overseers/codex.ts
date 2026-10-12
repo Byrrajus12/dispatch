@@ -42,7 +42,8 @@ import {
 } from '../overseerPrompt.js';
 import type { ApprovalDecision } from '../types.js';
 
-const INSTRUCTIONS = overseerInstructions('Codex');
+// Codex runs known-safe reads (cat, ls) without an approval Dispatch could hold.
+const INSTRUCTIONS = overseerInstructions('Codex', { ungatedReads: true });
 
 // Asks Dispatch about every non-read-only command; where a mode Codex can't honour lands.
 const ASK_EVERY_COMMAND: CodexPermission = {
@@ -326,7 +327,7 @@ interface CodexOverseerOptions {
   userMcpServers?: () => string[];
   pricing?: (projectRoot: string) => ExecutorPricing | undefined;
   env?: Record<string, string>;
-  /** Ends a turn with an error after this long; runCodexTurn's default when absent. */
+  /** Ends a turn after Codex is silent this long (approvals pause it); runCodexTurn's default when absent. */
   timeoutMs?: number;
 }
 
@@ -385,6 +386,8 @@ export class CodexOverseer implements OverseerBackend {
       spawnProcess: this.options.spawnProcess,
       env: this.options.env,
       timeoutMs: this.options.timeoutMs,
+      // Idle, not wall-clock: a human answering a card or a long test run must not end the turn.
+      idle: true,
       onServerRequest: (request, respond, controls) => {
         if (claimCodexToolCall(callTool, request, respond)) return true;
         if (!isCodexApprovalMethod(request.method)) return false;

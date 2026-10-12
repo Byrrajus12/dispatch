@@ -113,6 +113,19 @@ describe('grantKey', () => {
     ).toBe('Bash:ls');
   });
 
+  test('a simple command naming a path outside the checkout grants only its text', () => {
+    const root = '/Users/x/Sites/dispatch';
+    for (const command of [
+      'grep -r token ~',
+      'ls /tmp',
+      'ls /',
+      'cat ../other/x',
+    ]) {
+      expect(grantKey('Bash', { command }, root)).toBe(`Bash:${command}`);
+    }
+    expect(grantKey('Bash', { command: 'ls src' }, root)).toBe('Bash:ls');
+  });
+
   test('newlines stay distinct from spaces in an exact-text key', () => {
     expect(
       grantKey('Bash', { command: 'echo ok; echo\nrm -rf build' })

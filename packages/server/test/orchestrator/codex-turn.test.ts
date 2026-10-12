@@ -285,6 +285,97 @@ describe('runCodexTurn limits', () => {
     expect(codex.killed).toBe(true);
   });
 
+  // Sends a harmless notification every 15ms until stopped.
+  function chatter(codex: FakeCodexProcess, threadId: string): () => void {
+    const timer = setInterval(
+      () =>
+        codex.notify('item/started', {
+          threadId,
+          turnId: 'turn-1',
+          item: { type: 'reasoning', id: 'r1' },
+        }),
+      15
+    );
+    return () => clearInterval(timer);
+  }
+
+  it('an idle timeout waits out a slow approval, then lets the turn finish', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) =>
+        c.serverRequest('item/commandExecution/requestApproval', 'ask-1', {
+          threadId: t,
+          turnId: 'turn-1',
+          itemId: 'c1',
+          command: 'bun test',
+        }),
+    });
+    const result = await runCodexTurn(
+      request(codex, {
+        timeoutMs: 50,
+        idle: true,
+        onServerRequest: (_request, respond) => {
+          // The human answers well after the idle window.
+          setTimeout(() => {
+            respond({ decision: 'accept' });
+            setTimeout(() => finishTurn(codex, 'thread-1', 'ran it'), 20);
+          }, 200);
+          return true;
+        },
+      })
+    );
+    expect(result.reply).toBe('ran it');
+    expect(codex.responseTo('ask-1')?.result).toEqual({ decision: 'accept' });
+  });
+
+  it('an idle timeout resets on every message, and still ends a silent Codex', async () => {
+    let stop = (): void => undefined;
+    const busy = scriptedCodex({
+      onTurn: (c, t) => {
+        stop = chatter(c, t);
+        setTimeout(() => {
+          stop();
+          finishTurn(c, t, 'long but alive');
+        }, 200);
+      },
+    });
+    const result = await runCodexTurn(
+      request(busy, { timeoutMs: 50, idle: true })
+    );
+    expect(result.reply).toBe('long but alive');
+
+    const silent = scriptedCodex();
+    await expect(
+      runCodexTurn(request(silent, { timeoutMs: 50, idle: true }))
+    ).rejects.toThrow('Codex sent nothing for');
+    expect(silent.killed).toBe(true);
+  });
+
+  it('a hard timeout (the default) ends a busy turn and one waiting on an answer', async () => {
+    let stop = (): void => undefined;
+    const busy = scriptedCodex({ onTurn: (c, t) => (stop = chatter(c, t)) });
+    try {
+      await expect(
+        runCodexTurn(request(busy, { timeoutMs: 80 }))
+      ).rejects.toThrow("Codex didn't finish within");
+    } finally {
+      stop();
+    }
+
+    const waiting = scriptedCodex({
+      onTurn: (c, t) =>
+        c.serverRequest('item/tool/call', 'call-1', {
+          threadId: t,
+          turnId: 'turn-1',
+          tool: 'read_file',
+        }),
+    });
+    await expect(
+      runCodexTurn(
+        request(waiting, { timeoutMs: 50, onServerRequest: () => true })
+      )
+    ).rejects.toThrow("Codex didn't finish within");
+  });
+
   it('reports a throwing hook by its own error', async () => {
     const codex = scriptedCodex({
       onTurn: (c, t) =>

@@ -152,6 +152,10 @@ describe('CodexOverseer session', () => {
     expect(start?.developerInstructions).toEqual(
       expect.stringContaining('a full Codex session in the project checkout')
     );
+    // Codex runs plain reads unasked, so the text must not promise they wait on a human.
+    expect(start?.developerInstructions).toEqual(
+      expect.stringContaining('Never read the daemon’s token file')
+    );
     const tools = start?.dynamicTools as {
       type: string;
       name: string;
@@ -334,6 +338,31 @@ describe('CodexOverseer registry tools', () => {
 });
 
 describe('CodexOverseer approvals', () => {
+  it('keeps the turn alive while a human takes longer than its timeout to answer', async () => {
+    const codex = scriptedCodex({
+      onTurn: (c, t) =>
+        c.serverRequest(
+          'item/commandExecution/requestApproval',
+          'ask-1',
+          commandAsk(t, 'cmd-1', 'moonx desktop:test')
+        ),
+    });
+    const turn = await overseerOver(codex, { timeoutMs: 50 }).start(
+      'test it',
+      stubToolset().toolset,
+      {
+        permissionMode: 'default',
+        authorizeTool: async () => {
+          await Bun.sleep(200);
+          setTimeout(() => finishTurn(codex, 'thread-1', 'tests pass'), 20);
+          return { allow: true };
+        },
+      }
+    );
+    expect(turn.reply).toBe('tests pass');
+    expect(codex.responseTo('ask-1')?.result).toEqual({ decision: 'accept' });
+  });
+
   it('asks authorizeTool about each command, answers once, and passes a refusal reason back', async () => {
     const codex = scriptedCodex({
       onTurn: (c, t) => {
@@ -1211,6 +1240,15 @@ describe('CodexOverseer allows itself only simple commands', () => {
     ["/bin/zsh -lc 'unknown-client 0:4000/api'"],
     ["/bin/zsh -lc 'ls /work/shop/../shop-dispatch'"],
     ["/bin/zsh -lc 'cat ~/.Dis\\patch/x'"],
+    // Paths outside the checkout: home, the root, other absolute paths, `..` out.
+    ["/bin/zsh -lc 'grep -r token ~'"],
+    ["/bin/zsh -lc 'cat ~/.ssh/id_rsa'"],
+    ["/bin/zsh -lc 'ls /tmp'"],
+    ["/bin/zsh -lc 'ls /'"],
+    ["/bin/zsh -lc 'ls /work'"],
+    ["/bin/zsh -lc 'ls /work/shop-evil'"],
+    ["/bin/zsh -lc 'cat ../other/secret'"],
+    ["/bin/zsh -lc 'grep --file=/etc/passwd x'"],
   ])('asks about the hinting command %p', async (command) => {
     const { seen } = await bypassAsk(command);
     expect(seen).toHaveLength(1);
@@ -1222,6 +1260,8 @@ describe('CodexOverseer allows itself only simple commands', () => {
     ["/bin/zsh -lc 'pnpm test'"],
     [['/bin/zsh', '-lc', "git commit -m 'a b'"]],
     ["/bin/zsh -lc 'ls /work/shop/src'"],
+    ["/bin/zsh -lc 'ls src'"],
+    ["/bin/zsh -lc 'grep -r token src/../docs'"],
   ])('allows the simple command %p itself', async (command) => {
     const { seen, answer } = await bypassAsk(command);
     expect(seen).toEqual([]);

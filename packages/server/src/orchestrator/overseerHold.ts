@@ -102,7 +102,7 @@ const LOOPBACK_NAMES = new Set([
   'localhost.localdomain',
 ]);
 const LOOPBACK_DOMAIN =
-  /(?:^|\.)(?:localhost|lvh\.me|localtest\.me|nip\.io|sslip\.io|xip\.io)$/;
+  /(?:^|\.)(?:localhost|lvh\.me|localtest\.me|localh\.st|localho\.st|lacolhost\.com|nip\.io|sslip\.io|xip\.io)$/;
 
 // An IPv4 address the way inet_aton reads it (one to four parts, each
 // decimal, octal or hex), as a number; null for anything else.
@@ -237,18 +237,43 @@ const HELD_TARGET_HINTS = [
   'sslip.io',
   'xip.io',
   'localtest.me',
+  'localh.st',
+  'localho.st',
+  'lacolhost.com',
   '.local',
   '0x7f',
   '0177',
   '2130706',
 ];
 
+// Whether a word names a path outside the checkout: under home (`~`), an
+// absolute path not under rootDir (`/` included), or a relative one whose `..` climbs out.
+function pathOutside(word: string, rootDir: string): boolean {
+  if (word.startsWith('~')) return true;
+  if (!word.startsWith('/') && !word.split('/').includes('..')) return false;
+  return outsideCheckout(word, rootDir);
+}
+
+// Whether any argument (or an option's `=value`) names a path outside the checkout.
+function namesPathOutside(command: string, rootDir: string): boolean {
+  const words = shellWords(command) ?? commandTokens(command);
+  return words
+    .slice(1)
+    .some((word) =>
+      [word, ...word.split('=').slice(1)].some((part) =>
+        pathOutside(part, rootDir)
+      )
+    );
+}
+
 /**
  * True when a command, with the project's own path taken out, mentions
- * anything a hold guards. The Overseer never answers such a command itself
- * and grants it only by its text, so a gap in a hold costs an ask, not a bypass.
+ * anything a hold guards, or names a path outside the checkout. The Overseer
+ * never answers such a command itself and grants it only by its text, so a
+ * gap in a hold costs an ask, not a bypass.
  */
 export function hintsAtHeldTarget(command: string, rootDir?: string): boolean {
+  if (rootDir !== undefined && namesPathOutside(command, rootDir)) return true;
   const strip = (text: string): string =>
     rootDir !== undefined && rootDir.length > 1
       ? text.split(rootDir).join('')

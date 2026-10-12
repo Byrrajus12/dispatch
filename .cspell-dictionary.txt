@@ -261,6 +261,7 @@ keyout
 Khanna
 kiro
 Kunal
+lacolhost
 Lamport
 landable
 lede
@@ -279,6 +280,8 @@ liveframe
 livefull
 liveiframe
 localdomain
+localh
+localho
 localtest
 lostconn
 luajit
