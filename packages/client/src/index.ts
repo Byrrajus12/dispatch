@@ -283,3 +283,17 @@ export {
 export type { RunQuestion, RunScopeRequest } from './gates';
 export { browserStorage, memoryStorage } from './storage';
 export type { KeyValueStore } from './storage';
+export {
+  DEFAULT_EFFORT_ID,
+  effortFromId,
+  effortOptions,
+  modelDisplayName,
+  modelLabel,
+  MODELS,
+  readDefaultModel,
+  readRoleModelOverride,
+  resolveExecuteModel,
+  resolveRoleModel,
+  storeRoleModelOverride,
+} from './models';
+export type { ModelOption, PickableRole } from './models';
