@@ -1576,25 +1576,20 @@ export interface TaskDraft {
 }
 
 // Maps a reviewed `TaskDraft` onto core's `CreateInput` so it saves through the
-// exact same createTask path CreateTaskModal uses — no server or store schema
-// change. `TaskStore.create` only ever renders the `description` section (it
-// always births an empty "Acceptance Criteria" section and ignores a separate
-// `acceptanceCriteria` field), so the draft's criteria list is folded into the
-// description as a bullet block — identical to the server's own
-// buildTaskDescription, the fold a confirmed plan's tasks already go through.
+// exact same createTask path CreateTaskModal uses, criteria in their own section.
 export function taskDraftToCreateInput(draft: TaskDraft): CreateInput {
-  const parts = [draft.description.trim()];
-  if (draft.acceptanceCriteria.length > 0) {
-    parts.push(
-      'Acceptance criteria:',
-      draft.acceptanceCriteria.map((c) => `- ${c}`).join('\n')
-    );
-  }
   return {
     title: draft.title,
     kind: 'task',
     priority: draft.priority,
-    description: parts.join('\n\n'),
+    description: draft.description.trim(),
+    ...(draft.acceptanceCriteria.length > 0
+      ? {
+          acceptanceCriteria: draft.acceptanceCriteria
+            .map((c) => `- ${c}`)
+            .join('\n'),
+        }
+      : {}),
   };
 }
 

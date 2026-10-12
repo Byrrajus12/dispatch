@@ -86,6 +86,27 @@ describe('initProjectStores', () => {
     expect(db.tasks.list()).toHaveLength(1);
     expect(files.tasks.get(doc.meta.id)).not.toBeNull();
   });
+
+  it('writes created acceptance criteria into their own section on both backends', () => {
+    for (const backend of ['files', 'sqlite'] as const) {
+      const dir = mkdtempSync(join(tmpdir(), `dispatch-criteria-${backend}-`));
+      try {
+        const stores = track(initProjectStores({ rootDir: dir, backend }));
+        const doc = stores.tasks.create({
+          title: 'Add a footer',
+          description: 'Footer on the home page.',
+          acceptanceCriteria: '- Footer says hi\n- Valid HTML',
+        });
+        const body = stores.tasks.get(doc.meta.id)!.body;
+        expect(body).toContain(
+          '## Description\n\nFooter on the home page.\n\n## Acceptance Criteria\n\n- Footer says hi\n- Valid HTML\n'
+        );
+        stores.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
 });
 
 describe('openProjectStores', () => {

@@ -210,22 +210,9 @@ export interface PlanSummary {
   epicId?: string;
 }
 
-// Builds the markdown body TaskStore.create's `description` param receives
-// for one planned task: the planner/proposal's own description, followed by
-// a plain "Acceptance criteria" bullet list when the proposal supplied any.
-// Deliberately does not emit its own "## Acceptance Criteria" heading — the
-// store's create() template already appends an (empty) one of those after
-// whatever description text is given, and a second heading of the same
-// level would just look duplicated for no benefit.
-function buildTaskDescription(task: PlannedTask): string {
-  const parts = [task.description.trim()];
-  if (task.acceptanceCriteria.length > 0) {
-    parts.push(
-      'Acceptance criteria:',
-      task.acceptanceCriteria.map((c) => `- ${c}`).join('\n')
-    );
-  }
-  return parts.join('\n\n');
+// The proposal's criteria as the Acceptance Criteria section's `- item` lines.
+function criteriaSection(task: PlannedTask): string {
+  return task.acceptanceCriteria.map((c) => `- ${c}`).join('\n');
 }
 
 /**
@@ -699,7 +686,8 @@ export class PlanManager {
           title: task.title,
           kind: 'task',
           status: readyStatus,
-          description: buildTaskDescription(task),
+          description: task.description.trim(),
+          acceptanceCriteria: criteriaSection(task),
           parent: epicId ?? null,
           priority: task.priority,
           writes: task.writes,

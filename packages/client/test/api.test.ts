@@ -140,9 +140,8 @@ describe('taskDraftToCreateInput', () => {
       title: 'Add a logout button',
       kind: 'task',
       priority: 'high',
-      description:
-        'Let signed-in users end their session.\n\n' +
-        'Acceptance criteria:\n\n' +
+      description: 'Let signed-in users end their session.',
+      acceptanceCriteria:
         '- Button visible in the header\n- Click clears the session',
     });
   });

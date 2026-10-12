@@ -71,6 +71,8 @@ export interface CreateInput {
   writes?: string[];
   risk?: TaskRisk;
   model?: string | null;
+  // The Acceptance Criteria section's text (`- item` lines), like UpdatePatch's.
+  acceptanceCriteria?: string;
   // What this task was synthesized from (see TaskMeta.derivedFrom). Set only
   // by the code that synthesizes one; a person creating a task never passes it.
   derivedFrom?: string;
@@ -255,7 +257,14 @@ export function newTaskDoc(
   // way setSection escapes a later edit to the same section.
   const description = escapeHeadingLines(input.description ?? '');
   const body = `\n## Description\n\n${description}\n\n## Acceptance Criteria\n\n## Activity\n`;
-  return { meta, body };
+  const criteria = input.acceptanceCriteria?.trim() ?? '';
+  return {
+    meta,
+    body:
+      criteria === ''
+        ? body
+        : setSection(body, 'Acceptance Criteria', criteria),
+  };
 }
 
 /**

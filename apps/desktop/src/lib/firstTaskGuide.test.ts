@@ -338,7 +338,7 @@ describe('formTaskInput', () => {
     expect(input.title).toBe('Add a dark mode toggle');
     expect(input.status).toBe('draft');
     expect(input.description).toContain('on the settings page');
-    expect(input.description).toContain(
+    expect(input.acceptanceCriteria).toBe(
       '- The toggle switches the theme\n- It remembers the choice'
     );
   });

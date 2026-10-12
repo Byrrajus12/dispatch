@@ -420,21 +420,16 @@ describe('POST /api/tasks/draft and GET/DELETE /api/tasks/drafts', () => {
   });
 
   // The load-bearing round trip: a drafted task saves through the SAME
-  // POST /api/tasks (createTask) path a manual CreateTaskModal task uses, with
-  // no schema change. createTask only renders the `description` section, so the
-  // acceptanceCriteria list is folded into the description exactly as a
-  // confirmed plan's tasks are (buildTaskDescription) — the same fold the
-  // client's taskDraftToCreateInput performs.
+  // POST /api/tasks (createTask) path a manual CreateTaskModal task uses, its
+  // criteria landing in their own Acceptance Criteria section.
   it('saves the drafted task through the normal createTask path', async () => {
     await startWithPlanner(
       new FakePlanner({ ok: true, proposal: SAMPLE_PROPOSAL })
     );
     const draft = await draftedTask();
-    const description = [
-      draft.description.trim(),
-      'Acceptance criteria:',
-      draft.acceptanceCriteria.map((c: string) => `- ${c}`).join('\n'),
-    ].join('\n\n');
+    const acceptanceCriteria = draft.acceptanceCriteria
+      .map((c: string) => `- ${c}`)
+      .join('\n');
     const created = await json(
       await fetch(`${baseUrl}/api/tasks`, {
         method: 'POST',
@@ -443,7 +438,8 @@ describe('POST /api/tasks/draft and GET/DELETE /api/tasks/drafts', () => {
           title: draft.title,
           kind: 'task',
           priority: draft.priority,
-          description,
+          description: draft.description.trim(),
+          acceptanceCriteria,
         }),
       })
     );
@@ -451,7 +447,9 @@ describe('POST /api/tasks/draft and GET/DELETE /api/tasks/drafts', () => {
     expect(created.meta.priority).toBe('high');
     expect(created.meta.title).toBe('Design');
     expect(created.body).toContain('Sketch it.');
-    expect(created.body).toContain('Sketch reviewed');
+    expect(created.body).toMatch(
+      /## Acceptance Criteria\n\n- Sketch reviewed[^\n]*\n/
+    );
   });
 });
 
