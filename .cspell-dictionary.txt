@@ -158,6 +158,7 @@ evictable
 evts
 excute
 execdir
+execpolicy
 exfiltration
 expandables
 extglob

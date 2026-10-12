@@ -16,6 +16,7 @@ import {
   type SpawnCodexAppServer,
 } from '../codexAppServer.js';
 import {
+  codexApprovalNeedsHuman,
   codexCommandFloor,
   codexCommandNeedsHuman,
   readCodexCommand,
@@ -448,9 +449,8 @@ function sessionScopeFor(
   }
   const params = objectValue(approval.params);
   const plain =
-    (params?.kind ?? 'command') === 'command' &&
     floorCheckForToolInput(params) === null &&
-    !codexCommandNeedsHuman(params?.command);
+    !codexApprovalNeedsHuman('codex.commandExecution', params);
   return plain ? decision : { ...decision, scope: 'once' };
 }
 

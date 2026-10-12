@@ -1,6 +1,6 @@
 import { basename } from 'node:path';
 
-import { dequotedCommand, FLOOR_PROGRAMS } from '../floor.js';
+import { decodeAnsiC, dequotedCommand, FLOOR_PROGRAMS } from '../floor.js';
 
 /**
  * Reading shell command lines for approvals: one linear word splitter, the
@@ -206,6 +206,259 @@ export function commandTokens(command: string): string[] {
   return dequotedCommand(command)
     .split(TOKEN_BREAK)
     .filter((token) => token !== '');
+}
+
+/** One shell word as the shell spells it, and how the scanner met it. */
+interface ScannedWord {
+  text: string;
+  /** Holds `$(`, a backtick or a `$` expansion the shell would expand. */
+  expands: boolean;
+  /** The target of a redirection (`> file`), never the program. */
+  target: boolean;
+}
+
+// Characters that end a command outside quotes; `{`, `}`, `!` and `$(` count
+// too, so a reader errs toward seeing a new command where the shell might not.
+const COMMAND_BREAK = new Set([
+  ';',
+  '&',
+  '|',
+  '(',
+  ')',
+  '{',
+  '}',
+  '`',
+  '\n',
+  '!',
+]);
+// Words after which the next word is a command again.
+const KEYWORDS = new Set([
+  'if',
+  'then',
+  'else',
+  'elif',
+  'while',
+  'until',
+  'do',
+]);
+// Package-manager subcommands that run the next word as a program.
+const PACKAGE_RUN = new Set(['exec', 'dlx', 'x', 'run', 'create']);
+const RUN_PACKAGE_MANAGERS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+// Programs that run text they read (a pipe, a here-doc, a file): with one in a
+// line, any word of the line may end up run.
+const TEXT_RUNNERS = new Set([
+  'sh',
+  'bash',
+  'zsh',
+  'dash',
+  'ksh',
+  'mksh',
+  'fish',
+  'csh',
+  'tcsh',
+  'eval',
+  'source',
+  '.',
+  'xargs',
+]);
+
+// The commands of a line as lists of words, split the way the shell splits
+// them: quotes kept together, `$'…'` decoded, escapes applied. A comment's text
+// is handed to `onComment` (it is not scanned for comments again, which keeps
+// this linear). Undefined for a line that does not parse (an unclosed quote).
+function scanCommands(
+  command: string,
+  onComment?: (text: string) => void
+): ScannedWord[][] | undefined {
+  const commands: ScannedWord[][] = [[]];
+  let text = '';
+  let started = false;
+  let quoted = false;
+  let expands = false;
+  let pendingTarget = false;
+  const finish = (): void => {
+    if (started) {
+      commands[commands.length - 1].push({
+        text,
+        expands,
+        target: pendingTarget,
+      });
+      pendingTarget = false;
+    }
+    text = '';
+    started = false;
+    quoted = false;
+    expands = false;
+  };
+  let i = 0;
+  while (i < command.length) {
+    const char = command[i];
+    const next = command[i + 1] ?? '';
+    if (char === ' ' || char === '\t') {
+      finish();
+      i += 1;
+    } else if (char === '<' || char === '>') {
+      // An fd number glued to the operator (`2>`) is not a word.
+      if (started && !quoted && /^\d+$/.test(text)) {
+        text = '';
+        started = false;
+      }
+      finish();
+      while (i < command.length && /[<>&|]/.test(command[i])) i += 1;
+      pendingTarget = true;
+    } else if (char === '#' && !started && onComment !== undefined) {
+      // A comment runs to the end of the line; a shell that does not take it
+      // as one would run its text, so that text is still read for commands.
+      const end = command.indexOf('\n', i);
+      onComment(command.slice(i + 1, end === -1 ? command.length : end));
+      i = end === -1 ? command.length : end;
+    } else if (char === '$' && next === '{') {
+      const close = command.indexOf('}', i + 2);
+      if (close === -1) return undefined;
+      text += command.slice(i, close + 1);
+      started = true;
+      expands = true;
+      i = close + 1;
+    } else if (char === '$' && next === '(') {
+      finish();
+      commands.push([]);
+      i += 2;
+    } else if (COMMAND_BREAK.has(char)) {
+      finish();
+      pendingTarget = false;
+      commands.push([]);
+      i += 1;
+    } else if (char === '\\') {
+      if (i + 1 >= command.length) return undefined;
+      if (next !== '\n') text += next;
+      started = true;
+      i += 2;
+    } else if (char === "'") {
+      const close = command.indexOf("'", i + 1);
+      if (close === -1) return undefined;
+      text += command.slice(i + 1, close);
+      started = true;
+      quoted = true;
+      i = close + 1;
+    } else if (char === '$' && next === "'") {
+      let j = i + 2;
+      let body = '';
+      while (j < command.length && command[j] !== "'") {
+        body += command[j];
+        if (command[j] === '\\' && j + 1 < command.length) {
+          body += command[j + 1];
+          j += 1;
+        }
+        j += 1;
+      }
+      if (j >= command.length) return undefined;
+      text += decodeAnsiC(body);
+      started = true;
+      quoted = true;
+      i = j + 1;
+    } else if (char === '"' || (char === '$' && next === '"')) {
+      let j = char === '"' ? i + 1 : i + 2;
+      while (j < command.length && command[j] !== '"') {
+        if (command[j] === '\\' && j + 1 < command.length) {
+          if (command[j + 1] !== '\n') text += command[j + 1];
+          j += 2;
+          continue;
+        }
+        if (command[j] === '$' || command[j] === '`') expands = true;
+        text += command[j];
+        j += 1;
+      }
+      if (j >= command.length) return undefined;
+      started = true;
+      quoted = true;
+      i = j + 1;
+    } else {
+      if (char === '$') expands = true;
+      text += char;
+      started = true;
+      i += 1;
+    }
+  }
+  finish();
+  return commands.filter((words) => words.length > 0);
+}
+
+// Whether a command's program runs (some of) its arguments as commands.
+function runsItsArguments(
+  program: string,
+  args: readonly ScannedWord[]
+): boolean {
+  const first = args.find((arg) => !arg.target)?.text.toLowerCase() ?? '';
+  return (
+    RUNNERS.has(program) ||
+    program === 'npx' ||
+    program === 'bunx' ||
+    program === 'pnpx' ||
+    (RUN_PACKAGE_MANAGERS.has(program) && PACKAGE_RUN.has(first)) ||
+    (program === 'find' && args.some((arg) => FIND_EXEC.test(arg.text))) ||
+    (program === 'git' && args.some((arg) => GIT_EXEC_OPTION.test(arg.text))) ||
+    (INTERPRETERS.has(program) &&
+      args.some((arg) => INLINE_CODE_FLAG.test(arg.text)))
+  );
+}
+
+/**
+ * The lowercased names a line may run as programs: each command's program
+ * word (past assignments, keywords and redirects), every token of a word
+ * an expansion builds, and every token after a program that runs its
+ * arguments (`sudo`, `xargs`, `sh -c`, `npx`, `find -exec`). A line that does
+ * not parse gives every token. Plain arguments never count.
+ */
+export function commandPositionNames(command: string): string[] {
+  return namesFrom(command, true);
+}
+
+function namesFrom(command: string, readComments: boolean): string[] {
+  const names: string[] = [];
+  const commands = scanCommands(
+    command,
+    readComments
+      ? (comment) => names.push(...namesFrom(comment, false))
+      : undefined
+  );
+  if (commands === undefined) return commandTokens(command).map(programName);
+  let readsText = false;
+  for (const words of commands) {
+    let at = 0;
+    while (
+      at < words.length &&
+      (words[at].target ||
+        ASSIGNMENT.test(words[at].text) ||
+        KEYWORDS.has(words[at].text.toLowerCase()))
+    ) {
+      if (words[at].expands)
+        names.push(...commandTokens(words[at].text).map(programName));
+      at += 1;
+    }
+    const program = words[at];
+    if (program === undefined) continue;
+    const name = programName(program.text);
+    names.push(name);
+    if (program.expands)
+      names.push(...commandTokens(program.text).map(programName));
+    const args = words.slice(at + 1);
+    for (const arg of args) {
+      if (arg.expands && !arg.target) {
+        // `"$(…)"` inside an argument still runs a command.
+        if (/\$\(|`/.test(arg.text))
+          names.push(...commandTokens(arg.text).map(programName));
+      }
+    }
+    if (TEXT_RUNNERS.has(name)) readsText = true;
+    if (runsItsArguments(name, args)) {
+      for (const arg of args)
+        names.push(...commandTokens(arg.text).map(programName));
+    }
+  }
+  // `echo dispatch x | sh` runs the echoed words.
+  if (readsText) names.push(...commandTokens(command).map(programName));
+  return names;
 }
 
 const GLOB = /[*?[]/;

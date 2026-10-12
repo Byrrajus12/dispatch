@@ -48,6 +48,25 @@ describe('the policy answering a run approval', () => {
     expect(asks(null)).toBe(true);
   });
 
+  // The run relaxation covers shell syntax only, never a stdin ask or an escalation.
+  it('leaves stdin and permission or network escalations to a human, however plain the command', () => {
+    const asks = (extra: Record<string, unknown>) =>
+      codexApprovalNeedsHuman('codex.commandExecution', {
+        command: "/bin/zsh -lc 'pnpm test'",
+        ...extra,
+      });
+    expect(asks({})).toBe(false);
+    expect(asks({ kind: 'writeStdin' })).toBe(true);
+    expect(
+      asks({ additionalPermissions: { network: { enabled: true } } })
+    ).toBe(true);
+    expect(asks({ networkApprovalContext: { host: 'x' } })).toBe(true);
+    expect(asks({ proposedExecpolicyAmendment: ['pnpm'] })).toBe(true);
+    expect(asks({ proposedNetworkPolicyAmendments: [] })).toBe(true);
+    expect(asks({ additionalPermissions: null })).toBe(false);
+    expect(codexApprovalNeedsHuman('codex.commandExecution', null)).toBe(true);
+  });
+
   it('says nothing about other tools', () => {
     expect(codexApprovalNeedsHuman('Bash', { command: 'eval "$X"' })).toBe(
       false

@@ -268,9 +268,8 @@ const ANSI_C_ESCAPES: Record<string, string> = {
   v: '\v',
 };
 
-// The text of a bash/zsh `$'…'` string: `\x67`, `\147`, `\u0067` and the
-// letter escapes decoded, so `$'\x67it'` reads as `git`.
-function decodeAnsiC(body: string): string {
+/** The text of a bash/zsh `$'…'` string body: `\x67`, `\147`, `\u0067` and the letter escapes decoded. */
+export function decodeAnsiC(body: string): string {
   return body.replace(
     /\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{1,4}|U[0-9a-fA-F]{1,8}|[0-7]{1,3}|c.|[\s\S])/g,
     (_match, code: string) => {

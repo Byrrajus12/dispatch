@@ -23,20 +23,21 @@ describe('the Dispatch CLI', () => {
     expect(bash(command)).toBe('dispatch-cli');
   });
 
-  // Any word naming the CLI holds: deciding which words run kept leaking
-  // (`eval`, `$(…)`, `xargs`, here-strings), so the hold no longer tries.
+  // Only a word the shell may run as a program holds: arguments (paths, grep
+  // patterns, echo text) never do, so working in a repo named dispatch is quiet.
   test.each([
     'echo dispatch',
     'grep -rn dispatch src',
+    'grep -r dispatch src',
     'git log --grep dispatch',
-  ])('%p is held too, since only the word is read', (command) => {
-    expect(bash(command)).toBe('dispatch-cli');
-  });
-
-  test.each([
     'cat README.md',
     'ls packages/dispatch-ui',
     'cat docs/dispatch.md',
+    'cd /Users/x/Sites/dispatch && ls',
+    'ls /Users/x/Sites/dispatch/src',
+    'echo ${HOME}/dispatch',
+    'echo hi > dispatch',
+    '# see dispatch docs',
   ])('%p runs', (command) => {
     expect(bash(command)).toBeNull();
   });
@@ -264,5 +265,54 @@ describe('token-scanned holds', () => {
   test('reading .dispatch with a plain read-only program runs, and `*` skips dot files', () => {
     expect(bash('head -n 5 .dispatch/config.yml')).toBeNull();
     expect(bash('rm -rf *')).toBeNull();
+  });
+});
+
+describe('the Dispatch CLI in command position', () => {
+  test.each([
+    'ls; dispatch task list',
+    'sudo -u me dispatch x',
+    'ls && dispatch x',
+    'ls || dispatch x',
+    'ls |& dispatch x',
+    'ls & dispatch x',
+    'case a in a) dispatch x;; esac',
+    'if true; then dispatch x; fi',
+    '! dispatch x',
+    '{ dispatch x; }',
+    'A=1 B="x y" dispatch x',
+    '> out dispatch x',
+    '2>err dispatch x',
+    'echo "$(dispatch task list)"',
+    'echo `dispatch task list`',
+    'cat <(dispatch task list)',
+    "bash -c 'ls; dispatch x'",
+    'nice -n 5 timeout 30 dispatch x',
+    'xargs -I{} dispatch task get {}',
+    'pnpm exec dispatch x',
+    'bun x dispatch x',
+    "git -c alias.x='!dispatch task list' x",
+    'python3 -c \'import os; os.system("dispatch x")\'',
+    "ls # it's\ndispatch task 'x'",
+    'ls #x; dispatch x',
+    "echo 'unclosed dispatch",
+    '"if" dispatch x',
+    'd"is"patch x',
+    "di$'\\x73'patch x",
+    'dis\\\npatch x',
+    'echo dispatch task list | sh',
+    'echo dispatch task list | bash -s',
+    'printf "dispatch x" | xargs -0 sh -c',
+  ])('%p is held', (command) => {
+    expect(bash(command)).toBe('dispatch-cli');
+  });
+
+  test('a path with dispatch but no leading dot is not a .dispatch write', () => {
+    expect(bash('rm -rf /Users/x/Sites/dispatch/build')).toBeNull();
+    expect(bash('touch dispatch/x')).toBeNull();
+    expect(bash('touch .dispatch/x')).toBe('dispatch-files');
+    expect(bash('rm /Users/x/Sites/dispatch/.dispatch/x.md')).toBe(
+      'dispatch-files'
+    );
   });
 });

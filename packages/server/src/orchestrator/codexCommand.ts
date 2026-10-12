@@ -110,18 +110,31 @@ export function codexCommandNeedsHuman(command: unknown): boolean {
   );
 }
 
+// Parts of a command ask that request more than running the command: a
+// sandbox escape, network access or a standing policy change.
+const ESCALATIONS = [
+  'additionalPermissions',
+  'networkApprovalContext',
+  'proposedExecpolicyAmendment',
+  'proposedNetworkPolicyAmendments',
+];
+
 /**
  * For the policy's automatic answers: true when a run's Codex command ask
- * must still go to a human (see codexCommandNeedsHuman); false for other tools.
+ * must still go to a human: not a plain command ask (stdin, an escalation of
+ * permissions or network), or a command codexCommandNeedsHuman refuses.
+ * False for other tools.
  */
 export function codexApprovalNeedsHuman(
   toolName: string,
   input: unknown
 ): boolean {
   if (toolName !== 'codex.commandExecution') return false;
-  const command =
-    typeof input === 'object' && input !== null
-      ? (input as { command?: unknown }).command
-      : undefined;
-  return codexCommandNeedsHuman(command);
+  if (typeof input !== 'object' || input === null) return true;
+  const ask = input as Record<string, unknown>;
+  if ((ask.kind ?? 'command') !== 'command') return true;
+  if (ESCALATIONS.some((key) => ask[key] !== undefined && ask[key] !== null)) {
+    return true;
+  }
+  return codexCommandNeedsHuman(ask.command);
 }

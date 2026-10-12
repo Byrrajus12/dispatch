@@ -1,6 +1,7 @@
 import { isAbsolute, normalize, relative, resolve, sep } from 'node:path';
 
 import {
+  commandPositionNames,
   commandTokens,
   globMatches,
   isSimpleCommand,
@@ -116,9 +117,10 @@ function hostOf(token: string): string {
 function commandHold(command: string): OverseerHold | null {
   const tokens = commandTokens(command);
   const programs = tokens.map(programName);
-  // A glob only counts when it holds a literal letter: `*` alone matches anything.
+  // Only words the shell may run as a program; a glob counts when it holds a
+  // literal letter, since `*` alone matches anything.
   if (
-    programs.some(
+    commandPositionNames(command).some(
       (program) =>
         DISPATCH_PROGRAMS.has(program) ||
         (/[a-z]/.test(program) &&

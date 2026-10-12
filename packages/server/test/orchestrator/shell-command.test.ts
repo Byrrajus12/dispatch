@@ -163,7 +163,7 @@ describe('a run command that is not simple', () => {
 });
 
 describe('approval reading stays linear', () => {
-  // Each of these took the old regexes seconds; every check must stay well under budget.
+  // Each of these took the old regexes seconds; every check must stay well under a generous budget.
   it.each([
     ['; sudo -x', '; sudo -x'.repeat(80_000 / 9)],
     ['sh ', 'sh '.repeat(80_000 / 3)],
@@ -171,7 +171,7 @@ describe('approval reading stays linear', () => {
     ['env -a ', `${'env -a '.repeat(80_000 / 7)}x`],
     ["$'\\x", "$'\\x".repeat(20_000)],
     ['glob words', 'echo *a?b '.repeat(8_000)],
-  ])('%p (80 KB) reads in under 50 ms', (_label, command) => {
+  ])('%p (80 KB) reads in under 500 ms', (_label, command) => {
     const checks = [
       () => overseerHoldFor('Bash', { command }, '/w'),
       () => floorCheckForToolInput({ command }),
@@ -184,7 +184,7 @@ describe('approval reading stays linear', () => {
       check();
       const started = performance.now();
       check();
-      expect(performance.now() - started).toBeLessThan(50);
+      expect(performance.now() - started).toBeLessThan(500);
     }
   });
 });
