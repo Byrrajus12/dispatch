@@ -587,7 +587,7 @@ test('control sequences in PR comments, docs and threads never reach the termina
       Promise.resolve({
         status: {
           number: 42,
-          title: 'pr\x1b]0;owned\x07title',
+          title: 'pr \x1b]0;owned\x07title',
           state: 'OPEN',
           isDraft: false,
           reviewDecision: null,
@@ -597,31 +597,33 @@ test('control sequences in PR comments, docs and threads never reach the termina
         conversation: [
           {
             kind: 'comment',
-            author: 'x\x1b[2J',
-            body: 'hi\x1b]52;c;ZXZpbA==\x07there',
+            author: 'x \x1b[2J',
+            body: 'hi \x1b]52;c;ZXZpbA==\x07there',
             createdAt: '',
           },
         ],
       }),
     getDoc: () =>
-      Promise.resolve({ doc: {}, text: 'doc\x1b]0;docpwn\x07body' }),
+      Promise.resolve({ doc: {}, text: 'doc \x1b]0;injected\x07body' }),
     getThread: () =>
       Promise.resolve({
-        messages: [{ ...runAsk, id: 'm-t1', body: 'msg\x1b]0;thrpwn\x07body' }],
+        messages: [
+          { ...runAsk, id: 'm-t1', body: 'msg \x1b]0;injected\x07body' },
+        ],
         deliveries: [],
       }),
   });
   const { frame, press } = await mount(120, 40, client);
   await frame();
   const prs = await press('6');
-  expect(prs).toContain('hithere');
-  expect(prs).toContain('prtitle');
+  expect(prs).toContain('hi there');
+  expect(prs).toContain('pr title');
   expect(prs).not.toContain('ZXZpbA');
   expect(prs).not.toContain('owned');
   const docs = await press('4');
-  expect(docs).toContain('docbody');
-  expect(docs).not.toContain('docpwn');
+  expect(docs).toContain('doc body');
+  expect(docs).not.toContain('injected');
   const threads = await press('5');
-  expect(threads).toContain('msgbody');
-  expect(threads).not.toContain('thrpwn');
+  expect(threads).toContain('msg body');
+  expect(threads).not.toContain('injected');
 });
