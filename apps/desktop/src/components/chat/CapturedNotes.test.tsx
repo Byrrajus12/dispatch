@@ -58,3 +58,16 @@ test('a note that arrives later shows on re-render', () => {
   );
   expect(screen.getByText('mid-run note')).toBeDefined();
 });
+
+test('a failed action says so on its row instead of failing silently', async () => {
+  render(
+    <CapturedNotes
+      items={[note({})]}
+      onMakeTask={() => Promise.reject(new Error('daemon said no'))}
+      onDismiss={() => Promise.resolve()}
+    />
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Make task' }));
+  expect(await screen.findByRole('alert')).toBeDefined();
+  expect(screen.getByRole('alert').textContent).toContain('daemon said no');
+});
