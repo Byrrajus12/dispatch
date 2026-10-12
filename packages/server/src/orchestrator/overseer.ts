@@ -1,4 +1,8 @@
-import { loadConfig, untrustedInline } from '@dispatch-foo/core';
+import {
+  DEFAULT_EXECUTOR_NAME,
+  loadConfig,
+  untrustedInline,
+} from '@dispatch-foo/core';
 import type { EffortLevel } from '@dispatch-foo/core';
 import type { Message, Sender } from '@dispatch-foo/protocol';
 import { SYSTEM_ADDRESS } from '@dispatch-foo/protocol';
@@ -7,6 +11,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { EventBus } from '../events.js';
 import { floorCheckForToolInput } from '../floor.js';
 import type { OverseerBus } from '../messaging/overseerBus.js';
+import { backendModel, pickAgentBackend } from './agentBackends.js';
 import type {
   OverseerBackend,
   OverseerCommand,
@@ -404,7 +409,13 @@ export class OverseerManager {
     const config = loadConfig(this.ctx.rootDir);
     const record = this.conversations.get(conversationId);
     return {
-      model: record?.model ?? config.models.overseer,
+      model: backendModel(
+        config,
+        record?.backendName ?? DEFAULT_EXECUTOR_NAME,
+        'execute',
+        config.models.overseer,
+        record?.model
+      ),
       effort: record?.effort ?? config.effort?.overseer,
       permissionMode: config.orchestrator.permissionMode,
       ...(config.orchestrator.maxTurns !== undefined
@@ -426,6 +437,14 @@ export class OverseerManager {
           text: describeToolCall(toolName, input),
         }),
     };
+  }
+
+  /** The backend a conversation opened with none named runs on: the default agent's, else Claude's. */
+  defaultBackendName(): string {
+    return pickAgentBackend(
+      this.registeredBackendNames(),
+      loadConfig(this.ctx.rootDir).orchestrator.executor
+    );
   }
 
   private requireBackend(name: string): OverseerBackend {
@@ -456,19 +475,20 @@ export class OverseerManager {
    */
   start(
     prompt: string,
-    backendName = 'claude',
+    backendName?: string,
     model?: string,
     effort?: EffortLevel,
     speaker: Sender | null = null
   ): OverseerRecord {
-    const backend = this.requireBackend(backendName);
+    const name = backendName ?? this.defaultBackendName();
+    const backend = this.requireBackend(name);
     this.refuseIfRevoked();
     const now = new Date().toISOString();
     const record: OverseerRecord = {
       id: generateOverseerId(now),
       ...(speaker !== null ? { owner: speaker.address } : {}),
       prompt,
-      backendName,
+      backendName: name,
       ...(model !== undefined ? { model } : {}),
       ...(effort !== undefined ? { effort } : {}),
       state: 'running',

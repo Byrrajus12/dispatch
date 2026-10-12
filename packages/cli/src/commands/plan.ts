@@ -188,13 +188,16 @@ export function registerPlanCommands(program: Command, ctx: CliContext): void {
     .description('Turn a prompt into a proposed epic + tasks');
   plan.addHelpText(
     'after',
-    '\nStart a plan with:\n  dispatch plan <prompt...> [--planner claude|fake] [--json] [--yes]' +
+    '\nStart a plan with:\n  dispatch plan <prompt...> [--planner claude|codex|fake] [--json] [--yes]' +
       '\nAnswer the planner with:\n  dispatch plan reply <planId> <message...>'
   );
 
   plan
     .command('submit <prompt...>', { isDefault: true, hidden: true })
-    .option('--planner <name>', 'claude|fake', 'claude')
+    .option(
+      '--planner <name>',
+      'claude|codex|fake (default: the project default agent)'
+    )
     .option('--json', 'print the plan record (and confirm result) as JSON')
     .option('--yes', 'confirm the proposal immediately once it is ready')
     .option(
@@ -206,7 +209,7 @@ export function registerPlanCommands(program: Command, ctx: CliContext): void {
       async (
         promptParts: string[],
         opts: {
-          planner: string;
+          planner?: string;
           json?: boolean;
           yes?: boolean;
           timeout: string;

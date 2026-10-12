@@ -1033,6 +1033,38 @@ describe('OverseerManager turn options', () => {
   });
 });
 
+describe('OverseerManager backend choice', () => {
+  it('opens a conversation with no backend named on the default agent', async () => {
+    const h = makeManager({ ok: true, reply: 'unused' });
+    h.manager.registerBackend('claude', new GatedBackend([]));
+    h.manager.registerBackend('codex', new GatedBackend([]));
+
+    const onClaude = h.manager.start('hi');
+    expect(onClaude.backendName).toBe('claude');
+    await waitFor(() => h.manager.get(onClaude.id).state === 'ready');
+
+    updateConfig(repo, { executor: 'codex' });
+    const onCodex = h.manager.start('hi');
+    expect(onCodex.backendName).toBe('codex');
+    await waitFor(() => h.manager.get(onCodex.id).state === 'ready');
+  });
+
+  it('a Codex conversation never runs on a Claude model', async () => {
+    updateConfig(repo, {
+      models: { overseer: 'claude-fable-5-1' },
+      executors: { codex: { models: { execute: 'gpt-5.5' } } },
+    });
+    const h = makeManager({ ok: true, reply: 'unused' });
+    const codex = new GatedBackend([]);
+    h.manager.registerBackend('codex', codex);
+
+    const started = h.manager.start('hi', 'codex', 'claude-opus-5-5');
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(started.model).toBe('claude-opus-5-5');
+    expect(codex.options?.model).toBe('gpt-5.5');
+  });
+});
+
 describe('overseer on the bus', () => {
   const WYAT: Sender = { address: 'human:wyat', canDecide: true };
 

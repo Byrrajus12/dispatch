@@ -846,7 +846,7 @@ async function draftTask(req: Request, ctx: ApiContext): Promise<Response> {
     );
   }
   const plannerName =
-    typeof body.planner === 'string' ? body.planner : 'claude';
+    typeof body.planner === 'string' ? body.planner : undefined;
   const draft = ctx.planManager.startDraft(body.prompt, plannerName, parent);
   return jsonResponse(draft, 202);
 }
@@ -3676,7 +3676,7 @@ function readOptionalModel(
   return { ok: true, model: value.trim() };
 }
 
-// POST /api/plan. `planner` is optional (defaults to 'claude'), same
+// POST /api/plan. `planner` is optional (defaults to the project's default agent), same
 // contract as createRun's `executor` field above: a name outside what's
 // actually registered on this PlanManager instance (Phase 7's
 // registerPlanner/registeredPlannerNames, mirroring the orchestrator's own
@@ -3708,7 +3708,7 @@ async function startPlan(req: Request, ctx: ApiContext): Promise<Response> {
     );
   }
   const plannerName =
-    typeof body.planner === 'string' ? body.planner : 'claude';
+    typeof body.planner === 'string' ? body.planner : undefined;
   const record = ctx.planManager.startPlan(
     body.prompt,
     plannerName,
@@ -3771,7 +3771,7 @@ async function confirmPlan(
 // return-the-record shape rather than startPlan's id-only body: the chat UI
 // renders the opening user message straight from the response. The assistant's
 // reply lands asynchronously via the `overseer.changed` broadcast. `backend`
-// follows createRun's `executor` contract: optional, defaults to 'claude', and
+// follows createRun's `executor` contract: optional, defaults to the default agent's backend, and
 // a name outside what's registered is a 400 naming every valid option.
 // `model` is optional the same way: the composer's pick for this
 // conversation, over the configured `overseer` role's model. `speaker` is the
@@ -3808,7 +3808,7 @@ async function startOverseer(
     );
   }
   const backendName =
-    typeof body.backend === 'string' ? body.backend : 'claude';
+    typeof body.backend === 'string' ? body.backend : undefined;
   const record = ctx.overseerManager.start(
     body.prompt,
     backendName,
@@ -4545,7 +4545,7 @@ function enrichTask(ctx: ApiContext, id: string): Response {
   }
   const record = ctx.planManager.startPlan(
     buildTaskEnrichPrompt(task, ctx.a2a?.taskOrigin(id) === 'a2a'),
-    'claude',
+    undefined,
     undefined,
     'enrich',
     task.meta.title
@@ -4566,7 +4566,7 @@ function enrichNote(ctx: ApiContext, id: string): Response {
   }
   const record = ctx.planManager.startPlan(
     buildNoteEnrichPrompt(note),
-    'claude',
+    undefined,
     note.id,
     'enrich',
     note.title
