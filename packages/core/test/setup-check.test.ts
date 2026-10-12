@@ -232,6 +232,28 @@ describe('runSetupCheck', () => {
     expect(codexOnly.defaultProvider).toBe('codex');
   });
 
+  it('keeps a signed-out default rather than hiding it behind another ready agent', async () => {
+    const r = await runSetupCheck(
+      { defaultExecutor: 'claude' },
+      deps(['git', 'claude', 'codex'], {
+        ...GIT_OK,
+        'claude --version': ok('2.1.290'),
+        'claude auth status --json': {
+          status: 1,
+          stdout: '{"loggedIn":false}',
+          stderr: '',
+        },
+        'codex --version': ok('0.1'),
+        'codex login status': ok('Logged in'),
+      })
+    );
+    expect(r.defaultProvider).toBe('claude');
+    expect(step(r, 'agent')).toMatchObject({
+      status: 'needs-action',
+      fix: { label: 'Sign in' },
+    });
+  });
+
   it('says the default agent is not installed (not broken) when only another agent is broken', async () => {
     const r = await runSetupCheck(
       {},

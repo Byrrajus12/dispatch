@@ -5,9 +5,10 @@ import type {
   SetupFix,
 } from './types.js';
 
-// `claude auth status` prints JSON with `loggedIn` (verified on Claude Code 2.1.290).
+// `claude auth status` prints JSON with `loggedIn` (verified on Claude Code 2.1.290);
+// signed out it still prints it, but exits 1.
 function parseClaudeAuth(r: ProbeResult): AuthState {
-  if (r.error !== undefined || r.status !== 0) return 'unknown';
+  if (r.error !== undefined) return 'unknown';
   try {
     const parsed = JSON.parse(r.stdout) as { loggedIn?: unknown };
     if (parsed.loggedIn === true) return 'signed-in';

@@ -50,6 +50,13 @@ describe('provider catalog', () => {
     expect(check.parse({ status: 0, stdout: 'garbage', stderr: '' })).toBe(
       'unknown'
     );
+    // What a signed-out Claude Code really does: the JSON, with exit code 1.
+    expect(
+      check.parse({ status: 1, stdout: '{"loggedIn":false}', stderr: '' })
+    ).toBe('signed-out');
+    expect(check.parse({ status: 1, stdout: '', stderr: 'boom' })).toBe(
+      'unknown'
+    );
   });
 
   it('reads codex login status from the exit code', () => {

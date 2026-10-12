@@ -200,12 +200,14 @@ async function providerState(
   };
 }
 
+// The daemon's default whenever it is installed, so a signed-out or broken one
+// shows as the problem it is; one never installed yields to the first ready agent.
 function pickDefault(
   providers: ProviderState[],
   configured: string | undefined
 ): string | null {
   const configuredState = providers.find((p) => p.id === configured);
-  if (configuredState?.ready === true) return configuredState.id;
+  if (configuredState?.installed === true) return configuredState.id;
   return providers.find((p) => p.ready)?.id ?? configuredState?.id ?? 'claude';
 }
 
