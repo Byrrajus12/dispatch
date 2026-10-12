@@ -523,6 +523,21 @@ describe('shared overseer pieces', () => {
     expect(ungated.split('\n\n').length).toBe(gated.split('\n\n').length);
   });
 
+  it('moves into planning unprompted for multi-task work, not small asks', () => {
+    const planning = overseerInstructions('Claude Code')
+      .split('\n\n')
+      .find((paragraph) => paragraph.startsWith('Planning happens here'));
+    expect(planning).toContain('even if they never ask for a breakdown');
+    expect(planning).toContain('ask what you must know');
+    expect(planning).toContain(
+      'A single small task, a question or a status check is not a plan'
+    );
+    expect(planning).toContain(
+      'one create_plan card rather than a card per task'
+    );
+    expect(planning).toContain('also starts its agents');
+  });
+
   it('tells the model a mutating tool only queues', () => {
     const { toolset } = stubToolset();
     const [listRuns, cancelRun] = toolset.tools;

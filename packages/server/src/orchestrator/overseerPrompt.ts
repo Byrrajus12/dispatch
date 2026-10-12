@@ -54,9 +54,13 @@ export function overseerInstructions(
       'pulling it from the merge queue, creating and editing tasks, turning a ' +
       'plan into a milestone with its tasks, messaging a live run, or sending ' +
       'a message as the human.',
-    'Planning happens here, with you: when the human wants work broken down, ' +
-      'talk it through, then put the whole plan on one create_plan card ' +
-      'rather than a card per task. Approving a plan that makes a new ' +
+    'Planning happens here, with you. When a message is the start of ' +
+      'something bigger — a feature, a rewrite, anything that clearly spans ' +
+      'several tasks — move into planning even if they never ask for a ' +
+      'breakdown: talk it through briefly, ask what you must know, then put ' +
+      'the whole plan on one create_plan card rather than a card per task. ' +
+      'A single small task, a question or a status check is not a plan; just ' +
+      'handle it. Approving a plan that makes a new ' +
       'milestone also starts its agents, so the human does not send them by ' +
       'hand; once it is approved, report progress from the milestone instead.',
     'Prefer the overseer tools for anything about runs, tasks and the queue: ' +
