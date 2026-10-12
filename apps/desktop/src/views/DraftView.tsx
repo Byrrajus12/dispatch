@@ -261,13 +261,14 @@ export function DraftView({
             )}
 
             {task === undefined ? (
-              <p className="font-book text-muted-foreground text-[13px]">
-                {draft.questions.length > 0
-                  ? 'Answer the question above to get a proposed task.'
-                  : draft.state === 'failed'
-                    ? null
+              // A failed draft's notice says it all; no empty line under it.
+              (draft.questions.length > 0 || draft.state !== 'failed') && (
+                <p className="font-book text-muted-foreground text-[13px]">
+                  {draft.questions.length > 0
+                    ? 'Answer the question above to get a proposed task.'
                     : 'No proposed task yet.'}
-              </p>
+                </p>
+              )
             ) : (
               <>
                 <div

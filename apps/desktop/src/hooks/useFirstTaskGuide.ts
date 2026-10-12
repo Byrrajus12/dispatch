@@ -67,6 +67,8 @@ export function useFirstTaskGuide({
   const [celebration, setCelebration] = useState<GuideView | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  // Restart was used in this session, so the guide shows even on a project with tasks.
+  const [restarted, setRestarted] = useState(false);
   if (path !== projectPath) {
     // A project switch reads that project's record; nothing carries over.
     setPath(projectPath);
@@ -74,6 +76,7 @@ export function useFirstTaskGuide({
     setCelebration(null);
     setCollapsed(false);
     setSendError(null);
+    setRestarted(false);
   }
 
   const save = useCallback(
@@ -107,12 +110,20 @@ export function useFirstTaskGuide({
     setCelebration(derived);
   }, [derived, record, save]);
 
+  // Left at Describe with nothing started while tasks arrived some other way (the board,
+  // the Overseer): it steps aside, still following, unless restarted this session.
+  const idle =
+    derived?.stage === 'describe' &&
+    derived.draft === undefined &&
+    tasks.length > 0 &&
+    !restarted;
+
   const update = (patch: Partial<GuideRecord>) => {
     if (record?.status === 'active') save({ ...record, ...patch });
   };
 
   return {
-    view: celebration ?? derived,
+    view: celebration ?? (idle ? null : derived),
     active: derived !== null,
     draftId: record?.draftId,
     collapsed,
@@ -140,6 +151,7 @@ export function useFirstTaskGuide({
       setCelebration(null);
       setCollapsed(false);
       setSendError(null);
+      setRestarted(true);
     },
     closeCompletion: () => setCelebration(null),
   };

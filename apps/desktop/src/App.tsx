@@ -1407,8 +1407,20 @@ function App() {
   const guideFor = (path: string | null) =>
     guidePathRef.current === path ? guideRef.current : null;
 
+  // Clears a draft something newer replaced; a failure says so rather than leaving it listed.
+  const dismissReplacedDraft = async (draftId: string) => {
+    try {
+      await rawData.handleDismissDraft(draftId);
+    } catch (err) {
+      toasts.push({
+        title: "Couldn't remove the old draft",
+        description: describeError(err),
+        tone: 'error',
+      });
+    }
+  };
   // A failed draft's Try again: the same sentence as a fresh draft, opened in its place.
-  const retryDraft = async (draft: DraftRecord) => {
+  const startRetryDraft = async (draft: DraftRecord) => {
     const path = guidePath;
     const next = await rawData.handleStartDraft(draft.prompt, {
       parent: draft.parent ?? null,
@@ -1418,15 +1430,18 @@ function App() {
     if (latest.draftId === draft.id) latest.linkDraft(next.id);
     setFirstRunDraftId((id) => (id === draft.id ? next.id : id));
     dispatchNav({ type: 'openDraft', draftId: next.id });
-    try {
-      await rawData.handleDismissDraft(draft.id);
-    } catch (err) {
-      toasts.push({
-        title: "Couldn't remove the failed draft",
-        description: describeError(err),
-        tone: 'error',
-      });
-    }
+    await dismissReplacedDraft(draft.id);
+  };
+  // Retries in flight by draft, so the card's and the first-run box's Try again share one.
+  const draftRetries = useRef(new Map<string, Promise<void>>());
+  const retryDraft = (draft: DraftRecord): Promise<void> => {
+    const pending = draftRetries.current.get(draft.id);
+    if (pending !== undefined) return pending;
+    const attempt = startRetryDraft(draft).finally(() =>
+      draftRetries.current.delete(draft.id)
+    );
+    draftRetries.current.set(draft.id, attempt);
+    return attempt;
   };
   // The guide's Send to agent on a task; a refusal stays on the card with the task open.
   const sendGuidedTask = async (taskId: string, choice: SendChoice) => {
@@ -1461,9 +1476,9 @@ function App() {
     // A switch mid-send leaves the new task on its own project's board.
     if (latest === null) return;
     latest.linkTask(doc.meta.id);
-    await rawData.handleDismissDraft(draftId);
-    if (guideFor(path) === null) return;
+    // Sending first moves off the draft's page, so it never flashes as gone.
     await sendGuidedTask(doc.meta.id, { ...choice, writes: [] });
+    await dismissReplacedDraft(draftId);
   };
   const showFirstRunBox = () => {
     setFirstRunSetAsideFor(null);

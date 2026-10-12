@@ -302,3 +302,32 @@ test('no stage uses a word the copy rules ban', () => {
     unmount();
   }
 });
+
+test('the collapse toggle says whether the card is open', () => {
+  const { onCollapsedChange } = card({ stage: 'describe' });
+  const toggle = screen.getByRole('button', { name: 'Collapse the guide' });
+  expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  fireEvent.click(toggle);
+  expect(onCollapsedChange).toHaveBeenCalledWith(true);
+});
+
+test('closing mid-task asks first; closing at Describe does not', async () => {
+  const first = card({ stage: 'describe' });
+  fireEvent.click(screen.getByRole('button', { name: 'Close the guide' }));
+  expect(first.a.dismiss).toHaveBeenCalledTimes(1);
+  first.unmount();
+
+  const { a } = card({ stage: 'works', taskId: 't-1', run: run() });
+  fireEvent.click(screen.getByRole('button', { name: 'Close the guide' }));
+  expect(a.dismiss).not.toHaveBeenCalled();
+  const dialog = await screen.findByRole('alertdialog');
+  expect(dialog.textContent).toContain('Your task keeps going');
+  fireEvent.click(screen.getByRole('button', { name: 'Keep the guide' }));
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  expect(a.dismiss).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Close the guide' }));
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Close the guide for good' })
+  );
+  expect(a.dismiss).toHaveBeenCalledTimes(1);
+});

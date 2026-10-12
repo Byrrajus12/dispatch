@@ -435,6 +435,13 @@ export function FirstTaskGuide({
 }: FirstTaskGuideProps) {
   const { view, actions } = body;
   const done = view.stage === 'done';
+  // Past Describe, closing ends the guide for this project, so it asks first.
+  const [confirmClose, setConfirmClose] = useState(false);
+  const close = () => {
+    if (done) actions.closeCompletion();
+    else if (view.stage === 'describe') actions.dismiss();
+    else setConfirmClose(true);
+  };
   const index = done
     ? GUIDE_STEPS.length
     : GUIDE_STEPS.findIndex((s) => s.stage === view.stage);
@@ -453,14 +460,12 @@ export function FirstTaskGuide({
             <>
               <IconButton
                 label={collapsed ? 'Expand the guide' : 'Collapse the guide'}
+                aria-expanded={!collapsed}
                 onClick={() => onCollapsedChange(!collapsed)}
               >
                 {collapsed ? <ChevronUp /> : <ChevronDown />}
               </IconButton>
-              <IconButton
-                label="Close the guide"
-                onClick={done ? actions.closeCompletion : actions.dismiss}
-              >
+              <IconButton label="Close the guide" onClick={close}>
                 <X />
               </IconButton>
             </>
@@ -510,6 +515,30 @@ export function FirstTaskGuide({
           </>
         )}
       </section>
+      <AlertDialog open={confirmClose} onOpenChange={setConfirmClose}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Close the guide?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your task keeps going without it. You can start the guide again
+              from Help in the project menu.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel variant="ghost">
+              Keep the guide
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setConfirmClose(false);
+                actions.dismiss();
+              }}
+            >
+              Close the guide for good
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Panel>
   );
 }

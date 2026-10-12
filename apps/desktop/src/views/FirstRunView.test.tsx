@@ -1,5 +1,11 @@
 import type { DraftRecord } from '@dispatch/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import { expect, mock, test } from 'bun:test';
 
 import { FirstRunView } from './FirstRunView';
@@ -146,6 +152,45 @@ test('an agent that cannot draft gets the two-field form, which creates the task
       what: 'Add a dark mode toggle',
       done: 'The theme switches',
     })
+  );
+});
+
+test('a double click on Create task creates one task', async () => {
+  let finish = () => {};
+  const onCreateTask = mock(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      })
+  );
+  render(
+    <FirstRunView
+      projectName="dispatch"
+      planner={false}
+      onCreateTask={onCreateTask}
+      onStartDraft={() => Promise.resolve(draft)}
+      onBrowseBoard={() => {}}
+    />
+  );
+  fireEvent.change(screen.getByLabelText('What should change?'), {
+    target: { value: 'Add a dark mode toggle' },
+  });
+  const create = screen.getByRole('button', { name: 'Create task' });
+  // Both clicks land before React re-renders the button as disabled.
+  act(() => {
+    create.click();
+    create.click();
+  });
+  expect(onCreateTask).toHaveBeenCalledTimes(1);
+  await act(() => {
+    finish();
+    return Promise.resolve();
+  });
+  await waitFor(() =>
+    expect(screen.getByLabelText('What should change?')).toHaveProperty(
+      'value',
+      ''
+    )
   );
 });
 

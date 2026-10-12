@@ -204,6 +204,10 @@ test("a draft that failed says why instead of 'No proposed task yet'", () => {
     screen.getByText("Claude Code isn't installed, or Dispatch can't find it.")
   ).toBeTruthy();
   expect(screen.queryByText('No proposed task yet.')).toBeNull();
+  const empty = Array.from(document.querySelectorAll('p')).filter(
+    (p) => p.textContent === ''
+  );
+  expect(empty).toHaveLength(0);
 });
 
 test('a failed draft offers Try again', async () => {

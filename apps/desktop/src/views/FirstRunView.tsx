@@ -1,6 +1,6 @@
 import type { DraftRecord } from '@dispatch/client';
 import { Sparkles } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import { FailureNotice } from '../components/failure/FailureNotice';
 import { Button } from '@/ui/button';
@@ -58,6 +58,8 @@ export function FirstRunView({
   const [error, setError] = useState<string | null>(null);
 
   const [done, setDone] = useState('');
+  // Set before the first await, so a second click in the same frame is ignored.
+  const creating = useRef(false);
   const useForm = !planner && onCreateTask !== undefined;
 
   const canSubmit = prompt.trim() !== '' && !submitting;
@@ -80,8 +82,9 @@ export function FirstRunView({
 
   // The no-planner path: the two fields become the task as written, no AI drafting.
   async function createFromForm() {
-    if (onCreateTask === undefined || prompt.trim() === '' || submitting)
+    if (onCreateTask === undefined || prompt.trim() === '' || creating.current)
       return;
+    creating.current = true;
     setSubmitting(true);
     setError(null);
     try {
@@ -91,6 +94,7 @@ export function FirstRunView({
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
+      creating.current = false;
       setSubmitting(false);
     }
   }

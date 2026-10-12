@@ -293,3 +293,46 @@ test('switching to a populated project never starts its guide, even mid-switch',
   expect(readGuide('/p/b')).toBeNull();
   expect(result.current.view).toBeNull();
 });
+
+test('a guide left at Describe steps aside once the project has tasks from elsewhere', () => {
+  const { result, rerender } = renderHook((p) => useFirstTaskGuide(p), {
+    initialProps: props(),
+  });
+  expect(result.current.view?.stage).toBe('describe');
+  // A task made from the board or by the Overseer, not through the guide.
+  rerender(props({ projectEmpty: false, tasks: ONE_TASK }));
+  expect(result.current.view).toBeNull();
+  // Still following, so a link that lands late is kept.
+  expect(result.current.active).toBe(true);
+  // Restart brings it back for this session, tasks and all.
+  act(() => result.current.restart());
+  expect(result.current.view?.stage).toBe('describe');
+});
+
+test('a guide at Describe on a project with tasks stays hidden on the next launch', () => {
+  window.localStorage.setItem(
+    'dispatch:first-task-guide:/p/a',
+    JSON.stringify({ status: 'active' })
+  );
+  const { result } = renderHook(() =>
+    useFirstTaskGuide(props({ projectEmpty: false, tasks: ONE_TASK }))
+  );
+  expect(result.current.view).toBeNull();
+});
+
+test('a guide waiting on its own draft stays up when other tasks appear', () => {
+  const drafting = [{ id: 'd-1', state: 'running' } as DraftRecord];
+  window.localStorage.setItem(
+    'dispatch:first-task-guide:/p/a',
+    JSON.stringify({ status: 'active', draftId: 'd-1' })
+  );
+  const { result } = renderHook(() =>
+    useFirstTaskGuide(
+      props({ projectEmpty: false, tasks: ONE_TASK, drafts: drafting })
+    )
+  );
+  expect(result.current.view).toMatchObject({
+    stage: 'describe',
+    waiting: 'drafting',
+  });
+});
