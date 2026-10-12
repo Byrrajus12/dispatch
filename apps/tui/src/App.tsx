@@ -8,6 +8,7 @@ import { useKeyboard, useTerminalDimensions } from '@opentui/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useMemo, useRef, useState } from 'react';
 
+import { CrashGuard } from './CrashGuard';
 import { useDaemonData, useDaemonEvents } from './data';
 import { comingIn, goingOut } from './lists';
 import {
@@ -47,6 +48,10 @@ function toKey(event: KeyEvent): Key {
     event.sequence.length === 1 &&
     event.sequence >= ' ' &&
     event.sequence !== '\x7f';
+  // Alt sends ESC + key; name it apart so alt+q or alt+y never act as q or y.
+  if (event.meta || event.option) {
+    return { name: `alt+${event.name}`, ctrl: event.ctrl, shift: event.shift };
+  }
   return {
     name: printable ? event.sequence : event.name,
     ctrl: event.ctrl,
@@ -116,7 +121,11 @@ function App({
       if (card !== undefined) void s.confirmAction(card.id, action.approve);
       return;
     }
-    setNav((prev) => navReducer(prev, action, latest.current.ctx));
+    // Keys from one stdin read arrive before React re-renders: record the next state
+    // now, so a `y` right behind an `i` is already seen as typing.
+    const next = navReducer(now, action, c);
+    latest.current = { ...latest.current, nav: next };
+    setNav(next);
   });
 
   const submit = (text: string) => {
@@ -193,7 +202,9 @@ export function TuiRoot(props: TuiProps) {
   );
   return (
     <QueryClientProvider client={queryClient}>
-      <App {...props} />
+      <CrashGuard onQuit={props.onQuit}>
+        <App {...props} />
+      </CrashGuard>
     </QueryClientProvider>
   );
 }

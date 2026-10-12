@@ -97,7 +97,7 @@ export function resolveKey(
       };
     case 'i':
     case '/':
-      if (state.view !== 'overseer') return null;
+      if (state.view !== 'overseer' || state.overlay !== null) return null;
       return ctx.canCompose
         ? { type: 'compose', on: true }
         : { type: 'notice', text: READ_ONLY };

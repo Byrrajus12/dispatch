@@ -1,3 +1,4 @@
+import { safeText } from '../safe';
 import { color } from '../theme';
 
 /** A titled column of one-line rows; the cursor row is highlighted only while the column has focus. */
@@ -38,7 +39,7 @@ export function List({
             fg={row.tone ?? color.text}
             bg={focused && i === cursor ? color.focus : undefined}
           >
-            {`${focused && i === cursor ? '▸ ' : '  '}${row.label}`}
+            {`${focused && i === cursor ? '▸ ' : '  '}${safeText(row.label)}`}
           </text>
         ))
       )}

@@ -1,4 +1,5 @@
 import { type NavState, READ_ONLY } from '../nav';
+import { safeText } from '../safe';
 import { color } from '../theme';
 
 // What the keys do right now, so the bottom line doubles as the help a newcomer needs.
@@ -25,7 +26,9 @@ export function StatusLine({
   readOnly: boolean;
 }) {
   if (error !== null) {
-    return <text fg={color.bad}>{` dispatchd: ${error} · retrying`}</text>;
+    return (
+      <text fg={color.bad}>{` dispatchd: ${safeText(error)} · retrying`}</text>
+    );
   }
   if (nav.notice !== null) {
     return <text fg={color.warn}>{` ${nav.notice}`}</text>;

@@ -1,5 +1,6 @@
 import type { TaskDoc } from '@dispatch-foo/core/browser';
 
+import { safeText } from '../safe';
 import { color } from '../theme';
 import { List } from './List';
 
@@ -38,16 +39,16 @@ export function TasksView({
           <text fg={color.dim}>Pick a task with j / k.</text>
         ) : (
           <scrollbox flexGrow={1}>
-            <text
-              fg={color.text}
-            >{`${selected.meta.id}  ${selected.meta.title}`}</text>
-            <text
-              fg={color.dim}
-            >{`${selected.meta.status} · ${selected.meta.priority}`}</text>
+            <text fg={color.text}>
+              {safeText(`${selected.meta.id}  ${selected.meta.title}`)}
+            </text>
+            <text fg={color.dim}>
+              {safeText(`${selected.meta.status} · ${selected.meta.priority}`)}
+            </text>
             <text fg={color.text}>
               {selected.body.trim() === ''
                 ? '(no description)'
-                : selected.body.trim()}
+                : safeText(selected.body.trim())}
             </text>
           </scrollbox>
         )}

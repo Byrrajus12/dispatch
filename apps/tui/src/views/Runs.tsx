@@ -1,6 +1,7 @@
 import type { ApiClient, RunMeta } from '@dispatch/client';
 
 import { useRunDiff } from '../data';
+import { safeText } from '../safe';
 import { color } from '../theme';
 import { List } from './List';
 import { runTone } from './Overseer';
@@ -40,7 +41,7 @@ function Diff({
                   : color.text
           }
         >
-          {line === '' ? ' ' : line}
+          {line === '' ? ' ' : safeText(line)}
         </text>
       ))}
     </scrollbox>
@@ -91,15 +92,15 @@ export function RunsView({
           <Diff client={client} port={port} run={selected} />
         ) : (
           <box flexDirection="column">
-            <text
-              fg={color.text}
-            >{`${selected.id}  ${selected.taskTitle}`}</text>
+            <text fg={color.text}>
+              {safeText(`${selected.id}  ${selected.taskTitle}`)}
+            </text>
             <text fg={runTone(selected.state)}>{selected.state}</text>
             <text
               fg={color.dim}
             >{`task ${selected.taskId} · updated ${selected.updatedAt}`}</text>
             {selected.error !== undefined && (
-              <text fg={color.bad}>{selected.error}</text>
+              <text fg={color.bad}>{safeText(selected.error)}</text>
             )}
             <text fg={color.dim}>d to see what it changed</text>
           </box>

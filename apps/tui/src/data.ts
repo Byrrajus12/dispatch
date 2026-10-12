@@ -2,6 +2,8 @@ import {
   type ApiClient,
   gateOf,
   invalidateOverseerEvent,
+  openGatesKey,
+  overseerKeyPrefix,
 } from '@dispatch/client';
 import {
   type QueryClient,
@@ -72,8 +74,8 @@ export function useRunDiff(
   });
 }
 
-// One socket for the whole TUI: each event refetches only what it touched.
-function applyEvent(
+/** Marks stale exactly what one dispatchd event touched; one socket feeds the whole TUI. */
+export function applyEvent(
   queryClient: QueryClient,
   port: number,
   type: string,
@@ -86,12 +88,21 @@ function applyEvent(
     refetch('runs');
     refetch('diff');
   } else if (type === 'inbox.changed') refetch('inbox');
-  else if (type === 'overseer.changed' && conversationId !== undefined) {
+  else if (
+    type === 'message.new' ||
+    type === 'delivery.changed' ||
+    type === 'decisions.changed'
+  ) {
+    // A run asking, an answer landing anywhere, or the feed itself moving.
+    refetch('decisions');
+  } else if (type === 'overseer.changed' && conversationId !== undefined) {
     invalidateOverseerEvent(queryClient, port, conversationId);
     refetch('decisions');
   } else if (type === 'hello') {
-    // A (re)connect: anything may have changed while the socket was down.
+    // A (re)connect usually means dispatchd restarted: its in-memory records are gone too.
     void queryClient.invalidateQueries({ queryKey: ['tui', port] });
+    void queryClient.invalidateQueries({ queryKey: overseerKeyPrefix(port) });
+    void queryClient.invalidateQueries({ queryKey: openGatesKey(port) });
   }
 }
 

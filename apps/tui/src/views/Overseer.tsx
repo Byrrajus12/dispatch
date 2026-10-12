@@ -8,6 +8,7 @@ import { useRef } from 'react';
 
 import type { InflowItem } from '../lists';
 import type { NavState } from '../nav';
+import { safeText } from '../safe';
 import { color } from '../theme';
 import { List } from './List';
 
@@ -57,7 +58,7 @@ function Card({
       paddingLeft={1}
       paddingRight={1}
     >
-      <text fg={color.text}>{action.summary}</text>
+      <text fg={color.text}>{safeText(action.summary)}</text>
       <text fg={focused ? color.accent : color.dim}>
         {deciding
           ? 'deciding…'
@@ -139,7 +140,7 @@ export function OverseerView({
                   key={`${m.at}-${i}`}
                   fg={m.role === 'user' ? color.accent : color.text}
                 >
-                  {`${SPEAKER[m.role] ?? m.role}: ${m.text}`}
+                  {`${SPEAKER[m.role] ?? m.role}: ${safeText(m.text)}`}
                 </text>
               ))
             )}
@@ -153,10 +154,10 @@ export function OverseerView({
             ))}
           </scrollbox>
           {session.decideError !== null && (
-            <text fg={color.bad}>{session.decideError}</text>
+            <text fg={color.bad}>{safeText(session.decideError)}</text>
           )}
           {session.sendError !== null && (
-            <text fg={color.bad}>{session.sendError}</text>
+            <text fg={color.bad}>{safeText(session.sendError)}</text>
           )}
           <box
             border
@@ -173,7 +174,12 @@ export function OverseerView({
                 draft.current = value;
               }}
               // No argument: the input's prop type also carries a textarea's event-style handler.
-              onSubmit={() => onSubmit(draft.current)}
+              onSubmit={() => {
+                const text = draft.current;
+                // The input remounts empty, and onInput only fires on change.
+                draft.current = '';
+                onSubmit(text);
+              }}
             />
           </box>
         </box>

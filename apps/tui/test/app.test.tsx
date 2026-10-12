@@ -335,3 +335,66 @@ test('esc leaves the composer, so j and y act on the card again', async () => {
   ]);
   expect(f).not.toContain('enter send');
 });
+
+test('keys that arrive together still respect the composer: i then y types, never approves', async () => {
+  const { client, replies } = fakeClient();
+  const { t, frame, quit } = await mount(120, 40, client);
+  await frame();
+  t.mockInput.pressKey('j');
+  await frame();
+  // Same tick, as when a slow link delivers several keys in one read.
+  t.mockInput.pressKey('i');
+  t.mockInput.pressKey('y');
+  t.mockInput.pressKey('q');
+  await frame();
+  expect(replies).toEqual([]);
+  expect(quit).toEqual([]);
+});
+
+test('enter on the emptied composer does not send the last message again', async () => {
+  const { client, sent } = fakeClient();
+  const { t, frame, press } = await mount(120, 40, client);
+  await frame();
+  await press('i');
+  await t.mockInput.typeText('add a test');
+  t.mockInput.pressEnter();
+  await frame();
+  t.mockInput.pressEnter();
+  await frame();
+  expect(sent.map((m) => m.text)).toEqual(['add a test']);
+});
+
+test('alt chords are not plain keys: alt+q does not quit', async () => {
+  const { frame, quit, t } = await mount(120, 40, fakeClient().client);
+  await frame();
+  t.mockInput.pressKey('q', { meta: true });
+  await frame();
+  expect(quit).toEqual([]);
+});
+
+test('control sequences in daemon text never reach the terminal', async () => {
+  const hostile = {
+    ...record,
+    messages: [
+      {
+        role: 'assistant',
+        text: 'safe\x1b]0;pwned\x07text\x1b[2J done',
+        at: '2026-10-12T09:00:05Z',
+      },
+    ],
+  } as OverseerRecord;
+  const { client } = fakeClient({
+    currentOverseer: () => Promise.resolve({ conversation: hostile }),
+    getOverseer: () => Promise.resolve(hostile),
+    fetchRuns: () =>
+      Promise.resolve([
+        { ...runs[0], taskTitle: 'evil\x1b]52;c;ZXZpbA==\x07title' },
+      ]),
+  });
+  const { frame } = await mount(120, 40, client);
+  const f = await frame();
+  expect(f).toContain('safetext done');
+  expect(f).toContain('eviltitle');
+  expect(f).not.toContain('pwned');
+  expect(f).not.toContain('ZXZpbA');
+});

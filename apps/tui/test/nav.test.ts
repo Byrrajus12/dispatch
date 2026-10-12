@@ -67,6 +67,12 @@ describe('the composer', () => {
     expect(readOnly.notice).toContain('--ask-token');
   });
 
+  test('i does nothing while an overlay hides the composer', () => {
+    expect(resolveKey(run([key('?')]), key('i'), ctx())).toBeNull();
+    const narrow = ctx({ wide: false });
+    expect(resolveKey(run([key('[')], narrow), key('i'), narrow)).toBeNull();
+  });
+
   test('ctrl+c still quits while composing', () => {
     expect(
       resolveKey(run([key('i')]), key('c', { ctrl: true }), ctx())
