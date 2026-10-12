@@ -1,6 +1,5 @@
 import type {
   GlobalView,
-  ImpactSubjectRef,
   NavAction,
   NavState,
   ProjectView,
@@ -59,7 +58,8 @@ export type TasksPage =
   /** A named room, reached by name, never listed. */
   | { kind: 'room'; room: string }
   | { kind: 'view'; view: HostedView }
-  | { kind: 'impact'; subject: ImpactSubjectRef | null };
+  /** The Files page opened on one file, e.g. from a file link in a thread. */
+  | { kind: 'file'; path: string };
 
 /** A drawer over either view; it never changes the view underneath. */
 type Peek =
@@ -93,6 +93,7 @@ export type TwoViewsAction =
   | { type: 'tv/closeSettings' }
   | { type: 'tv/closePeek' }
   | { type: 'tv/closePage' }
+  | { type: 'tv/openFile'; path: string }
   | { type: 'tv/expandTask' }
   /** Opens a person, an outside agent, a room or a task by address. */
   | { type: 'tv/openAddress'; address: string };
@@ -378,8 +379,8 @@ export function twoViewsReducer(
       return toTasks(state, { kind: 'pr', number: action.number });
     case 'openDraft':
       return toTasks(state, { kind: 'draft', draftId: action.draftId });
-    case 'openImpact':
-      return toTasks(state, { kind: 'impact', subject: action.subject });
+    case 'tv/openFile':
+      return toTasks(state, { kind: 'file', path: action.path });
     case 'back':
       if (state.peek !== null) return { ...state, peek: null };
       return step(state, -1);

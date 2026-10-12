@@ -492,7 +492,8 @@ export function addressAction(
 export interface RefNavigation {
   openTask: (taskId: string, tab: 'auto' | 'run', runId?: string) => void;
   openThread: (messageId: string) => void;
-  openImpact: (subject: { kind: 'file'; id: string }) => void;
+  /** The Files page, opened on `path`. */
+  openFile: (path: string) => void;
   /** The Docs view on one doc, scrolled to `anchor`'s section when set. */
   openDoc: (docId: string, anchor: string | null, merge?: string) => void;
 }
@@ -503,7 +504,7 @@ export function openRefWith(nav: RefNavigation): (action: RefAction) => void {
     else if (action.kind === 'run') {
       nav.openTask(action.taskId, 'run', action.runId);
     } else if (action.kind === 'file') {
-      nav.openImpact({ kind: 'file', id: action.path });
+      nav.openFile(action.path);
     } else if (action.kind === 'doc') {
       nav.openDoc(action.docId, action.anchor, action.merge);
     } else nav.openThread(action.messageId);

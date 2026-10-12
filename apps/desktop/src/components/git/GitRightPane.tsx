@@ -12,10 +12,8 @@ import {
   HardDriveDownload,
   Trash2,
   Undo2,
-  Waypoints,
 } from 'lucide-react';
 
-import type { ImpactSubjectRef } from '../../lib/appNav';
 import { ImpactPanel } from '../impact/ImpactPanel';
 import { GitDiffPane } from './GitDiffPane';
 import { formatRelativeTimeFromIso } from '@/lib/format';
@@ -43,8 +41,6 @@ interface GitRightPaneProps {
   onRequestDiscardFile: (row: GitFileRow) => void;
   /** The dispatchd client, for the selected file's Impact panel. */
   client: ApiClient | null;
-  /** Navigates to `ImpactView` with the selected file preselected. */
-  onOpenImpact: (subject: ImpactSubjectRef) => void;
 
   selectedCommit: GitLogEntry | undefined;
   commitDiff: string | undefined;
@@ -117,14 +113,6 @@ export function GitRightPane(props: GitRightPaneProps) {
         <div className="shadow-hairline-bottom flex h-11 shrink-0 items-center justify-between gap-2 px-4">
           <span className="truncate font-mono text-[12px]">{row.path}</span>
           <div className="flex shrink-0 items-center gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => props.onOpenImpact({ kind: 'file', id: row.path })}
-            >
-              <Waypoints />
-              Open in Impact
-            </Button>
             {row.section !== 'staged' && (
               <Button
                 variant="ghost"

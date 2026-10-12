@@ -230,7 +230,7 @@ describe('twoViewsReducer', () => {
     });
   });
 
-  test('PR, draft and Impact pages', () => {
+  test('PR, draft and file pages', () => {
     expect(run([{ type: 'openPr', number: 7 }]).tasksPage).toEqual({
       kind: 'pr',
       number: 7,
@@ -239,10 +239,10 @@ describe('twoViewsReducer', () => {
       kind: 'draft',
       draftId: 'dr-1',
     });
-    expect(
-      run([{ type: 'openImpact', subject: { kind: 'file', id: 'a.ts' } }])
-        .tasksPage
-    ).toEqual({ kind: 'impact', subject: { kind: 'file', id: 'a.ts' } });
+    expect(run([{ type: 'tv/openFile', path: 'src/a.ts' }]).tasksPage).toEqual({
+      kind: 'file',
+      path: 'src/a.ts',
+    });
   });
 
   test('Settings opens over the current view and keeps it', () => {

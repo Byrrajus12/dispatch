@@ -179,7 +179,6 @@ import { DocsView } from './views/DocsView';
 import { DraftView } from './views/DraftView';
 import { FilesView } from './views/FilesView';
 import { FirstRunView } from './views/FirstRunView';
-import { ImpactView } from './views/ImpactView';
 import { OverseerFocusView } from './views/OverseerFocusView';
 import { PrReviewView } from './views/PrReviewView';
 import { SessionsHubView } from './views/SessionsHubView';
@@ -641,7 +640,7 @@ function App() {
         openTask: (taskId, tab, runId) => openTaskView(taskId, tab, runId),
         openThread: (messageId) =>
           dispatchNav({ type: 'openThread', messageId }),
-        openImpact: (subject) => dispatchNav({ type: 'openImpact', subject }),
+        openFile: (path) => dispatchNav({ type: 'tv/openFile', path }),
         openDoc,
       }),
     [openTaskView, openDoc]
@@ -920,7 +919,6 @@ function App() {
             );
             if (number !== null) dispatchNav({ type: 'openPr', number });
           },
-          openImpact: (subject) => dispatchNav({ type: 'openImpact', subject }),
           // Docs need a teammate or app token, as the Docs view does.
           openDoc: data.messageAccess.canMessage ? openDoc : undefined,
           // Threads need the same token; without it the page shows no Thread tab.
@@ -1745,16 +1743,12 @@ function App() {
         );
       case 'view':
         return renderHostedView(page.view);
-      case 'impact':
+      case 'file':
         return (
-          <ImpactView
-            key={
-              page.subject === null
-                ? 'impact-empty'
-                : `${page.subject.kind}:${page.subject.id}`
-            }
+          <FilesView
+            key={page.path}
             data={data}
-            initialSubject={page.subject}
+            initialPath={page.path}
             onBack={closeTwoViewsPage}
           />
         );

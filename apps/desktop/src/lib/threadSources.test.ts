@@ -875,7 +875,7 @@ describe('refs and labels', () => {
     const open = openRefWith({
       openTask: (...args) => calls.push(['task', ...args]),
       openThread: (id) => calls.push(['thread', id]),
-      openImpact: (subject) => calls.push(['impact', subject]),
+      openFile: (path) => calls.push(['file', path]),
       openDoc: (docId, anchor, merge) =>
         calls.push(['doc', docId, anchor, merge]),
     });
@@ -888,7 +888,7 @@ describe('refs and labels', () => {
     expect(calls).toEqual([
       ['task', 't-000001', 'auto'],
       ['task', 't-000001', 'run', 'r-000001'],
-      ['impact', { kind: 'file', id: 'src/a.ts' }],
+      ['file', 'src/a.ts'],
       ['thread', 'm-01'],
       ['doc', 'doc-01K', 'api', undefined],
       ['doc', 'doc-01K', null, 'rev-p'],

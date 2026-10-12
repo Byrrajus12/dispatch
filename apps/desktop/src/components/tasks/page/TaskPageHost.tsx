@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { createContext, useContext } from 'react';
 
 import type { DispatchProjectData } from '../../../hooks/useDispatchProject';
-import type { ImpactSubjectRef, TaskTab } from '../../../lib/appNav';
+import type { TaskTab } from '../../../lib/appNav';
 
 /** The slice of the project the task page reads and writes through. App hands it the
  * whole project; tests fake only what they touch. */
@@ -78,7 +78,6 @@ export interface TaskPageHost {
   ) => Promise<void>;
   /** Opens a run's pull request on the PR review page. */
   openPr: (runId: string) => void;
-  openImpact: (subject: ImpactSubjectRef) => void;
   /** Opens a linked doc in the Docs view; absent hides the spec's Docs block, for a
    * window that cannot read docs. */
   openDoc?: (docId: string, anchor: string | null) => void;

@@ -23,7 +23,6 @@ import { TasksBackButton } from '../components/tasks/TasksPageHeader';
 import type { DispatchProjectData } from '../hooks/useDispatchProject';
 import { useGit } from '../hooks/useGit';
 import { isTypingTarget } from '../hooks/useGlobalKeyboard';
-import type { ImpactSubjectRef } from '../lib/appNav';
 import type { BranchRowVM } from '../lib/gitBranchRows';
 import {
   buildBranchRows,
@@ -88,9 +87,6 @@ interface BranchesViewProps {
   /** The active project's display name, the first crumb of the page header. */
   projectName?: string | null;
   onOpenRun: (runId: string) => void;
-  /** Navigates to `ImpactView` with the selected file preselected — the
-   *  Git file pane's "open in Impact" action. */
-  onOpenImpact: (subject: ImpactSubjectRef) => void;
   /** Starts the header with "‹ tasks", back to the Tasks list. */
   onBack?: () => void;
 }
@@ -125,7 +121,6 @@ export function BranchesView({
   data,
   projectName,
   onOpenRun,
-  onOpenImpact,
   onBack,
 }: BranchesViewProps) {
   const [panelState, setPanelState] = useState(INITIAL_GIT_PANEL_SELECTION);
@@ -852,7 +847,6 @@ export function BranchesView({
             }}
             onRequestDiscardFile={requestDiscardFile}
             client={data.client}
-            onOpenImpact={onOpenImpact}
             selectedCommit={selectedCommit}
             commitDiff={commitDiff}
             commitDiffLoading={commitDiffLoading}

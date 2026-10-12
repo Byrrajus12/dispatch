@@ -35,6 +35,8 @@ interface FilesViewProps {
   runId?: string | null;
   /** Starts the header with "‹ tasks", back to the Tasks list. */
   onBack?: () => void;
+  /** Opens with this file selected, e.g. from a file link in a thread. */
+  initialPath?: string;
 }
 
 function statusLabel(buffer: EditorBuffer | null): string {
@@ -45,7 +47,12 @@ function statusLabel(buffer: EditorBuffer | null): string {
   return 'Saved';
 }
 
-export function FilesView({ data, runId = null, onBack }: FilesViewProps) {
+export function FilesView({
+  data,
+  runId = null,
+  onBack,
+  initialPath,
+}: FilesViewProps) {
   const { client } = data;
   const [selected, setSelected] = useState<string | null>(null);
   const [file, setFile] = useState<WorkspaceFile | null>(null);
@@ -81,6 +88,17 @@ export function FilesView({ data, runId = null, onBack }: FilesViewProps) {
     },
     [client, runId]
   );
+
+  // Opens `initialPath` once a client is up; a later reconnect never yanks the
+  // selection back from wherever the user has moved on to.
+  const openedInitial = useRef(false);
+  useEffect(() => {
+    if (initialPath === undefined || client === null || openedInitial.current) {
+      return;
+    }
+    openedInitial.current = true;
+    void open(initialPath);
+  }, [initialPath, client, open]);
 
   // Autosave: one timer, re-armed on every edit, that saves whatever the
   // buffer holds when it fires.

@@ -120,7 +120,7 @@ const OWN_HEADER: ReadonlySet<TasksPage['kind']> = new Set([
   'pr',
   'room',
   'view',
-  'impact',
+  'file',
 ]);
 
 const GRAPH_NEEDS_FOLDED_KEY = 'dispatch:graph-needs-you-folded';

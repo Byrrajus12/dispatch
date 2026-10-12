@@ -514,7 +514,6 @@ export function ReviewMode({ page }: { page: TaskPageModel }) {
             }
             client={project.client}
             runId={meta.id}
-            onOpenImpact={page.host.openImpact}
           />
         )}
       {threads.comments.length > 0 && (

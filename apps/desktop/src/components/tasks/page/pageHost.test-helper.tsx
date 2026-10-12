@@ -177,7 +177,6 @@ export function fakeHost(
       return Promise.resolve();
     },
     openPr: () => {},
-    openImpact: () => {},
   };
 }
 
