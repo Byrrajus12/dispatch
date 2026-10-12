@@ -1,4 +1,4 @@
-import { TaskStore } from '@dispatch/core';
+import { TaskStore } from '@dispatch-foo/core';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,7 +14,7 @@ import {
   OrchestratorConflictError,
   OrchestratorNotFoundError,
 } from '../../src/orchestrator/types.js';
-import { initGitRepo, withBrokenRepo } from './helpers.js';
+import { initGitRepo, WatchedTaskStore, withBrokenRepo } from './helpers.js';
 
 let fakeHome: string;
 let repo: string;
@@ -89,7 +89,9 @@ function makeHarness(): Harness {
     orchestrator,
   });
   engines.push(epics);
-  return { orchestrator, epics, store, cache, events };
+  // The test's own writes, seen the way a hand edit is: through a refresh.
+  const watched = new WatchedTaskStore(repo, cache);
+  return { orchestrator, epics, store: watched, cache, events };
 }
 
 // Each child gets a distinct `writes` entry — an empty write-set conflicts
@@ -938,6 +940,7 @@ describe('EpicEngine fill serialization', () => {
           requestStop: () => {},
           send: () => {},
           approve: () => {},
+          notify: () => {},
         };
       },
     });
@@ -950,7 +953,10 @@ describe('EpicEngine fill serialization', () => {
       orchestrator,
     });
     engines.push(epics);
-    const { epicId } = createEpicWithChildren(store, 6);
+    const { epicId } = createEpicWithChildren(
+      new WatchedTaskStore(repo, cache),
+      6
+    );
 
     await epics.start(epicId, { concurrency: 2, executor: 'fake' });
     // Let every chained fill drain.

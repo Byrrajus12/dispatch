@@ -1,26 +1,34 @@
 import { expect, type Page, test } from '@playwright/test';
 
-// Views are React state rather than routes, so each one is reached by its
-// sidebar accelerator (visible as ⌘1–⌘7 in the sidebar) instead of a URL. The
-// order below is `PROJECT_VIEW_ORDER` (see components/shell/Sidebar.tsx),
-// which is what assigns the numbers — the Runs and Review pages that used to
-// hold ⌘5/⌘6 were retired by the task-centric consolidation, and Inbox and
-// Impact took those slots.
-//
-// Every entry here is one "press key, screenshot" shot. A run's diff is no
-// longer reachable this way at all: it lives on a task's Diff tab now, which
-// takes real navigation and its own content assertion — see the fixme'd
-// `review detail` block below.
-const VIEWS = [
-  { name: 'inbox', key: 'Meta+1' },
-  { name: 'overview', key: 'Meta+2' },
-  { name: 'braindump', key: 'Meta+3' },
-  { name: 'plans', key: 'Meta+4' },
-  { name: 'tasks', key: 'Meta+5' },
-  { name: 'impact', key: 'Meta+6' },
-  { name: 'git', key: 'Meta+7' },
-  { name: 'landing', key: 'Meta+8' },
+import { APP_TOKEN } from './paths';
+
+// Each shot opens its page the way a person does: Tasks and Threads from the
+// top bar, every other page under Tasks from its command-menu row (the label
+// `buildPaletteEntries` gives it), so a renamed or dropped page fails here
+// rather than silently capturing another one.
+const VIEWS: { name: string; open: (page: Page) => Promise<void> }[] = [
+  { name: 'tasks', open: (page) => clickTopBar(page, 'two-views-tasks') },
+  { name: 'threads', open: (page) => clickTopBar(page, 'two-views-threads') },
+  { name: 'plans', open: (page) => openFromPalette(page, 'Open Plans') },
+  { name: 'braindump', open: (page) => openFromPalette(page, 'Open Notes') },
+  { name: 'git', open: (page) => openFromPalette(page, 'Open Git') },
+  { name: 'files', open: (page) => openFromPalette(page, 'Open Files') },
+  { name: 'impact', open: (page) => openFromPalette(page, 'Open Impact') },
 ];
+
+async function clickTopBar(page: Page, testId: string): Promise<void> {
+  await page.getByTestId(testId).click();
+}
+
+// Runs one command-menu row by its exact label.
+async function openFromPalette(page: Page, label: string): Promise<void> {
+  await page.keyboard.press('ControlOrMeta+k');
+  const row = page.getByRole('option', { name: label, exact: true });
+  await expect(row, `no command-menu row named ${label}`).toBeVisible();
+  await row.click();
+}
+
+const FIXED_NOW = new Date('2026-10-09T12:00:00Z');
 
 // global-setup.ts resolves the daemon's per-run token before any test worker
 // starts and hands it over via the environment; this fails loudly rather than
@@ -39,145 +47,54 @@ function requireToken(): string {
 
 // `baseURL` already carries `?root=&port=`. A relative `page.goto('/')` would
 // replace that whole path+query per WHATWG URL joining rules, so the token
-// has to be appended to the full URL string instead of joined onto it.
+// has to be appended to the full URL string instead of joined onto it. The app
+// token opens the window as the owner, which Threads needs to show its threads.
 function authedUrl(baseURL: string | undefined): string {
   if (!baseURL) throw new Error('baseURL is not configured');
-  return `${baseURL}&token=${requireToken()}`;
+  return `${baseURL}&token=${requireToken()}&appToken=${APP_TOKEN}`;
 }
 
-// Every view boots on Overview first (appNav.ts's initialNavState), so
-// checking it here — before a test switches to whatever view it actually
-// screenshots — guards all of them against the same failure: an
-// unauthenticated fetch renders this exact empty state no matter which view
-// ends up on screen. A blank render must fail the suite, not become the new
-// baseline.
+// The app opens on Overseer, whose top bar carries the fixture's counts. This
+// checks them before a test opens whatever page it actually screenshots,
+// guarding every shot against the same failure: an unauthenticated fetch
+// renders zero counts no matter which page ends up on screen. A blank render
+// must fail the suite, not become the new baseline.
 async function assertFixtureDataLoaded(page: Page): Promise<void> {
-  // Named by the ControlRibbon pills specifically (accessible name is
-  // "<label>, <count>"), because "Failed"/"Review" alone also match the
-  // feed's group header and per-row status text — this is the one spot that
-  // pins down a real, non-zero fixture count rather than just some text.
-  await expect(page.getByRole('button', { name: 'Failed, 1' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Review, 5' })).toBeVisible();
-  await expect(
-    page.getByText('Nothing running, nothing waiting on you.')
-  ).toHaveCount(0);
+  await expect(page.getByTestId('two-views-shell')).toBeVisible();
+  // The seeded r-88bf02 run asks the owner two questions on t-9b2d14.
+  await expect(page.getByTestId('two-views-count-asks')).toHaveText('● 2');
+  await expect(page.getByTestId('two-views-count-review')).toHaveText('◇ 4');
+  await expect(page.getByTestId('two-views-count-failed')).toHaveText('✕ 1');
 }
 
-// BASELINES, EXACTLY (branch: the rail's Runs | Overseer tab toggle). The loop
-// below produces 14 screenshot tests — 7 views x 2 themes — but
-// views.spec.ts-snapshots/ holds 10 PNGs, and they fail in two different ways:
-//
-//   - overview, braindump, plans, tasks, git (10 PNGs) were captured before
-//     the live rail existed, which every project view has carried since. These
-//     diff against a stale baseline. The mask below is what stops the next
-//     rail edit from re-staling them; it does not un-stale them now.
-//   - inbox and impact (4 shots) have NO baseline at all — they were added to
-//     VIEWS when they took the retired Runs/Review accelerators and never
-//     captured. Playwright fails these with "A snapshot doesn't exist" and
-//     writes the file, so `bun run e2e:update` does not refresh them, it
-//     AUTHORS them. Look at those four before committing them; nobody has.
-//
-// All of it needs one run from an environment where Playwright can launch,
-// which this branch's is not, for two independent reasons: the webServer
-// cannot `posix_spawn` git, and the storefront fixture (e2e/paths.ts) is
-// gitignored and keyed by root path, so a worktree has none to seed from.
-// Neither ci.yml nor release.yml runs Playwright, so nothing else catches it.
+// Baselines are Two views on the storefront fixture, refreshed with
+// `e2e:update` on macOS (CI does not run this suite); review every PNG first.
 for (const view of VIEWS) {
   test(`${view.name} renders`, async ({ page, baseURL }) => {
+    // Rows show ages like "78d ago"; a fixed clock keeps them from drifting
+    // a day at a time out of the baseline.
+    await page.clock.setFixedTime(FIXED_NOW);
     await page.goto(authedUrl(baseURL));
-    await page.locator('#dispatch-sidebar').waitFor();
     await assertFixtureDataLoaded(page);
-    await page.keyboard.press(view.key);
+    await view.open(page);
+    // Opening from the command menu leaves the pointer over the page, where
+    // it can reveal a row's hover actions; park it off to the side.
+    await page.mouse.move(0, 0);
     // The pulse on in-flight rows is the only animation these surfaces have;
     // let it settle so it can't shift a screenshot.
     await page.waitForTimeout(1000);
     await expect(page).toHaveScreenshot(`${view.name}.png`, {
       fullPage: true,
-      // The live rail is on every project screen but is not what any of these
-      // baselines is about, and it is chrome that keeps moving — the Runs |
-      // Overseer tab strip alone has changed shape three times. Unmasked, each
-      // of those edits silently invalidates all 14 PNGs here with no CI job to
-      // catch it. Masked, the rail still occupies its 240px, so a view
-      // squeezed beside it still regresses visibly.
-      //
-      // What the mask does cost is every pixel *inside* that column, and
-      // LiveRail.test.tsx cannot make up the difference: happy-dom has no
-      // layout engine at all, so nothing there can see the rail render at the
-      // wrong width, overflow its column, or clip its composer. The
-      // 'the live rail keeps its column' test below covers that directly
-      // instead — as measured geometry rather than as pixels, so it needs no
-      // baseline of its own and stays honest through cosmetic rail edits.
-      // The frame's status strip is live chrome too: "Synced 1m ago" and the
-      // day's spend change with the clock and with every run the suite makes.
       // The Git view's right pane renders the fixture repo's own working-tree
       // diff, which every daemon boot and every run of this suite appends to
       // (ledger lines, task frontmatter) — data, not layout. The file tree
       // and the chrome around it are still compared.
-      mask: [
-        page.locator('[data-testid="live-rail"]'),
-        page.locator('[data-slot="frame-status-strip"]'),
-        page.locator('[data-slot="git-right-pane"]'),
-      ],
+      mask: [page.locator('[data-slot="git-right-pane"]')],
     });
   });
 }
 
-/**
- * The coverage the mask above removes, put back as geometry instead of pixels.
- * A rail that renders at the wrong width, overflows its column, or clips its
- * composer is invisible to both suites otherwise: the screenshots paint it
- * magenta, and LiveRail.test.tsx runs in happy-dom, which has no layout engine
- * (OverseerChat.test.tsx has to hand-define scrollHeight/scrollTop for exactly
- * that reason). Measured rather than captured, so it needs no baseline to
- * review and does not re-break every time the tab strip changes shape.
- *
- * NOT YET OBSERVED GREEN, the same as overseer.spec.ts's rail case and for the
- * same two reasons — `bun run e2e --list` discovers it, which proves only that
- * it parses and type-checks. Running it here dies in the webServer with
- * `ENOENT: posix_spawn 'git'` before a browser ever launches.
- *
- * It is also narrower than what the mask removes: width, horizontal overflow
- * and composer containment on one view in one theme, versus every pixel of the
- * rail across 7 views x 2 themes. The tab strip, run rows, attention strip,
- * amber badge and collapsed strip have no visual coverage anywhere. That trade
- * is a human's to rule on, not a closed question.
- */
-test('the live rail keeps its column on a project view', async ({
-  page,
-  baseURL,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== 'dark', 'layout is theme-independent');
-
-  await page.goto(authedUrl(baseURL));
-  await page.locator('#dispatch-sidebar').waitFor();
-  await assertFixtureDataLoaded(page);
-
-  // The rail is a fixed 244px column (Linear's `--sidebar-width`), painted on
-  // the frame beside the inset panel — see packages/ui/src/sidebar.tsx.
-  const rail = page.locator('#dispatch-sidebar');
-  await expect(rail).toBeVisible();
-  const railBox = await rail.boundingBox();
-  if (railBox === null) throw new Error('the rail has no layout box');
-  expect(railBox.width).toBeCloseTo(244, 0);
-
-  // Nothing inside may spill past that column — a long task title in the
-  // Live agents section is precisely what the screenshot mask would now hide.
-  const overflow = await rail.evaluate((el) => el.scrollWidth - el.clientWidth);
-  expect(overflow).toBeLessThanOrEqual(0);
-
-  // The live-agents section is the part that moves; it must sit inside the
-  // column rather than be clipped out of it.
-  const live = page.getByTestId('live-rail');
-  await expect(live).toBeVisible();
-  const liveBox = await live.boundingBox();
-  if (liveBox === null) throw new Error('the live-agents section has no box');
-  expect(liveBox.x).toBeGreaterThanOrEqual(railBox.x);
-  expect(liveBox.x + liveBox.width).toBeLessThanOrEqual(
-    railBox.x + railBox.width
-  );
-});
-
-// The queue-only "review" shot above never opened a diff, which is exactly the
+// No shot above opens a diff, which is exactly the
 // surface that regressed in fix/review-surface (60e99e8): `CodeView` rendered
 // its file header but produced a zero-height virtualizer underneath it, with
 // no console error. A screenshot alone would not have caught that — an empty
@@ -192,10 +109,9 @@ test('the live rail keeps its column on a project view', async ({
 // the height bug this test exists to catch. A wider viewport isolates the two
 // rather than asserting around whichever one happens to be squeezing the pane.
 //
-// FIXME (branch: the task-centric consolidation, 98bf1858): the page this
-// drives no longer exists. Retargeting is Inbox (⌘5) → a "Needs review" row →
-// TaskView's Diff tab, and that first half is mechanical. What has no
-// replacement is the second half: the run review surface no longer renders a
+// FIXME (branch: the task-centric consolidation, 98bf1858): the review queue
+// this once drove is gone; it now opens the run's task from the Tasks list
+// instead. What has no replacement is the next step: the run review surface no longer renders a
 // changed-files tree at all (`RunReviewView` hands the whole patch to
 // `PierreReviewDiff` with no `only` narrowing), so the `treeitem` click below
 // — the step that selects the one file whose content is then asserted — has
@@ -207,32 +123,21 @@ test.describe('review detail', () => {
   test.use({ viewport: { width: 1600, height: 1100 } });
 
   test.fixme('renders an open diff', async ({ page, baseURL }) => {
-    // Collapses the live-agents rail — it is not part of what this test checks
-    // and would otherwise compete for width alongside the viewport widening
-    // above. The rail never hides entirely now, only narrows to a strip.
-    await page.addInitScript(() => {
-      window.localStorage.setItem('dispatch:live-rail', '1');
-    });
     await page.goto(authedUrl(baseURL));
-    await page.locator('#dispatch-sidebar').waitFor();
     await assertFixtureDataLoaded(page);
-    await page.keyboard.press('Meta+5');
+    await page.getByTestId('two-views-tasks').click();
 
-    // The Inbox's needs-review row (see `Row` in InboxView.tsx): the task
-    // title plus a relative timestamp. Matched loosely on the title because
-    // the bare title also names other, currently-hidden buttons this same
-    // task shows elsewhere in the shell, and Playwright's strict mode counts
-    // those regardless of visibility.
-    const queueRow = page.getByRole('button', {
-      name: /Rate limit the search endpoint/,
-    });
+    // The task's row in the Tasks list opens its page beside the list.
+    const taskRow = page
+      .getByTestId('tasks-view')
+      .getByRole('gridcell', { name: 'Rate limit the search endpoint' });
     await expect(
-      queueRow,
-      'the "Rate limit the search endpoint" run is not in the review queue — ' +
+      taskRow,
+      'the "Rate limit the search endpoint" task is not in the Tasks list — ' +
         "this machine's seeded fixture (.agents/ignore/storefront-home) may " +
         'be stale rather than this being a real regression'
     ).toBeVisible();
-    await queueRow.click();
+    await taskRow.click();
 
     // The changed-files list is keyed off this run's own diff snapshot
     // (.agents/ignore/storefront-home/.dispatch/runs/**/r-de238d.diff.json),

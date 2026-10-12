@@ -1,7 +1,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Options, Query } from '@anthropic-ai/claude-agent-sdk';
-import { DEFAULT_REPO_DIGEST } from '@dispatch/core';
-import type { RepoDigestConfig } from '@dispatch/core';
+import { agentEnv, DEFAULT_REPO_DIGEST } from '@dispatch-foo/core';
+import type { RepoDigestConfig } from '@dispatch-foo/core';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -105,7 +105,7 @@ export function writeRepoDigest(rootDir: string, digest: RepoDigest): void {
 }
 
 // The project's current HEAD, or null when rootDir isn't a git checkout (or git
-// is unavailable). Mirrors Orchestrator.currentBranch's own spawnSync shape
+// is unavailable). Mirrors Orchestrator.currentBranch's own spawnGitSync shape
 // rather than reaching into WorktreeManager, whose runGit is module-private.
 export function headCommit(rootDir: string): string | null {
   try {
@@ -141,6 +141,7 @@ export async function generateRepoDigest(
 ): Promise<DigestResult> {
   const options: Options = {
     cwd: rootDir,
+    env: agentEnv(),
     permissionMode: 'plan',
     systemPrompt: { type: 'preset', preset: 'claude_code' },
     settingSources: ['project', 'local'],

@@ -2,14 +2,26 @@ import {
   DISPATCH_DIR,
   executorModels,
   generateRunId,
+  hasStatusRole,
+  isCompletedStatus,
+  isContainerKind,
+  isDoneStatus,
   loadConfig,
   nextSubagentStatus,
+  runStepFromEntry,
   slugify,
   summarizeSubagents,
   TaskParseError,
   TaskStore,
-} from '@dispatch/core';
-import type { EffortLevel, SubagentStatus } from '@dispatch/core';
+  usesIntegrationBranch,
+} from '@dispatch-foo/core';
+import type {
+  CommentStorePort,
+  EffortLevel,
+  StatusModel,
+  SubagentStatus,
+  TaskComment,
+} from '@dispatch-foo/core';
 import type {
   ActorContext,
   CommandEvidence,
@@ -18,7 +30,7 @@ import type {
   TaskDoc,
   TaskStorePort,
   UpdatePatch,
-} from '@dispatch/core';
+} from '@dispatch-foo/core';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
@@ -33,15 +45,16 @@ import { join } from 'node:path';
 
 import { spawnGitSync } from '../blockingGit.js';
 import type { TaskCache } from '../cache.js';
-import type { EventBus } from '../events.js';
+import type { EventBus, SocketAudience } from '../events.js';
 import { FindingStore } from '../findings.js';
 import type { FindingStorePort } from '../findings.js';
 import { GitRepo } from '../git/commands.js';
 import type { JudgmentClient } from '../judgments/client.js';
+import { mapLimit } from '../judgments/client.js';
 import { judgeRunModel } from '../judgments/modelTier.js';
 import type { RunModelChoice } from '../judgments/modelTier.js';
-import { LedgerStore } from '../ledger.js';
-import type { LedgerStorePort } from '../ledger.js';
+import type { OperatorRouting } from '../messaging/operatorRouting.js';
+import { statusModelFor } from '../statuses.js';
 import { dirSizeBytes } from './dirSize.js';
 import {
   EPIC_BRANCH_PREFIX,
@@ -55,6 +68,7 @@ import type { RepoOrientation } from './orientation.js';
 import {
   diffSnapshotPath,
   runsDir,
+  runTokenPath,
   transcriptPath,
   worktreePath,
   worktreesDir,
@@ -65,26 +79,32 @@ import {
   buildTaskPrompt,
   renderContinuationPrompt,
   renderFreshSessionNotice,
-  renderScopeRequestsSection,
-  untrustedInline,
 } from './prompt.js';
 import { prNumberFromOrigin } from './prReviewTask.js';
 import type { PendingApproval } from './registry.js';
 import { RunRegistry } from './registry.js';
 import { RepoDigestCache } from './repoDigest.js';
-import type { RunScopeRequest } from './scopeRequests.js';
+import { isDispatchSetupChange, SETUP_FILE_PATHS } from './setupFiles.js';
 import type { RunDetail } from './transcript.js';
-import { replayTranscript, Transcript } from './transcript.js';
+import { recentEntries, replayTranscript, Transcript } from './transcript.js';
 import type {
   ApprovalDecision,
+  ApprovalGatePort,
   BranchEntry,
   BranchEntryStatus,
+  DecoratedRunMeta,
+  DocsPromptPort,
   Executor,
   ExecutorEvents,
   ExecutorInfo,
+  ExecutorMemoryOptions,
   ExecutorProfile,
+  ExecutorRun,
   ExecutorStartOptions,
+  MemoryMode,
+  MemoryPromptPort,
   NormalizedEntry,
+  PreparedMemory,
   ReviewFailure,
   RunKind,
   RunMeta,
@@ -98,18 +118,20 @@ import {
   OrchestratorConflictError,
   OrchestratorNotFoundError,
   runKind,
+  runLineage,
+  runOperator,
   TERMINAL_RUN_STATES,
 } from './types.js';
 import type { RunUsage } from './usage.js';
-import type { DiffResult } from './worktree.js';
+import type { DiffResult, FollowResult } from './worktree.js';
 import { WorktreeManager } from './worktree.js';
 
 /**
  * The slice of the database's evidence store the orchestrator writes to.
  * Structural rather than an import of `SqliteEvidenceStore`, matching how
- * `FindingStorePort` and `LedgerStorePort` are declared — a test can pass two
- * functions instead of a database. Not exported: callers pass an object
- * literal and never need to name the type.
+ * `FindingStorePort` is declared — a test can pass two functions instead of a
+ * database. Not exported: callers pass an object literal and never need to
+ * name the type.
  */
 interface EvidenceWriter {
   addCommand(runId: string, evidence: CommandEvidence): CommandEvidence;
@@ -127,11 +149,11 @@ export interface OrchestratorContext {
   // CommandRunner so that path can be exercised without a jj binary, which is
   // otherwise structurally untestable.
   jj?: JjManager;
-  // Ledger entries injected into dispatch prompts (see promptForTask below).
-  // Defaults to one over `rootDir`, same pattern as `jj`.
-  ledgerStore?: LedgerStorePort;
+  // The task's comment thread, also injected into dispatch prompts. Absent,
+  // prompts carry no comments.
+  comments?: CommentStorePort;
   // Where blocking rulings are read from (see blockedFindingReason). Defaults
-  // to one over `rootDir`, same pattern as `ledgerStore`.
+  // to one over `rootDir`, same pattern as `jj`.
   findingStore?: FindingStorePort;
   // The database's evidence tables, on the sqlite backend only; `null` (or
   // absent) on the file backend, where the run transcript is the only home
@@ -162,28 +184,21 @@ export interface OrchestratorContext {
   // back cannot wait out the real half-minute quiet window per attempt.
   autoResumeQuietMs?: number;
   autoResumeMaxAttempts?: number;
-  // The repo-map cache injected into run prompts (see promptForTask). Defaults
-  // to one over `rootDir`, same pattern as `ledgerStore`. A test that wants no
+  // The repo-map cache injected into run prompts (see taskBrief). Defaults
+  // to one over `rootDir`, same pattern as `jj`. A test that wants no
   // model call at all can pass one built with a stubbed generator.
   digestCache?: RepoDigestCache;
   // How the orchestrator shells out to delete a retired PR review's head ref
   // (see cleanupDerivedAuxRun) — its one *async* git call, alongside several
-  // pre-existing synchronous Bun.spawnSync ones. Same seam PrManager /
+  // pre-existing synchronous spawnGitSync ones. Same seam PrManager /
   // MergeQueue / GitRepo share, so a test stubs git rather than running it.
   commandRunner?: CommandRunner;
-  // Where a run's out-of-fence requests live, so resumeRun can hand a
-  // predecessor's still-open (or decided-while-dead) requests to the successor
-  // it creates — see the `carry` call there. Optional: a test that never
-  // resumes across a restart has nothing to carry.
-  scopeRequests?: ScopeRequestCarrier;
   // The TypeSafe judgment client, or null/absent when none is configured —
   // only the fresh-dispatch model tier consults it (see modelForFreshRun).
   judgments?: JudgmentClient | null;
-}
-
-/** The one thing the orchestrator asks of the scope-request registry. */
-interface ScopeRequestCarrier {
-  carry(fromRunId: string, toRunId: string): RunScopeRequest[];
+  // Whether a task came in over A2A; such a task's runs act for no one.
+  // Absent means no task did.
+  isA2ATask?: (taskId: string) => boolean;
 }
 
 // The name api.ts's createRun falls back to when a caller omits `executor`
@@ -198,6 +213,9 @@ interface ScopeRequestCarrier {
 // the reader can never drift — a mismatch would make every dispatch branch
 // invisible to the Branches surface.
 const DISPATCH_BRANCH_PREFIX = 'dispatch/';
+
+// A commit named in full (SHA-1 or SHA-256), as `git rev-list` prints it.
+const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 // Minimum gap between opportunistic claims refreshes for one run — see
 // scheduleClaimsRefresh.
@@ -236,6 +254,14 @@ const AUTO_RESUME_QUIET_MS = 30_000;
 // code leaves every crashed run — failed, unreviewed, resumable by hand — so
 // the ceiling costs nothing but bounds the retry loop.
 const AUTO_RESUME_MAX_ATTEMPTS = 20;
+
+// The opening turn of a run a wake continues; the held messages follow it.
+const WAKE_PROMPT =
+  'New messages arrived for this task; they follow. Read them and carry on.';
+
+// Branches the listing measures at once. Each is up to three git reads plus
+// a size walk, so this bounds how many processes one listing spawns.
+const BRANCH_PROBE_CONCURRENCY = 4;
 
 // Sort order for the Branches surface: the rows that need a human decision
 // come first, read-only live runs last.
@@ -299,6 +325,38 @@ function refuseExecuteOnDerivedTask(task: TaskDoc): void {
   );
 }
 
+/** A caller's last say on a dispatch: why `task`, as it now stands, must not
+ *  start (a fan-out's teammate rule), or null to go ahead. */
+type DispatchGuard = (task: TaskDoc) => string | null;
+
+// A 409, which the fan-out's fill skips like any lost race.
+function checkGuard(task: TaskDoc, guard: DispatchGuard | undefined): void {
+  const reason = guard?.(task) ?? null;
+  if (reason !== null) {
+    throw new OrchestratorConflictError(
+      `not dispatching ${task.meta.id}: ${reason}`
+    );
+  }
+}
+
+// Only a person owns a run (RunMeta.dispatchedBy): 'none', an agent and the
+// legacy bare `human` read as nobody.
+function humanOwner(ref: string | undefined): string | undefined {
+  return ref?.startsWith('human:') === true ? ref : undefined;
+}
+
+// A run's memory with auto memory off and no section, for when the port cannot say.
+const PROMPT_ONLY: PreparedMemory = {
+  text: null,
+  indexSection: null,
+  memory: { mode: 'prompt' },
+};
+
+// A caller-built prompt with a memory section after it; unchanged when there is none.
+function withSection(prompt: string, section: string | null): string {
+  return section === null ? prompt : `${prompt}\n\n${section}`;
+}
+
 // How a reviewed run was closed out, for refusal messages: a run merged by
 // hand and picked up by the external-merge reconciler reads "merged as
 // <sha>", which tells the operator why their resume was refused far better
@@ -356,9 +414,8 @@ export class Orchestrator {
   // constructing it is inert — it shells out to jj lazily, per call — so an
   // unblocked dispatch never touches jj at all.
   private readonly jj: JjManager;
-  private readonly ledgerStore: LedgerStorePort;
   private readonly findingStore: FindingStorePort;
-  // The repo map injected into every run prompt (see promptForTask). Held on
+  // The repo map injected into every run prompt (see taskBrief). Held on
   // the orchestrator rather than built per dispatch so its single-flight
   // background refresh really is one refresh, not one per concurrent dispatch.
   private readonly digestCache: RepoDigestCache;
@@ -373,14 +430,39 @@ export class Orchestrator {
   // or (via markRunMergedViaPr) a merged PR — i.e. whenever a task might
   // have just moved to `done`. A run reaching a terminal state (finished/
   // failed/cancelled) only ever leaves its task at `in-review`
-  // (handleFinish); readyTasks() in @dispatch/core gates on a blocker being
+  // (handleFinish); readyTasks() in @dispatch-foo/core gates on a blocker being
   // `done`/`cancelled`, so the epic engine needs this *second* seam — not
   // just onRunTerminal above — to know when a blocked sibling has actually
   // become dispatchable, since that only happens once a review action runs.
   private readonly reviewedHooks: Array<(meta: RunMeta) => void> = [];
+  // onRunStarted's callbacks, fired once a run's ExecutorRun is registered so
+  // messaging learns a run is live without polling.
+  private readonly runStartedListeners = new Set<(meta: RunMeta) => void>();
+  // Mints each run's messaging token at start (see setRunTokenMinter); null
+  // leaves runs without one, as in fixtures that never set it.
+  private mintRunToken: ((runId: string) => string) | null = null;
+  // Who a run's prompt names to ask and to grant scope (XH-R9); null names
+  // the daemon's human, as in fixtures without messaging.
+  private routing: OperatorRouting | null = null;
+  // Mints every new run's id; a synced board installs a longer one at boot.
+  private mintRunId: (now: string) => string = (now) => generateRunId(now);
+  // Raises and settles the gate a parked tool call waits on (see setApprovalGate).
+  private approvalGate: ApprovalGatePort | null = null;
+  // Chooses each run's memory mode and prompt section (see setMemoryPort); null leaves both out.
+  private memoryPort: MemoryPromptPort | null = null;
+  // Renders each dispatch prompt's `## Docs` section (see setDocsPort); null leaves it out.
+  private docsPort: DocsPromptPort | null = null;
+  // Writes files a task needs into its new worktree (see setWorktreeSeed).
+  private worktreeSeed: ((taskId: string, worktree: string) => void) | null =
+    null;
+  // Why a task may not run right now, or null (see setDispatchGuard).
+  private dispatchGuard: ((task: TaskDoc) => string | null) | null = null;
   // When each run's claims were last refreshed from git status — see
   // scheduleClaimsRefresh's cooldown check.
   private readonly lastClaimsCheck = new Map<string, number>();
+  // Live runs whose RunMeta.lastStep this process has followed from their
+  // log (or read back once, see backfillLastSteps).
+  private readonly stepsFollowed = new Set<string>();
   // Each live run's sub-agents by spawning tool_use id and their latest
   // status — the working set recordSubagentEvent folds RunMeta.subagents from.
   private readonly subagentStatuses = new Map<
@@ -390,6 +472,20 @@ export class Orchestrator {
   // When each failed run was last re-surveyed for orphan-landed work — see
   // scheduleOrphanRecheck.
   private readonly lastOrphanCheck = new Map<string, number>();
+  // Per base: the origin tip last seen, and which merge commits it contains.
+  // See pushedMerges.
+  private readonly pushedAtTip = new Map<
+    string,
+    { tip: string; commits: Map<string, boolean> }
+  >();
+  // The newest release tag last seen and which merge commits it contains.
+  // See releasedMerges.
+  private releasedAtTag:
+    | { tag: string; commits: Map<string, boolean> }
+    | undefined;
+  // origin's browser URL, read once: a remote's URL does not change under a
+  // running daemon often enough to spawn git on every health probe.
+  private cachedOriginWebUrl: { url: string | undefined } | null = null;
   private readonly claimsRefreshCooldownMs: number;
   // Pending "this stop has taken too long" timers, keyed by run — see
   // scheduleStopEscalation, and transition() for where they are cleared.
@@ -398,6 +494,9 @@ export class Orchestrator {
     ReturnType<typeof setTimeout>
   >();
   private readonly stopEscalationMs: number;
+  // Runs being cancelled, stopped or wound down after their result; they refuse
+  // messages until the terminal transition clears them, so mail waits.
+  private readonly stoppingRuns = new Set<string>();
   // In-flight boot auto-resume attempts, keyed by run — see
   // autoResumeSettled(), which is how a test waits one out instead of sleeping.
   private readonly scheduledAutoResumes = new Map<string, Promise<void>>();
@@ -407,13 +506,17 @@ export class Orchestrator {
   // see needsQuietProof, which is what stops a re-dispatch from resuming into
   // a checkout an orphaned agent may still own.
   private readonly observedQuiet = new Set<string>();
+  // Who a re-armed boot sweep resumes a run for: the caller whose dispatch
+  // re-armed it. Absent keeps the run's own operator.
+  private readonly autoResumeOperators = new Map<string, string | null>();
   // Set by shutdown(); see it for what this is protecting against.
   private stopped = false;
+  // Set by hold(): why no run may start right now, or null.
+  private held: string | null = null;
 
   constructor(private readonly ctx: OrchestratorContext) {
     this.worktrees = new WorktreeManager(ctx.rootDir);
     this.jj = ctx.jj ?? new JjManager(ctx.rootDir);
-    this.ledgerStore = ctx.ledgerStore ?? new LedgerStore(ctx.rootDir);
     this.findingStore = ctx.findingStore ?? new FindingStore(ctx.rootDir);
     this.digestCache = ctx.digestCache ?? new RepoDigestCache(ctx.rootDir);
     this.claimsRefreshCooldownMs =
@@ -430,6 +533,12 @@ export class Orchestrator {
   // unsubscribe function. This is the clean, push-based seam the epic engine
   // uses to know when a concurrency slot has freed up instead of polling
   // run state on a timer.
+  // The project's status types and lifecycle roles, read per use so a config
+  // edit applies without a restart.
+  private statuses(): StatusModel {
+    return statusModelFor(this.ctx.rootDir);
+  }
+
   onRunTerminal(callback: (meta: RunMeta) => void): () => void {
     this.terminalHooks.push(callback);
     return () => {
@@ -447,6 +556,214 @@ export class Orchestrator {
       const idx = this.reviewedHooks.indexOf(callback);
       if (idx !== -1) this.reviewedHooks.splice(idx, 1);
     };
+  }
+
+  // Called once at boot. startAndRegister writes each minted token to the run's
+  // token file (runTokenPath) and passes the executor only that path.
+  setRunTokenMinter(mint: (runId: string) => string): void {
+    this.mintRunToken = mint;
+  }
+
+  // Called once at boot by messaging, which knows who may decide.
+  setOperatorRouting(routing: OperatorRouting): void {
+    this.routing = routing;
+  }
+
+  // Installed by the A2A bridge: a gated handoff draft never runs, whoever
+  // asks. A returned string refuses the run with that reason.
+  setDispatchGuard(guard: ((task: TaskDoc) => string | null) | null): void {
+    this.dispatchGuard = guard;
+  }
+
+  /** Starts nothing until release(): every dispatch, aux run, resume and
+   *  wake is refused with `why`. The daemon holds it while it restarts to
+   *  turn on team sync, so no run begins in the window before the stop. */
+  hold(why: string): void {
+    this.held = why;
+  }
+
+  release(): void {
+    this.held = null;
+  }
+
+  // Refuses a start while held.
+  private refuseHeld(): void {
+    if (this.held !== null) throw new OrchestratorConflictError(this.held);
+  }
+
+  // A gated A2A draft never runs, whichever entry point is asked.
+  private refuseGuarded(task: TaskDoc): void {
+    this.refuseHeld();
+    const refusal = this.dispatchGuard?.(task) ?? null;
+    if (refusal !== null) throw new OrchestratorConflictError(refusal);
+  }
+
+  // Called once at boot, before any run starts, to change how run ids are minted.
+  setRunIdMinter(mint: (now: string) => string): void {
+    this.mintRunId = mint;
+  }
+
+  // Installed by messaging at boot: raises and settles the gate a parked tool call waits on.
+  setApprovalGate(port: ApprovalGatePort | null): void {
+    this.approvalGate = port;
+  }
+
+  // Installed by the memory service at boot; until then runs start with no memory mode.
+  setMemoryPort(port: MemoryPromptPort | null): void {
+    this.memoryPort = port;
+  }
+
+  // Installed by the docs service at boot; until then prompts carry no docs section.
+  setDocsPort(port: DocsPromptPort | null): void {
+    this.docsPort = port;
+  }
+
+  // Called right after a fresh dispatch adds its worktree, before the executor
+  // starts; a throw removes the worktree and fails the dispatch.
+  setWorktreeSeed(
+    hook: ((taskId: string, worktree: string) => void) | null
+  ): void {
+    this.worktreeSeed = hook;
+  }
+
+  // Subscribes to "a run just became live" (its ExecutorRun is registered), so
+  // messaging can start delivering to it. Returns an unsubscribe function.
+  onRunStarted(callback: (meta: RunMeta) => void): () => void {
+    this.runStartedListeners.add(callback);
+    return () => {
+      this.runStartedListeners.delete(callback);
+    };
+  }
+
+  // The task's running/awaiting-approval execute run, which is where task mail
+  // goes; null while it has none, or only a provisioning or review/verify run.
+  liveRunIdForTask(taskId: string): string | null {
+    const meta = this.registry.liveRunForTask(taskId);
+    if (meta === undefined || runKind(meta) !== 'execute') return null;
+    return meta.state === 'running' || meta.state === 'awaiting-approval'
+      ? meta.id
+      : null;
+  }
+
+  // The task an execute run works, for messaging's run-to-task mapping; null
+  // for an unknown run or a review/verify run, which only answers as itself.
+  taskIdOfRun(runId: string): string | null {
+    const meta = this.registry.get(runId);
+    return meta !== undefined && runKind(meta) === 'execute'
+      ? meta.taskId
+      : null;
+  }
+
+  // Whether a run can currently receive a message: registered, in a live
+  // state, and actually has an ExecutorRun handle (not a zombie).
+  isRunLive(runId: string): boolean {
+    const meta = this.registry.get(runId);
+    if (meta === undefined) return false;
+    if (meta.state !== 'running' && meta.state !== 'awaiting-approval') {
+      return false;
+    }
+    return this.registry.getExecutorRun(runId) !== undefined;
+  }
+
+  // Whether a live run can take a message now: not stopping, on an executor
+  // that accepts mid-run messages (what requireDeliverableRun enforces).
+  runAcceptsMessages(runId: string): boolean {
+    const meta = this.registry.get(runId);
+    return (
+      meta !== undefined &&
+      this.isRunLive(runId) &&
+      !this.stoppingRuns.has(runId) &&
+      this.executorProfile(meta.executor).acceptsMessages
+    );
+  }
+
+  // A live run with an ExecutorRun (a zombie is failed, which throws) that can
+  // take a message now; any throw makes the engine hold the message.
+  private requireDeliverableRun(runId: string): {
+    meta: RunMeta;
+    executorRun: ExecutorRun;
+  } {
+    const meta = this.requireRun(runId);
+    if (meta.state !== 'running' && meta.state !== 'awaiting-approval') {
+      throw new OrchestratorConflictError(`run is not live: ${runId}`);
+    }
+    const executorRun = this.registry.getExecutorRun(runId);
+    if (executorRun === undefined) {
+      this.healZombieRun(meta);
+    }
+    if (this.stoppingRuns.has(runId)) {
+      throw new OrchestratorConflictError(`run is stopping: ${runId}`);
+    }
+    if (!this.executorProfile(meta.executor).acceptsMessages) {
+      throw new OrchestratorConflictError(
+        `executor ${meta.executor} cannot take a mid-run message: ${runId}`
+      );
+    }
+    return { meta, executorRun };
+  }
+
+  // Logs a delivered message, tagged with its messageId, to the run's transcript
+  // and the bus, then hands it to the executor.
+  deliverToRun(
+    runId: string,
+    text: string,
+    from: { label: string; messageId: string; human: boolean }
+  ): void {
+    const { executorRun } = this.requireDeliverableRun(runId);
+    const entry: NormalizedEntry = {
+      ts: new Date().toISOString(),
+      kind: 'message',
+      from: from.human ? 'user' : 'agent',
+      fromLabel: from.label,
+      text,
+      messageId: from.messageId,
+    };
+    this.transcriptFor(runId).appendEntry(entry);
+    this.ctx.events.broadcast({ type: 'run.log', runId, entry });
+    executorRun.send(text);
+  }
+
+  // A run's own message to a human, logged on its transcript.
+  // `audience` scopes the run.log frame to the message's participants: a DM
+  // never reaches other sockets (XH-R4).
+  logOutgoing(
+    runId: string,
+    message: { id: string; body: string },
+    audience?: (who: SocketAudience | undefined) => boolean
+  ): void {
+    const meta = this.registry.get(runId);
+    if (meta === undefined) return;
+    const entry: NormalizedEntry = {
+      ts: new Date().toISOString(),
+      kind: 'message',
+      from: 'agent',
+      fromLabel: `${meta.taskTitle} (${meta.id})`,
+      toUser: true,
+      text: message.body,
+      messageId: message.id,
+    };
+    this.bestEffort(`logging an outgoing message for run ${runId}`, () => {
+      this.transcriptFor(runId).appendEntry(entry);
+    });
+    this.ctx.events.broadcast({ type: 'run.log', runId, entry }, audience);
+  }
+
+  // deliverToRun for a non-interrupting channel digest: logged the same way,
+  // handed to the executor's notify() for the agent's next step.
+  notifyRun(runId: string, digest: string, messageId?: string): void {
+    const { executorRun } = this.requireDeliverableRun(runId);
+    const entry: NormalizedEntry = {
+      ts: new Date().toISOString(),
+      kind: 'message',
+      from: 'agent',
+      fromLabel: 'dispatch',
+      text: digest,
+      digest: true,
+      ...(messageId !== undefined ? { messageId } : {}),
+    };
+    this.transcriptFor(runId).appendEntry(entry);
+    this.ctx.events.broadcast({ type: 'run.log', runId, entry });
+    executorRun.notify(digest);
   }
 
   registerExecutor(name: string, executor: Executor): void {
@@ -519,6 +836,31 @@ export class Orchestrator {
     return this.registry.list();
   }
 
+  /**
+   * Gives every live run the registry holds without a followed step its
+   * lastStep, read once from the tail of its transcript: a run whose log was
+   * written before this process started following it. Runs this process
+   * follows (see makeEvents) cost a set lookup, so request paths call this
+   * before they list.
+   */
+  backfillLastSteps(): void {
+    for (const meta of this.registry.list()) {
+      if (TERMINAL_RUN_STATES.has(meta.state)) continue;
+      if (this.stepsFollowed.has(meta.id)) continue;
+      this.stepsFollowed.add(meta.id);
+      const entries = recentEntries(transcriptPath(this.ctx.rootDir, meta.id));
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i];
+        const text = runStepFromEntry(entry, meta.id);
+        if (text === null) continue;
+        this.registry.updateMeta(meta.id, {
+          lastStep: { text, at: entry.ts },
+        });
+        break;
+      }
+    }
+  }
+
   // Every live run's current claims, for GET /api/runs/claims and the epic
   // scheduler. A terminal run holds no claims — see TERMINAL_RUN_STATES.
   // `dispatchedBy` rides along so an agent reading GET /api/runs/claims (or a
@@ -543,89 +885,187 @@ export class Orchestrator {
       }));
   }
 
-  // Every approval request currently waiting on a human, flattened into one
-  // row per run. The registry holds these per-run for approve()'s benefit;
-  // read surfaces (the overseer's status tools) need the whole list, and
-  // deriving it from `list()` alone is impossible — RunState only says
-  // `awaiting-approval`, never which tool call is being asked about.
-  //
-  // Filtered on that state because approve() is the ONLY thing that clears a
-  // run's pending approval: a run cancelled (or zombie-healed) while parked on
-  // a gate keeps its record forever. Nothing is listening for an answer to
-  // those any more, so listing them would only offer the human an action that
-  // approve() itself would then refuse.
-  pendingApprovals(): {
-    runId: string;
-    taskId: string;
-    taskTitle: string;
-    requestId: string;
-    toolName: string;
-    input: unknown;
-  }[] {
-    return this.registry
-      .listPendingApprovals()
-      .filter(({ meta }) => meta.state === 'awaiting-approval')
-      .map(({ meta, approval }) => ({
-        runId: meta.id,
-        taskId: meta.taskId,
-        taskTitle: meta.taskTitle,
-        requestId: approval.requestId,
-        toolName: approval.toolName,
-        input: approval.input,
-      }));
+  // One call a run is parked on, by requestId. Only an `awaiting-approval` run
+  // counts: a record left on a cancelled run is not an answerable request.
+  pendingApprovalFor(
+    runId: string,
+    requestId: string
+  ): PendingApproval | undefined {
+    if (this.registry.get(runId)?.state !== 'awaiting-approval')
+      return undefined;
+    return this.registry.getPendingApproval(runId, requestId);
   }
 
-  // The approval one run is parked on, if any. Lets a caller answer an
-  // approval by run id alone instead of having to carry the requestId it was
-  // told about earlier — see approve(), which still requires an explicit
-  // requestId so a stale answer can never resolve a newer request.
-  //
-  // Gated on the run's state for the same reason pendingApprovals() filters on
-  // it: a stale record left on a cancelled run is not an answerable request.
-  pendingApprovalFor(runId: string): PendingApproval | undefined {
-    const meta = this.registry.get(runId);
-    if (meta?.state !== 'awaiting-approval') return undefined;
-    return this.registry.getPendingApproval(runId);
+  // Every call a run is parked on, oldest first.
+  pendingApprovalsFor(runId: string): PendingApproval[] {
+    if (this.registry.get(runId)?.state !== 'awaiting-approval') return [];
+    return this.registry.pendingApprovals(runId);
+  }
+
+  // Adds where each finished run lands (or landed) to its meta, computed fresh
+  // per request (never persisted):
+  // - `pushedToOrigin` on every merged run: whether its merge commit is on
+  //   origin's copy of its base. Memoized by (mergeCommit, baseBranch) so runs
+  //   sharing a base pay once.
+  // - `landsOn` on every finished run that is unreviewed or merged: 'origin'
+  //   when Land pushes to origin (the project has a remote), 'local' when it
+  //   merges into the local base only (no remote, or an epic branch).
+  // - `release` on merged runs that reached origin: the newest release tag and
+  //   whether it contains the merge, so "did it ship?" has an answer.
+  decorateRunsWithPushed(runs: RunMeta[]): DecoratedRunMeta[] {
+    const merged = runs.flatMap((run) =>
+      run.reviewAction === 'merge' && run.mergeCommit !== undefined
+        ? [{ commit: run.mergeCommit, base: run.baseBranch }]
+        : []
+    );
+    const landable = runs.some(
+      (run) =>
+        TERMINAL_RUN_STATES.has(run.state) &&
+        (run.reviewedAt === undefined || run.reviewAction === 'merge')
+    );
+    // Asked only when some run is landable or merged: a board with none
+    // spawns no git.
+    const hasOrigin = landable && this.worktrees.hasOriginRemote();
+    const isPushed =
+      hasOrigin && merged.length > 0 ? this.pushedMerges(merged) : () => false;
+    const release =
+      hasOrigin && merged.length > 0 ? this.releasedMerges(merged) : null;
+    return runs.map((run) => {
+      if (!TERMINAL_RUN_STATES.has(run.state)) return run;
+      const isMerged =
+        run.reviewAction === 'merge' && run.mergeCommit !== undefined;
+      if (run.reviewedAt !== undefined && !isMerged) return run;
+      const landsOn =
+        hasOrigin && !isEpicBranch(run.baseBranch) ? 'origin' : 'local';
+      if (!isMerged) return { ...run, landsOn };
+      const pushedToOrigin = isPushed(run.mergeCommit!, run.baseBranch);
+      const tag = pushedToOrigin ? release?.(run.mergeCommit!) : undefined;
+      return {
+        ...run,
+        landsOn,
+        pushedToOrigin,
+        ...(tag === undefined ? {} : { release: tag }),
+      };
+    });
   }
 
   /**
-   * Attaches each awaiting-approval run's pending request to its meta for API
-   * reads. The registry keeps approvals in memory and the `approval.requested`
-   * WS event carries the id live — but a client that connects afterwards (a
-   * reload, a relaunched app, the CLI) had no way to learn which request a
-   * parked run is waiting on, so it could see the run was stuck and still not
-   * answer it. Computed per request and never persisted: the record dies with
-   * the executor, exactly like the pause it describes.
+   * Whether each merge commit is in the newest release tag. Like pushedMerges
+   * this is one `git rev-list` per tag, cached until the tag changes. Null
+   * when the repo has no release tags, so no run claims "not released yet"
+   * on a project that does not cut releases.
    */
-  decorateRunsWithPendingApproval<T extends RunMeta>(
-    runs: T[]
-  ): (T & { pendingApproval?: PendingApproval })[] {
-    return runs.map((run) => {
-      const pending = this.pendingApprovalFor(run.id);
-      return pending === undefined ? run : { ...run, pendingApproval: pending };
+  private releasedMerges(
+    merges: readonly { commit: string }[]
+  ): ((commit: string) => { tag: string; included: boolean }) | null {
+    const latest = this.worktrees.latestReleaseTag();
+    if (latest === null) return null;
+    if (this.releasedAtTag?.tag !== latest.tag) {
+      this.releasedAtTag = { tag: latest.tag, commits: new Map() };
+    }
+    const known = this.releasedAtTag.commits;
+    const unknown = [
+      ...new Set(merges.map((m) => m.commit).filter((c) => !known.has(c))),
+    ];
+    const full = unknown.filter((c) => FULL_SHA.test(c));
+    const missing =
+      full.length > 0 ? this.worktrees.commitsNotOn(full, latest.commit) : null;
+    for (const commit of unknown) {
+      known.set(
+        commit,
+        missing !== null && FULL_SHA.test(commit)
+          ? !missing.has(commit)
+          : this.worktrees.isMergedInto(commit, latest.commit)
+      );
+    }
+    return (commit) => ({
+      tag: latest.tag,
+      included: known.get(commit) ?? false,
     });
   }
 
-  // Adds `pushedToOrigin` to each merged run, computed fresh per request (never
-  // persisted). Memoizes by (mergeCommit, baseBranch) so runs sharing a base pay once.
-  decorateRunsWithPushed(
-    runs: RunMeta[]
-  ): (RunMeta & { pushedToOrigin?: boolean })[] {
-    const hasOrigin = this.worktrees.hasOriginRemote();
-    const cache = new Map<string, boolean>();
-    return runs.map((run) => {
+  /**
+   * Merged runs whose work never reached origin although the project has
+   * one: the split-brain of a squash that landed on the local base only (a
+   * merge from before origin-first landings, or a push that failed). The
+   * newest merged run per task, epic bases excluded (those are local by
+   * design), archived runs excluded. The decision feed raises each as
+   * "merged locally, not on GitHub yet" and the publish endpoint retries it.
+   */
+  unpublishedMerges(): RunMeta[] {
+    const newest = new Map<string, RunMeta>();
+    for (const run of this.registry.list()) {
       if (run.reviewAction !== 'merge' || run.mergeCommit === undefined) {
-        return run;
+        continue;
       }
-      if (!hasOrigin) return { ...run, pushedToOrigin: false };
-      const key = `${run.mergeCommit}\0${run.baseBranch}`;
-      let pushed = cache.get(key);
-      if (pushed === undefined) {
-        pushed = this.worktrees.isOnOriginBase(run.mergeCommit, run.baseBranch);
-        cache.set(key, pushed);
+      if (!newest.has(run.taskId)) newest.set(run.taskId, run);
+    }
+    const candidates = [...newest.values()].filter(
+      (run) => run.archivedAt === undefined && !isEpicBranch(run.baseBranch)
+    );
+    if (candidates.length === 0 || !this.worktrees.hasOriginRemote()) {
+      return [];
+    }
+    const isPushed = this.pushedMerges(
+      candidates.map((run) => ({
+        commit: run.mergeCommit!,
+        base: run.baseBranch,
+      }))
+    );
+    return candidates.filter(
+      (run) => !isPushed(run.mergeCommit!, run.baseBranch)
+    );
+  }
+
+  /** origin's browser URL when it is on GitHub, for links to landed commits. */
+  originWebUrl(): string | undefined {
+    this.cachedOriginWebUrl ??= { url: this.worktrees.originWebUrl() };
+    return this.cachedOriginWebUrl.url;
+  }
+
+  /**
+   * Which of these merge commits have reached origin's copy of their base.
+   *
+   * Asked per commit, that is a git process per merged run on every GET
+   * /api/runs: 300 merged runs stalled the daemon for 8s a request. Instead
+   * each base's origin tip is read once, one `git rev-list` names the commits
+   * it does not contain, and the answers are kept for as long as that tip
+   * stands — they cannot change until origin moves.
+   */
+  private pushedMerges(
+    merges: readonly { commit: string; base: string }[]
+  ): (commit: string, base: string) => boolean {
+    const byBase = new Map<string, Set<string>>();
+    for (const { commit, base } of merges) {
+      const commits = byBase.get(base) ?? new Set<string>();
+      commits.add(commit);
+      byBase.set(base, commits);
+    }
+    const answers = new Map<string, Map<string, boolean>>();
+    for (const [base, commits] of byBase) {
+      // No origin/<base> locally: unpushed is the safe answer.
+      const tip = this.worktrees.originBaseTip(base);
+      if (tip === null) continue;
+      let known = this.pushedAtTip.get(base);
+      if (known?.tip !== tip) {
+        known = { tip, commits: new Map() };
+        this.pushedAtTip.set(base, known);
       }
-      return { ...run, pushedToOrigin: pushed };
-    });
+      const unknown = [...commits].filter((c) => !known.commits.has(c));
+      const full = unknown.filter((c) => FULL_SHA.test(c));
+      const unpushed =
+        full.length > 0 ? this.worktrees.commitsNotOn(full, tip) : null;
+      for (const commit of unknown) {
+        known.commits.set(
+          commit,
+          unpushed !== null && FULL_SHA.test(commit)
+            ? !unpushed.has(commit)
+            : this.worktrees.isMergedInto(commit, tip)
+        );
+      }
+      answers.set(base, known.commits);
+    }
+    return (commit, base) => answers.get(base)?.get(commit) ?? false;
   }
 
   // Thin passthroughs so MergeQueue can gate its own push-retry/auto-refresh
@@ -682,14 +1122,26 @@ export class Orchestrator {
     // `actor` credits who caused this dispatch: omitted (the API's manual
     // dispatch) defaults to the daemon's human, but an automatic caller
     // (EpicEngine's auto-fill) passes 'none' explicitly — no human pressed
-    // dispatch for that specific task.
-    opts: { model?: string; effort?: EffortLevel; actor?: string } = {}
+    // dispatch for that specific task. `operator` is who the run acts for;
+    // absent means no one, never the actor or the daemon's human.
+    // `dispatchedBy` names whom the run is for when the actor is nobody: a
+    // fan-out's runs are its starter's.
+    opts: {
+      model?: string;
+      effort?: EffortLevel;
+      actor?: string;
+      operator?: string | null;
+      dispatchedBy?: string;
+      guard?: DispatchGuard;
+    } = {}
   ): Promise<RunMeta> {
     const task = this.ctx.store.get(taskId);
     if (task === null) {
       throw new OrchestratorNotFoundError(`task not found: ${taskId}`);
     }
     refuseExecuteOnDerivedTask(task);
+    this.refuseGuarded(task);
+    checkGuard(task, opts.guard);
     const live = this.registry.liveRunForTask(taskId);
     if (live !== undefined) {
       throw new OrchestratorConflictError(
@@ -706,8 +1158,12 @@ export class Orchestrator {
     );
 
     const { base: baseBranch, stackParents } = await this.resolveBase(task);
+    // Nothing awaits from here to registration, so this read is the last word.
+    if (opts.guard !== undefined) {
+      checkGuard(this.ctx.store.get(taskId) ?? task, opts.guard);
+    }
     const now = new Date().toISOString();
-    const runId = generateRunId(now);
+    const runId = this.mintRunId(now);
     // Suffixed with the run's own hex tag (stripping its `r-` prefix) so two
     // runs against the same task never collide on branch name — a task can
     // have several finished-but-unreviewed runs sitting in parallel until
@@ -718,10 +1174,28 @@ export class Orchestrator {
     const wtPath = worktreePath(this.ctx.rootDir, runId);
 
     this.worktrees.add(wtPath, branch, baseBranch);
+    if (this.worktreeSeed !== null) {
+      try {
+        this.worktreeSeed(taskId, wtPath);
+      } catch (err) {
+        // A failed cleanup is logged; the seed's reason is what the caller hears.
+        try {
+          this.worktrees.remove(wtPath, branch, runId);
+        } catch (removeErr) {
+          console.error(
+            `dispatchd: removing ${wtPath} after a failed seed failed`,
+            removeErr
+          );
+        }
+        throw new OrchestratorClientError(
+          `could not seed the worktree: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
 
-    const actor = opts.actor ?? this.ctx.actorContext?.humanRef;
-    const dispatchedBy =
-      actor !== undefined && actor.startsWith('human:') ? actor : undefined;
+    const dispatchedBy = humanOwner(
+      opts.dispatchedBy ?? opts.actor ?? this.ctx.actorContext?.humanRef
+    );
     const meta: RunMeta = {
       id: runId,
       taskId,
@@ -735,10 +1209,12 @@ export class Orchestrator {
       updatedAt: now,
       model: opts.model,
       ...this.effortField(opts.effort),
-      // Only a human ref is recorded: 'none' is how an automatic caller says
-      // nobody pressed dispatch for this task, and crediting that to anyone
+      // Only a human ref is recorded: 'none' with no `dispatchedBy` is how an
+      // automatic caller says the run is nobody's, and crediting it to anyone
       // would be inventing an owner.
       ...(dispatchedBy === undefined ? {} : { dispatchedBy }),
+      operator: this.a2a(taskId) ? null : (opts.operator ?? null),
+      memoryLineage: runId,
       // Seeded from the task's own declared write-set — see RunMeta.claims.
       claims: [...task.meta.writes],
       // Spread in only for a genuinely stacked run, so an unblocked run's
@@ -751,35 +1227,36 @@ export class Orchestrator {
           }
         : {}),
     };
-    this.registry.create(meta);
-    this.transcriptFor(runId).writeHeader(meta);
+    const prepared = this.registerRun(meta);
 
     this.ctx.store.update(
       taskId,
       {
-        status: 'working',
+        status: this.statuses().roles.dispatched,
         appendActivity: `${now} dispatched (${executorName}, branch ${branch})`,
         activityActor: opts.actor ?? this.ctx.actorContext?.humanRef,
       },
       now
     );
-    this.ctx.cache.rebuild(this.ctx.store);
-    this.ctx.events.broadcast({ type: 'task.changed' });
+    this.ctx.cache.refresh(this.ctx.store, [taskId]);
+    this.ctx.events.broadcast({ type: 'task.changed', ids: [taskId] });
 
     this.transition(runId, 'running');
     const caps = this.orchestratorCaps();
+    const brief = this.taskBrief(task, executorName, runId);
     this.startAndRegister(
       runId,
       {
         cwd: wtPath,
         projectRoot: this.ctx.rootDir,
         runId,
-        prompt: this.promptForTask(task, executorName),
+        prompt: brief(prepared?.text ?? null),
         permissionMode: caps.permissionMode,
         maxTurns: caps.maxTurns,
         maxBudgetUsd: caps.maxBudgetUsd,
         model: opts.model,
         effort: meta.effort,
+        ...this.memoryOption(prepared, brief),
       },
       executor
     );
@@ -799,12 +1276,17 @@ export class Orchestrator {
     model?: string;
     effort?: EffortLevel;
     buildPrompt: (ctx: { runId: string; worktreePath: string }) => string;
+    // Who the run acts for: the human who started it, or for a run the
+    // system starts after another run, that run's operator.
+    operator: string | null;
   }): Promise<RunMeta> {
     const task = this.ctx.store.get(opts.taskId);
     if (task === null) {
       throw new OrchestratorNotFoundError(`task not found: ${opts.taskId}`);
     }
     if (opts.kind === 'execute') refuseExecuteOnDerivedTask(task);
+    // Every kind: each one reads the draft's client-written description.
+    this.refuseGuarded(task);
     const live = this.registry.liveRunForTask(opts.taskId);
     if (live !== undefined) {
       throw new OrchestratorConflictError(
@@ -820,11 +1302,18 @@ export class Orchestrator {
     );
 
     const now = new Date().toISOString();
-    const runId = generateRunId(now);
+    const runId = this.mintRunId(now);
     const branch = `${DISPATCH_BRANCH_PREFIX}${opts.kind}-${opts.taskId}-${runId.slice(2)}`;
     const wtPath = worktreePath(this.ctx.rootDir, runId);
     this.worktrees.add(wtPath, branch, opts.head);
 
+    // A review, verify or fix run serves the task's latest work, so it is
+    // for whoever that run was for.
+    const owner = this.registry
+      .list()
+      .find(
+        (r) => r.taskId === opts.taskId && runKind(r) === 'execute'
+      )?.dispatchedBy;
     const meta: RunMeta = {
       id: runId,
       taskId: opts.taskId,
@@ -839,10 +1328,12 @@ export class Orchestrator {
       model: opts.model,
       ...this.effortField(opts.effort),
       kind: opts.kind,
+      operator: this.a2a(opts.taskId) ? null : opts.operator,
+      memoryLineage: runId,
       claims: [...task.meta.writes],
+      ...(owner === undefined ? {} : { dispatchedBy: owner }),
     };
-    this.registry.create(meta);
-    this.transcriptFor(runId).writeHeader(meta);
+    const prepared = this.registerRun(meta);
 
     // A throwing buildPrompt would otherwise strand this run in `provisioning`,
     // which counts as live: the task could never be dispatched again.
@@ -854,6 +1345,7 @@ export class Orchestrator {
       this.transition(runId, 'failed', {
         error: `failed to prepare ${opts.kind} run: ${message}`,
       });
+      this.endRunMemory(runId);
       this.worktrees.remove(wtPath, branch, runId);
       throw new OrchestratorClientError(
         `failed to prepare ${opts.kind} run: ${message}`
@@ -867,12 +1359,15 @@ export class Orchestrator {
         cwd: wtPath,
         projectRoot: this.ctx.rootDir,
         runId,
-        prompt,
+        prompt: withSection(prompt, prepared?.text ?? null),
         permissionMode: caps.permissionMode,
         maxTurns: caps.maxTurns,
         maxBudgetUsd: caps.maxBudgetUsd,
         model: opts.model,
         effort: meta.effort,
+        ...this.memoryOption(prepared, (section) =>
+          withSection(prompt, section)
+        ),
       },
       executor
     );
@@ -922,8 +1417,8 @@ export class Orchestrator {
           },
           now
         );
-        this.ctx.cache.rebuild(this.ctx.store);
-        this.ctx.events.broadcast({ type: 'task.changed' });
+        this.ctx.cache.refresh(this.ctx.store, [meta.taskId]);
+        this.ctx.events.broadcast({ type: 'task.changed', ids: [meta.taskId] });
       });
       return;
     }
@@ -962,7 +1457,7 @@ export class Orchestrator {
       this.ctx.store.update(
         meta.taskId,
         {
-          status: 'landed',
+          status: this.statuses().roles.landed,
           archivedAt: now,
           appendActivity: `${now} [run ${runId}] review of ${derivedFrom} finished; task retired`,
           // Mechanical cleanup, not an action anyone asked for by name.
@@ -970,8 +1465,8 @@ export class Orchestrator {
         },
         now
       );
-      this.ctx.cache.rebuild(this.ctx.store);
-      this.ctx.events.broadcast({ type: 'task.changed' });
+      this.ctx.cache.refresh(this.ctx.store, [meta.taskId]);
+      this.ctx.events.broadcast({ type: 'task.changed', ids: [meta.taskId] });
     });
   }
 
@@ -1037,7 +1532,12 @@ export class Orchestrator {
     const parents: string[] = [];
     for (const blockerId of task.meta.blockedBy) {
       const blocker = this.ctx.store.get(blockerId);
-      if (blocker === null || blocker.meta.status !== 'review') continue;
+      if (
+        blocker === null ||
+        !hasStatusRole(blocker.meta.status, 'review', this.statuses())
+      ) {
+        continue;
+      }
       const branch = this.branchForTask(blockerId);
       if (branch !== null) parents.push(branch);
     }
@@ -1113,8 +1613,8 @@ export class Orchestrator {
       { appendActivity: `${now} ${text}`, activityActor: 'none' },
       now
     );
-    this.ctx.cache.rebuild(this.ctx.store);
-    this.ctx.events.broadcast({ type: 'task.changed' });
+    this.ctx.cache.refresh(this.ctx.store, [taskId]);
+    this.ctx.events.broadcast({ type: 'task.changed', ids: [taskId] });
   }
 
   // The best-effort form of the above, for the paths that are already
@@ -1157,7 +1657,9 @@ export class Orchestrator {
   private ensureEpicBranchFor(task: TaskDoc): string | null {
     if (task.meta.parent === null) return null;
     const parent = this.ctx.store.get(task.meta.parent);
-    if (parent === null || parent.meta.kind !== 'epic') return null;
+    if (parent === null || !usesIntegrationBranch(parent.meta.kind)) {
+      return null;
+    }
     const branch = epicBranchName(parent.meta.id);
     if (!this.worktrees.hasBranch(branch)) {
       const from = this.worktrees.defaultBaseBranch();
@@ -1190,7 +1692,9 @@ export class Orchestrator {
     const task = this.ctx.store.get(meta.taskId);
     if (task === null || task.meta.parent === null) return null;
     const parent = this.ctx.store.get(task.meta.parent);
-    if (parent === null || parent.meta.kind !== 'epic') return null;
+    if (parent === null || !usesIntegrationBranch(parent.meta.kind)) {
+      return null;
+    }
     const branch = epicBranchName(parent.meta.id);
     return this.worktrees.hasBranch(branch) ? branch : null;
   }
@@ -1212,10 +1716,8 @@ export class Orchestrator {
     return candidates[0]?.branch ?? null;
   }
 
-  // Answers a pending approval request. Only valid while the run is
-  // `awaiting-approval` and `requestId` matches the one it's actually
-  // waiting on — both mismatches are 400s, not 404s, since the run itself
-  // does exist.
+  // Answers one parked call (a 400 when the run or call is not parked); the run
+  // stays awaiting-approval while any other call is.
   approve(
     runId: string,
     requestId: string,
@@ -1231,8 +1733,7 @@ export class Orchestrator {
         `run is not awaiting approval: ${runId}`
       );
     }
-    const pending = this.registry.getPendingApproval(runId);
-    if (pending === undefined || pending.requestId !== requestId) {
+    if (this.registry.getPendingApproval(runId, requestId) === undefined) {
       throw new OrchestratorClientError(
         `unknown approval request: ${requestId}`
       );
@@ -1247,23 +1748,26 @@ export class Orchestrator {
     if (executorRun === undefined) {
       this.healZombieRun(meta);
     }
-    this.registry.setPendingApproval(runId, undefined);
+    this.registry.removePendingApproval(runId, requestId);
     executorRun.approve(requestId, resolved);
-    this.transition(runId, 'running');
+    if (this.registry.pendingApprovals(runId).length === 0)
+      this.transition(runId, 'running');
+    this.approvalGate?.settle(runId, requestId, 'answered');
   }
 
   // `resume: true` is the request-changes path: valid on any run that has
   // come to rest with a resumable session, and re-dispatches into the *same*
   // worktree/branch rather than provisioning a new one. Otherwise this is a
   // plain mid-run message to a live run's executor.
-  // `actor` (resume path only) credits who asked for the redispatch: omitted
-  // (the API's chat composer) defaults to the daemon's human; FixLoop's own
-  // automatic escalation passes 'none' explicitly — no one typed anything,
-  // the loop just moved to its next round.
+  // `actor` (resume path only) credits who asked for the redispatch: the API
+  // passes its caller, and omitted defaults to the daemon's human; FixLoop's
+  // own automatic escalation passes 'none' explicitly — no one typed
+  // anything, the loop just moved to its next round. `operator` is who the
+  // follow-up acts for; absent means no one.
   sendMessage(
     runId: string,
     text: string,
-    opts: { resume?: boolean; actor?: string } = {}
+    opts: { resume?: boolean; actor?: string; operator?: string | null } = {}
   ): RunMeta {
     const meta = this.requireRun(runId);
 
@@ -1312,7 +1816,8 @@ export class Orchestrator {
       return this.requestChanges(
         meta,
         text,
-        opts.actor ?? this.ctx.actorContext?.humanRef
+        opts.actor ?? this.ctx.actorContext?.humanRef,
+        opts.operator ?? null
       );
     }
 
@@ -1337,98 +1842,6 @@ export class Orchestrator {
     this.transcriptFor(runId).appendEntry(entry);
     this.ctx.events.broadcast({ type: 'run.log', runId, entry });
     executorRun.send(text);
-    return meta;
-  }
-
-  // Resolves the label a `from: 'agent'` message entry should carry —
-  // the sender run's task title + id when `from.runId` names a run this
-  // orchestrator still knows about (live or terminal-but-registered), or
-  // an explicit `from.label` override, or the generic fallback that keeps
-  // `agent_message`'s pre-identity behavior (and its existing API test's
-  // exact prefix text) unchanged when the sender can't be resolved at all.
-  private resolveSenderLabel(from?: { runId?: string; label?: string }): {
-    fromLabel: string;
-  } {
-    if (from?.runId !== undefined) {
-      const senderMeta = this.registry.get(from.runId);
-      if (senderMeta !== undefined) {
-        return {
-          fromLabel: `${untrustedInline(senderMeta.taskTitle)} (${senderMeta.id})`,
-        };
-      }
-    }
-    if (from?.label !== undefined && from.label.trim() !== '') {
-      return { fromLabel: untrustedInline(from.label) };
-    }
-    return { fromLabel: 'another agent' };
-  }
-
-  // The messaging half of agent collaboration (spec's `agent_message`):
-  // injects a message from *another* agent into a live run's executor.
-  // Distinct from sendMessage's human-authored channel — this one always
-  // prefixes the text with the resolved SENDER's identity (see
-  // resolveSenderLabel) so the receiving agent can tell who's talking, and
-  // deliberately only accepts a run that's actively `running` (not
-  // provisioning, not awaiting-approval, not terminal): every other state
-  // 409s, since "another agent has something to say right now" is only
-  // unambiguous while the run is actually running. `resume`-style
-  // reactivation is sendMessage's job, not this one's.
-  inject(
-    runId: string,
-    text: string,
-    from?: { runId?: string; label?: string }
-  ): RunMeta {
-    const meta = this.requireRun(runId);
-    if (meta.state !== 'running') {
-      throw new OrchestratorConflictError(`run is not running: ${runId}`);
-    }
-    const executorRun = this.registry.getExecutorRun(runId);
-    // Same zombie self-heal as approve()/sendMessage() above — the state
-    // check just above guarantees `meta.state === 'running'` here, so a
-    // missing ExecutorRun means the executor died out from under a live run.
-    if (executorRun === undefined) {
-      this.healZombieRun(meta);
-    }
-    const { fromLabel } = this.resolveSenderLabel(from);
-    const prefixed = `[message from ${fromLabel}] ${text}`;
-    const entry: NormalizedEntry = {
-      ts: new Date().toISOString(),
-      kind: 'message',
-      from: 'agent',
-      fromLabel,
-      text,
-    };
-    this.transcriptFor(runId).appendEntry(entry);
-    this.ctx.events.broadcast({ type: 'run.log', runId, entry });
-    executorRun.send(prefixed);
-    return meta;
-  }
-
-  // The agent->human channel (spec's `message_user`): records a
-  // `from: 'agent'` message entry on the CALLING run's own transcript —
-  // labeled with that same run's task title + id — so an agent can flag a
-  // question or update to the human without waiting for its own assistant
-  // output to be read. Unlike `inject`, there is no separate recipient run
-  // to deliver text into; this only ever writes to `runId`'s own transcript
-  // and broadcasts it, so a connected Session tab badges it immediately.
-  // Same `running`-only liveness gate as `inject` — a run that isn't
-  // actively running has no reason to be raising anything to the user right
-  // now.
-  messageUser(runId: string, text: string): RunMeta {
-    const meta = this.requireRun(runId);
-    if (meta.state !== 'running') {
-      throw new OrchestratorConflictError(`run is not running: ${runId}`);
-    }
-    const entry: NormalizedEntry = {
-      ts: new Date().toISOString(),
-      kind: 'message',
-      from: 'agent',
-      fromLabel: `${meta.taskTitle} (${meta.id})`,
-      toUser: true,
-      text,
-    };
-    this.transcriptFor(runId).appendEntry(entry);
-    this.ctx.events.broadcast({ type: 'run.log', runId, entry });
     return meta;
   }
 
@@ -1479,20 +1892,6 @@ export class Orchestrator {
     return full;
   }
 
-  // Records the human's reply to an `ask_user` question on the run's own
-  // transcript. The agent gets it as its tool result, so nothing is injected.
-  recordAnswer(runId: string, text: string): void {
-    this.requireRun(runId);
-    const entry: NormalizedEntry = {
-      ts: new Date().toISOString(),
-      kind: 'message',
-      from: 'user',
-      text,
-    };
-    this.transcriptFor(runId).appendEntry(entry);
-    this.ctx.events.broadcast({ type: 'run.log', runId, entry });
-  }
-
   /**
    * Asks a live run to stop gracefully — the Stop button's server side, and the
    * counterpart to `cancel()` below.
@@ -1504,12 +1903,14 @@ export class Orchestrator {
    * terminal state through handleFinish and its work is committed and
    * reviewable like any other finished run.
    *
-   * That means this method changes no run state of its own. It records
+   * It changes no RunState of its own, but it adds the run to `stoppingRuns`,
+   * so messaging holds new mail for it (see requireDeliverableRun). It records
    * `stopRequestedAt` (a marker, so surfaces can show "Stopping…" and then
    * "Stopped", and so a daemon restart mid-stop doesn't forget), tells the
    * executor, and arms the escalation timer that catches an agent which ignores
    * the request. Idempotent: pressing Stop twice re-signals the executor but
-   * does not restart the clock or write a second marker.
+   * does not restart the clock or write a second marker. A run parked on a
+   * tool call leaves `awaiting-approval` here, and its gate closes.
    *
    * Deliberately synchronous with no `await` between reading the run's state
    * and appending its marker, for the same reason handleFinish is: an `await`
@@ -1533,10 +1934,12 @@ export class Orchestrator {
     // any non-terminal run it replays — so no caller can ever observe a
     // provisioning run whose executor simply has not been built yet.
     if (executorRun === undefined) this.healZombieRun(meta);
+    this.stoppingRuns.add(runId);
 
     if (meta.stopRequestedAt !== undefined) {
       executorRun.requestStop();
-      return meta;
+      this.releaseParkedApprovals(runId, 'the run is stopping');
+      return this.registry.get(runId)!;
     }
 
     const now = new Date().toISOString();
@@ -1562,6 +1965,7 @@ export class Orchestrator {
     this.ctx.events.broadcast({ type: 'run.changed' });
 
     executorRun.requestStop();
+    this.releaseParkedApprovals(runId, 'the run is stopping');
 
     // Same rule as cancel(): a task file this can't write costs the Activity
     // line, never the stop itself.
@@ -1575,12 +1979,23 @@ export class Orchestrator {
         },
         now
       );
-      this.ctx.cache.rebuild(this.ctx.store);
-      this.ctx.events.broadcast({ type: 'task.changed' });
+      this.ctx.cache.refresh(this.ctx.store, [meta.taskId]);
+      this.ctx.events.broadcast({ type: 'task.changed', ids: [meta.taskId] });
     });
 
     this.scheduleStopEscalation(runId);
     return this.registry.get(runId)!;
+  }
+
+  // The executor answers every parked call itself when the run stops or winds
+  // down, so the run is running again and each call's own gate closes.
+  private releaseParkedApprovals(runId: string, reason: string): void {
+    const parked = this.registry.clearPendingApprovals(runId);
+    if (parked.length === 0) return;
+    if (this.registry.get(runId)?.state === 'awaiting-approval')
+      this.transition(runId, 'running');
+    for (const { requestId } of parked)
+      this.approvalGate?.settle(runId, requestId, reason);
   }
 
   /**
@@ -1639,7 +2054,11 @@ export class Orchestrator {
     // Before transition() below makes the run terminal, so it isn't a no-op.
     this.forceClaimsRefresh(runId);
     const executorRun = this.registry.getExecutorRun(runId);
-    if (executorRun !== undefined) await executorRun.interrupt();
+    if (executorRun !== undefined) {
+      // Set before the await: an interrupting executor drops what it is sent.
+      this.stoppingRuns.add(runId);
+      await executorRun.interrupt();
+    }
     this.transition(runId, 'cancelled');
 
     // M2: record the cancellation as a durable Activity line, same as every
@@ -1663,8 +2082,8 @@ export class Orchestrator {
         },
         now
       );
-      this.ctx.cache.rebuild(this.ctx.store);
-      this.ctx.events.broadcast({ type: 'task.changed' });
+      this.ctx.cache.refresh(this.ctx.store, [meta.taskId]);
+      this.ctx.events.broadcast({ type: 'task.changed', ids: [meta.taskId] });
     });
     this.fireTerminalHooks(runId);
   }
@@ -1969,6 +2388,22 @@ export class Orchestrator {
     if (meta.reviewedAt !== undefined) return alreadyReviewedReason(meta);
     if (meta.prUrl !== undefined) return 'run has an open PR';
     if (meta.baseDiscarded === true) return "run's base needs a human";
+    return this.pickUpBlockReason(meta);
+  }
+
+  // Why a human cannot continue exactly this run, or null. A finished run, an
+  // open PR or a flagged base pass: the human chose it, and asking is the review.
+  continueBlockReason(meta: RunMeta): string | null {
+    if (!TERMINAL_RUN_STATES.has(meta.state)) {
+      return `run is ${meta.state}, not ended`;
+    }
+    if (runKind(meta) !== 'execute') return 'run is not an execute run';
+    if (meta.reviewedAt !== undefined) return alreadyReviewedReason(meta);
+    return this.pickUpBlockReason(meta);
+  }
+
+  // What stops any ended execute run being picked up in its own worktree.
+  private pickUpBlockReason(meta: RunMeta): string | null {
     if (meta.sessionId === undefined) return 'run never started a session';
     if (!existsSync(meta.worktreePath)) return 'run has no worktree left';
     if (this.registry.list().some((r) => r.resumedFrom === meta.id)) {
@@ -1989,7 +2424,7 @@ export class Orchestrator {
       return 'task could not be read';
     }
     if (task === null) return 'task no longer exists';
-    if (task.meta.status === 'landed' || task.meta.status === 'dropped') {
+    if (isDoneStatus(task.meta.status, this.statuses())) {
       return `task is ${task.meta.status}`;
     }
     return null;
@@ -2031,13 +2466,27 @@ export class Orchestrator {
       effort?: EffortLevel;
       fresh?: boolean;
       actor?: string;
+      // Who the run acts for, fresh or resumed; absent means no one.
+      operator?: string | null;
+      /** Whom the run is for, when not the actor (see dispatch()). */
+      dispatchedBy?: string;
       defaults?: { executor?: string; model?: string };
+      /** Re-checked on the task as it stands just before a run registers. */
+      guard?: DispatchGuard;
     } = {}
   ): Promise<RunMeta> {
+    if (request.guard !== undefined) {
+      const current = this.ctx.store.get(taskId);
+      if (current !== null) checkGuard(current, request.guard);
+    }
     if (request.fresh !== true) {
       const resumable = this.resumableRunForTask(taskId);
       if (resumable !== null && this.resumeHonoursRequest(resumable, request)) {
-        return this.resumeForRedispatch(resumable, request.actor);
+        return this.resumeForRedispatch(resumable, {
+          actor: request.actor,
+          dispatchedBy: request.dispatchedBy,
+          operator: request.operator ?? null,
+        });
       }
     }
     const executorName =
@@ -2053,6 +2502,9 @@ export class Orchestrator {
       model,
       effort: request.effort,
       actor: request.actor,
+      operator: request.operator,
+      dispatchedBy: request.dispatchedBy,
+      guard: request.guard,
     });
     if (reason !== null) {
       // Logged on the task so a run on the cheaper tier is explainable from
@@ -2061,9 +2513,68 @@ export class Orchestrator {
         this.ctx.store.update(taskId, {
           appendActivity: `${new Date().toISOString()} [run ${meta.id}] model ${model}: ${reason}`,
         });
+        this.ctx.cache.refresh(this.ctx.store, [taskId]);
+        this.ctx.events.broadcast({ type: 'task.changed', ids: [taskId] });
       });
     }
     return meta;
+  }
+
+  // A wake's next run, acting for `operator`. Only a human's wake may continue
+  // a finished run's session (request changes); anything else dispatches or resumes.
+  async wakeTask(
+    taskId: string,
+    opts: { actor: string; continueFinished: boolean; operator: string | null }
+  ): Promise<RunMeta> {
+    const task = this.ctx.store.get(taskId);
+    if (task !== null && isDoneStatus(task.meta.status, this.statuses())) {
+      throw new OrchestratorConflictError(`task is ${task.meta.status}`);
+    }
+    const latest = this.registry
+      .list()
+      .find((r) => r.taskId === taskId && runKind(r) === 'execute');
+    if (
+      opts.continueFinished &&
+      latest !== undefined &&
+      TERMINAL_RUN_STATES.has(latest.state) &&
+      latest.sessionId !== undefined &&
+      latest.sessionId !== '' &&
+      latest.reviewedAt === undefined &&
+      this.registry.liveRunForTask(taskId) === undefined &&
+      this.resumeBlockReason(latest) !== null
+    ) {
+      return this.requestChanges(
+        latest,
+        WAKE_PROMPT,
+        opts.actor,
+        opts.operator
+      );
+    }
+    return this.dispatchOrResume(taskId, {
+      actor: opts.actor,
+      operator: opts.operator,
+    });
+  }
+
+  // Whether a task came in over A2A; its runs act for no one.
+  private a2a(taskId: string): boolean {
+    return this.ctx.isA2ATask?.(taskId) ?? false;
+  }
+
+  // The same answer for memory, which keeps project scope from A2A runs.
+  isA2ATask(taskId: string): boolean {
+    return this.a2a(taskId);
+  }
+
+  // A human's wake of one ended execute run continues exactly that run, for `operator`.
+  wakeRun(
+    runId: string,
+    opts: { actor: string; operator: string | null }
+  ): RunMeta {
+    const meta = this.requireRun(runId);
+    const reason = this.continueBlockReason(meta);
+    if (reason !== null) throw new OrchestratorConflictError(reason);
+    return this.requestChanges(meta, WAKE_PROMPT, opts.actor, opts.operator);
   }
 
   // The model a fresh dispatch runs on. Anything the caller NAMED wins, so
@@ -2137,14 +2648,23 @@ export class Orchestrator {
   // into that is the two-agents-in-one-checkout hazard the sweep exists to
   // avoid — so rather than racing it, this re-arms the sweep and refuses,
   // saying so in terms the caller can act on.
-  private resumeForRedispatch(run: RunMeta, actor?: string): RunMeta {
+  private resumeForRedispatch(
+    run: RunMeta,
+    who: { actor?: string; dispatchedBy?: string; operator: string | null }
+  ): RunMeta {
     if (this.needsQuietProof(run)) {
+      // The sweep's resume then acts for this caller, not the run's operator.
+      this.autoResumeOperators.set(run.id, who.operator);
       this.scheduleAutoResume(run.id);
       throw new OrchestratorConflictError(
         `run ${run.id} is still being recovered after a daemon restart — waiting for the agent it orphaned to stop writing to ${run.branch}. It will resume on its own; dispatch with fresh=true to start over instead.`
       );
     }
-    return this.resumeRun(run.id, { actor });
+    return this.resumeRun(run.id, {
+      actor: who.actor,
+      dispatchedBy: who.dispatchedBy,
+      operator: who.operator,
+    });
   }
 
   // True when this run could still have the agent a restart orphaned writing
@@ -2190,6 +2710,7 @@ export class Orchestrator {
       .finally(() => {
         if (this.scheduledAutoResumes.get(runId) === done) {
           this.scheduledAutoResumes.delete(runId);
+          this.autoResumeOperators.delete(runId);
         }
       });
     this.scheduledAutoResumes.set(runId, done);
@@ -2266,7 +2787,12 @@ export class Orchestrator {
     // hazard the quiet window upstream of here exists to prevent.
     if (meta === undefined || this.resumeBlockReason(meta) !== null) return;
     try {
-      this.resumeRun(runId, { auto: true });
+      this.resumeRun(runId, {
+        auto: true,
+        ...(this.autoResumeOperators.has(runId)
+          ? { operator: this.autoResumeOperators.get(runId) ?? null }
+          : {}),
+      });
     } catch (err) {
       console.error(
         `dispatchd: could not auto-resume run ${runId}: ${(err as Error).message}`
@@ -2368,22 +2894,17 @@ export class Orchestrator {
       throw new OrchestratorClientError(`invalid review action: ${action}`);
     }
     const actor = opts.actor ?? this.ctx.actorContext?.humanRef;
-    const meta = this.requireRun(runId);
-    if (!TERMINAL_RUN_STATES.has(meta.state)) {
+    const meta = this.requireReviewable(runId, action);
+    // With a remote, a merge lands on origin through OriginLander (the merge
+    // queue, and the API's Merge via MergeQueue.mergeNow). A squash into the
+    // local base alone is how a "landed" run once sat unpushed while origin
+    // shipped two releases without it, so this path refuses rather than
+    // quietly doing it again.
+    if (action === 'merge' && this.landsOnOrigin(meta)) {
       throw new OrchestratorConflictError(
-        `run is not in a terminal state: ${runId} (state: ${meta.state})`
+        `run ${runId} lands on origin/${meta.baseBranch}, not the local ${meta.baseBranch} alone — merge it through the merge queue or the Land button`
       );
     }
-    if (meta.reviewedAt !== undefined) {
-      throw new OrchestratorConflictError(alreadyReviewedMessage(meta));
-    }
-    // Discarding blocked work is exactly what a human should still be able to
-    // do; merging it is the thing the ruling exists to prevent.
-    if (action === 'merge') {
-      const blocked = this.blockedFindingReason(meta.taskId);
-      if (blocked !== null) throw new OrchestratorConflictError(blocked);
-    }
-    this.requireNoOpenPr(meta);
     const now = new Date().toISOString();
 
     // Everything above this line is a refusal — the run was never touched.
@@ -2412,7 +2933,10 @@ export class Orchestrator {
         this.ctx.store.update(
           meta.taskId,
           {
-            ...(taskStatus === 'landed' ? {} : { status: 'ready' }),
+            ...(taskStatus !== undefined &&
+            isCompletedStatus(taskStatus, this.statuses())
+              ? {}
+              : { status: this.statuses().roles.ready }),
             appendActivity: `${now} run ${runId} discarded`,
             activityActor: actor,
           },
@@ -2439,12 +2963,254 @@ export class Orchestrator {
     if (action === 'merge') {
       this.closeSupersededPredecessors(runId, now, mergeCommit);
     }
-    this.ctx.cache.rebuild(this.ctx.store);
-    this.ctx.events.broadcast({ type: 'task.changed' });
+    this.ctx.cache.refresh(this.ctx.store, [meta.taskId]);
+    this.ctx.events.broadcast({ type: 'task.changed', ids: [meta.taskId] });
     this.ctx.events.broadcast({ type: 'run.changed' });
     const reviewed = this.registry.get(runId)!;
     this.invokeHooksSafely(this.reviewedHooks, reviewed);
     return reviewed;
+  }
+
+  // Every refusal review() makes before it touches anything. Public so the
+  // origin-first landing (OriginLander) turns away exactly the same runs
+  // before it fetches anything: live, already reviewed, blocked by a finding,
+  // or owned by an open PR.
+  requireReviewable(runId: string, action: 'merge' | 'discard'): RunMeta {
+    const meta = this.requireRun(runId);
+    if (!TERMINAL_RUN_STATES.has(meta.state)) {
+      throw new OrchestratorConflictError(
+        `run is not in a terminal state: ${runId} (state: ${meta.state})`
+      );
+    }
+    if (meta.reviewedAt !== undefined) {
+      throw new OrchestratorConflictError(alreadyReviewedMessage(meta));
+    }
+    // Discarding blocked work is exactly what a human should still be able to
+    // do; merging it is the thing the ruling exists to prevent.
+    if (action === 'merge') {
+      const blocked = this.blockedFindingReason(meta.taskId);
+      if (blocked !== null) throw new OrchestratorConflictError(blocked);
+    }
+    this.requireNoOpenPr(meta);
+    return meta;
+  }
+
+  // ---------------------------------------------------------------------
+  // Origin-first merges. On a project whose base branch lives on origin, a
+  // merge lands on origin's copy of the branch and the main checkout follows
+  // it, rather than the old order (merge locally, push later). OriginLander
+  // owns the network half (fetch, push, retry) and calls the three methods
+  // below for everything local. Splitting it this way keeps every network
+  // call on the injectable CommandRunner seam and every bookkeeping write
+  // here, next to review()'s own.
+  // ---------------------------------------------------------------------
+
+  /**
+   * Whether merging `meta` lands on origin first instead of in the main
+   * checkout. True whenever the project has an `origin` remote, unless the
+   * run's base is an epic integration branch: those are local-only by design
+   * and land on the default base as a whole later.
+   *
+   * Deliberately not conditional on a remote-tracking ref for the base
+   * existing yet. The landing fetches before it does anything, and a remote
+   * that genuinely lacks the base refuses the landing with a reason. Falling
+   * back to a local merge there would be the "landed, but only on this
+   * laptop" split this exists to remove.
+   */
+  landsOnOrigin(meta: RunMeta): boolean {
+    if (isEpicBranch(meta.baseBranch)) return false;
+    return this.worktrees.hasOriginRemote();
+  }
+
+  /**
+   * Builds the squash commit that will land `runId` on top of `ontoCommit`
+   * (origin's freshly fetched tip), without moving any ref. Runs review()'s
+   * merge refusals first, so a landing is turned away exactly where a local
+   * merge would be.
+   *
+   * `commit` is undefined when there is nothing to push: the branch carries
+   * no committed changes, or its content is already on origin (the squash
+   * tree equals the tip's tree). The landing still records the run as merged
+   * in that case, same as mergeRun's no-changes path.
+   *
+   * A content conflict is a 409 naming the files, matching the local path.
+   */
+  prepareOriginLanding(
+    runId: string,
+    ontoCommit: string
+  ): { commit: string | undefined; diff: DiffResult } {
+    const meta = this.requireReviewable(runId, 'merge');
+    if (!existsSync(meta.worktreePath)) {
+      throw new OrchestratorConflictError(
+        `worktree is gone: ${meta.worktreePath} — re-dispatch the task or discard this run`
+      );
+    }
+    // Committed-only, for the reason mergeRun gives: the squash carries only
+    // what is reachable from the branch.
+    const diff = this.worktrees.diffCommittedOnly(
+      meta.worktreePath,
+      ontoCommit
+    );
+    if (diff.files.length === 0) return { commit: undefined, diff };
+    let commit: string;
+    try {
+      commit = this.worktrees.squashCommitOnto(
+        ontoCommit,
+        meta.branch,
+        `dispatch: ${meta.taskTitle} (run ${meta.id})`
+      );
+    } catch (err) {
+      throw new OrchestratorConflictError((err as Error).message);
+    }
+    if (this.worktrees.treeOf(commit) === this.worktrees.treeOf(ontoCommit)) {
+      return { commit: undefined, diff };
+    }
+    return { commit, diff };
+  }
+
+  /**
+   * Records a run as merged once its squash commit is on origin: the same
+   * bookkeeping review('merge') does, minus the local commit. The task file
+   * moves to the landed status but is not committed, the same as an epic-branch
+   * or PR landing; the board syncer carries it to trunk.
+   *
+   * `mergeCommit` is the sha origin now has, so the run reads as pushed the
+   * moment it is recorded. "Merged locally, push pending" never exists for it.
+   */
+  completeOriginLanding(
+    runId: string,
+    mergeCommit: string | undefined,
+    diff: DiffResult,
+    actor: string | undefined
+  ): RunMeta {
+    const meta = this.requireRun(runId);
+    // The push already happened, so this only guards against recording a
+    // second review on a run someone reviewed while the push was in flight.
+    if (meta.reviewedAt !== undefined) {
+      throw new OrchestratorConflictError(alreadyReviewedMessage(meta));
+    }
+    const now = new Date().toISOString();
+    this.ctx.store.update(
+      meta.taskId,
+      {
+        status: this.statuses().roles.landed,
+        appendActivity: `${now} run ${meta.id} merged into ${meta.baseBranch} on origin`,
+        activityActor: actor,
+      },
+      now
+    );
+    this.persistDiffSnapshot(meta, diff);
+    this.worktrees.remove(meta.worktreePath, meta.branch, meta.id);
+    this.transition(runId, meta.state, {
+      reviewedAt: now,
+      reviewAction: 'merge',
+      mergeCommit,
+      ...(meta.reviewFailure !== undefined ? { reviewFailure: null } : {}),
+    });
+    this.closeSupersededPredecessors(runId, now, mergeCommit);
+    this.ctx.cache.refresh(this.ctx.store, [meta.taskId]);
+    this.ctx.events.broadcast({ type: 'task.changed', ids: [meta.taskId] });
+    this.ctx.events.broadcast({ type: 'run.changed' });
+    const reviewed = this.registry.get(runId)!;
+    this.invokeHooksSafely(this.reviewedHooks, reviewed);
+    return reviewed;
+  }
+
+  // A landing attempt that threw, recorded the way a failed review() is so
+  // the run shows why it is still unmerged.
+  recordOriginLandingFailure(
+    runId: string,
+    err: unknown,
+    actor: string | undefined
+  ): void {
+    const meta = this.registry.get(runId);
+    if (meta === undefined) return;
+    this.recordReviewFailure(
+      meta,
+      'merge',
+      err,
+      new Date().toISOString(),
+      actor
+    );
+  }
+
+  /**
+   * Fast-forwards the local `base` branch to origin's copy. This is how the
+   * main checkout follows origin after a landing. It never blocks or undoes
+   * a landing: a checkout that cannot fast-forward (dirty file in the way,
+   * local commits origin lacks) stays behind and is retried next time. See
+   * WorktreeManager.fastForwardToOrigin.
+   */
+  followOrigin(base: string): FollowResult {
+    return this.worktrees.fastForwardToOrigin(base, this.currentMainBranch());
+  }
+
+  // publish()'s two local git steps, kept here so OriginLander never reaches
+  // into WorktreeManager: replay one commit onto origin's tip, and compare
+  // two commits' trees.
+  replayOntoOrigin(ontoCommit: string, commit: string): string {
+    return this.worktrees.replayCommitOnto(ontoCommit, commit);
+  }
+
+  sameTree(a: string, b: string): boolean {
+    return this.worktrees.treeOf(a) === this.worktrees.treeOf(b);
+  }
+
+  // The actor review() would credit when none is given: the daemon's human.
+  defaultReviewActor(): string | undefined {
+    return this.ctx.actorContext?.humanRef;
+  }
+
+  /**
+   * The merge commit a publish retry should carry to origin: `runId` must be
+   * a merged run whose squash sits on the local base only. Refuses anything
+   * else (unmerged, a PR merge, an epic base, no remote) with a 409.
+   */
+  requirePublishable(runId: string): { commit: string; base: string } {
+    const meta = this.requireRun(runId);
+    if (meta.reviewAction !== 'merge' || meta.mergeCommit === undefined) {
+      throw new OrchestratorConflictError(
+        `run ${runId} has no local merge to publish`
+      );
+    }
+    if (!this.landsOnOrigin(meta)) {
+      throw new OrchestratorConflictError(
+        `run ${runId} merged into ${meta.baseBranch}, which does not live on origin`
+      );
+    }
+    return { commit: meta.mergeCommit, base: meta.baseBranch };
+  }
+
+  /**
+   * Records that a locally merged run's work is now on origin as `onOrigin`
+   * (the replayed squash, or origin's tip when the content was already
+   * there). The run keeps its review; only its merge commit moves, so every
+   * surface that asks "is this on origin?" now answers yes.
+   */
+  recordPublished(
+    runId: string,
+    onOrigin: string,
+    actor: string | undefined
+  ): RunMeta {
+    const meta = this.requireRun(runId);
+    const now = new Date().toISOString();
+    this.transition(runId, meta.state, {
+      reviewedAt: meta.reviewedAt,
+      reviewAction: 'merge',
+      mergeCommit: onOrigin,
+    });
+    this.ctx.store.update(
+      meta.taskId,
+      {
+        appendActivity: `${now} run ${meta.id} published to origin/${meta.baseBranch} as ${onOrigin.slice(0, 7)}`,
+        activityActor: actor,
+      },
+      now
+    );
+    this.ctx.cache.refresh(this.ctx.store, [meta.taskId]);
+    this.ctx.events.broadcast({ type: 'task.changed', ids: [meta.taskId] });
+    this.ctx.events.broadcast({ type: 'run.changed' });
+    return this.registry.get(runId)!;
   }
 
   // Once a run merges, walks its `resumedFrom` chain and marks every
@@ -2575,7 +3341,7 @@ export class Orchestrator {
     this.ctx.store.update(
       meta.taskId,
       {
-        status: 'landed',
+        status: this.statuses().roles.landed,
         appendActivity: `${now} run ${runId} merged via PR (${meta.prUrl ?? 'unknown url'})`,
         // The PR poller noticed GitHub reports it merged — whoever actually
         // merged it did so on GitHub, outside anything dispatch can see.
@@ -2588,8 +3354,8 @@ export class Orchestrator {
       reviewAction: 'pr',
     });
     this.closeSupersededPredecessors(runId, now, undefined);
-    this.ctx.cache.rebuild(this.ctx.store);
-    this.ctx.events.broadcast({ type: 'task.changed' });
+    this.ctx.cache.refresh(this.ctx.store, [meta.taskId]);
+    this.ctx.events.broadcast({ type: 'task.changed', ids: [meta.taskId] });
     const reviewedViaPr = this.registry.get(runId)!;
     this.invokeHooksSafely(this.reviewedHooks, reviewedViaPr);
     return reviewedViaPr;
@@ -2621,7 +3387,7 @@ export class Orchestrator {
     this.ctx.store.update(
       meta.taskId,
       {
-        status: 'landed',
+        status: this.statuses().roles.landed,
         appendActivity: `${now} run ${runId} merged outside dispatch (branch ${meta.branch} landed on ${meta.baseBranch})`,
         // Whoever ran the merge did so in a plain git checkout, outside
         // anything dispatch can attribute.
@@ -2634,8 +3400,8 @@ export class Orchestrator {
       reviewAction: 'merge',
       mergeCommit,
     });
-    this.ctx.cache.rebuild(this.ctx.store);
-    this.ctx.events.broadcast({ type: 'task.changed' });
+    this.ctx.cache.refresh(this.ctx.store, [meta.taskId]);
+    this.ctx.events.broadcast({ type: 'task.changed', ids: [meta.taskId] });
     const reviewed = this.registry.get(runId)!;
     this.invokeHooksSafely(this.reviewedHooks, reviewed);
     return reviewed;
@@ -2723,9 +3489,9 @@ export class Orchestrator {
         },
         now
       );
-      this.ctx.cache.rebuild(this.ctx.store);
+      this.ctx.cache.refresh(this.ctx.store, [meta.taskId]);
     });
-    this.ctx.events.broadcast({ type: 'task.changed' });
+    this.ctx.events.broadcast({ type: 'task.changed', ids: [meta.taskId] });
     this.ctx.events.broadcast({ type: 'run.changed' });
   }
 
@@ -2770,7 +3536,7 @@ export class Orchestrator {
     // finish, prior request-changes) are expected bookkeeping, not
     // unrelated user work; a genuinely dirty checkout (the user's own
     // pending changes elsewhere) still refuses the merge.
-    const dirtyPaths = this.mainDirtyPathsOutsideDispatch();
+    const dirtyPaths = this.mainDirtyPathsAfterSetupCommit();
     if (dirtyPaths.length > 0) {
       throw new MergeEnvironmentError(
         Orchestrator.describeDirtyPaths(dirtyPaths)
@@ -2851,7 +3617,7 @@ export class Orchestrator {
     this.ctx.store.update(
       meta.taskId,
       {
-        status: 'landed',
+        status: this.statuses().roles.landed,
         appendActivity: `${now} run ${meta.id} merged into ${meta.baseBranch}`,
         activityActor: actor,
       },
@@ -2923,7 +3689,7 @@ export class Orchestrator {
     this.ctx.store.update(
       meta.taskId,
       {
-        status: 'landed',
+        status: this.statuses().roles.landed,
         appendActivity: `${now} run ${meta.id} merged into ${meta.baseBranch}`,
         activityActor: actor,
       },
@@ -2949,8 +3715,11 @@ export class Orchestrator {
     if (epic === null) {
       throw new OrchestratorNotFoundError(`epic not found: ${epicId}`);
     }
-    if (epic.meta.kind !== 'epic') {
-      throw new OrchestratorClientError(`not an epic: ${epicId}`);
+    if (
+      !isContainerKind(epic.meta.kind) &&
+      !this.ctx.cache.isContainer(epicId)
+    ) {
+      throw new OrchestratorClientError(`not a container: ${epicId}`);
     }
     return epic;
   }
@@ -2971,7 +3740,7 @@ export class Orchestrator {
    */
   epicLandStatus(epicId: string): EpicLandStatus {
     const epic = this.requireEpicDoc(epicId);
-    if (epic.meta.status === 'landed') {
+    if (isCompletedStatus(epic.meta.status, this.statuses())) {
       throw new OrchestratorConflictError(`epic has already landed: ${epicId}`);
     }
     const branch = epicBranchName(epicId);
@@ -2983,9 +3752,9 @@ export class Orchestrator {
     }
     const children = this.ctx.cache
       .query({ parent: epicId, includeArchived: true })
-      .filter((t) => t.meta.kind === 'task');
+      .filter((t) => !isContainerKind(t.meta.kind));
     const unfinished = children.filter(
-      (c) => c.meta.status !== 'landed' && c.meta.status !== 'dropped'
+      (c) => !isDoneStatus(c.meta.status, this.statuses())
     );
     if (unfinished.length > 0) {
       const named = unfinished
@@ -3067,7 +3836,7 @@ export class Orchestrator {
       // Same three gates as mergeRun, same reasoning: they describe the main
       // checkout, clear the moment the user commits/stashes, and the third is
       // satisfied by definition here.
-      const dirtyPaths = this.mainDirtyPathsOutsideDispatch();
+      const dirtyPaths = this.mainDirtyPathsAfterSetupCommit();
       if (dirtyPaths.length > 0) {
         throw new MergeEnvironmentError(
           Orchestrator.describeDirtyPaths(dirtyPaths)
@@ -3096,7 +3865,7 @@ export class Orchestrator {
     this.ctx.store.update(
       epicId,
       {
-        status: 'landed',
+        status: this.statuses().roles.landed,
         appendActivity: `${now} [epic] landed on ${base}${
           hasChanges ? '' : ' (no commits to merge)'
         }`,
@@ -3118,8 +3887,8 @@ export class Orchestrator {
 
     this.persistEpicDiffSnapshot(epicId, preDiff);
     this.worktrees.removeBranchRef(branch);
-    this.ctx.cache.rebuild(this.ctx.store);
-    this.ctx.events.broadcast({ type: 'task.changed' });
+    this.ctx.cache.refresh(this.ctx.store, [epicId]);
+    this.ctx.events.broadcast({ type: 'task.changed', ids: [epicId] });
     // The Branches surface just lost a row.
     this.ctx.events.broadcast({ type: 'run.changed' });
     return { epicId, mergeCommit };
@@ -3149,12 +3918,15 @@ export class Orchestrator {
       );
       this.worktrees.removeBranchRef(branch);
     }
-    if (epic !== null && epic.meta.status !== 'landed') {
+    if (
+      epic !== null &&
+      !isCompletedStatus(epic.meta.status, this.statuses())
+    ) {
       const now = new Date().toISOString();
       this.ctx.store.update(
         epicId,
         {
-          status: 'landed',
+          status: this.statuses().roles.landed,
           appendActivity: `${now} [epic] landed via PR (${prUrl})`,
           // Whoever merged did so on GitHub, outside anything dispatch can
           // attribute — same rule as markRunMergedViaPr.
@@ -3162,8 +3934,8 @@ export class Orchestrator {
         },
         now
       );
-      this.ctx.cache.rebuild(this.ctx.store);
-      this.ctx.events.broadcast({ type: 'task.changed' });
+      this.ctx.cache.refresh(this.ctx.store, [epicId]);
+      this.ctx.events.broadcast({ type: 'task.changed', ids: [epicId] });
     }
     this.ctx.events.broadcast({ type: 'run.changed' });
   }
@@ -3257,68 +4029,82 @@ export class Orchestrator {
    * Registry entries whose ref is already gone are intentionally NOT listed:
    * there is nothing left to clean up, and including them would turn every
    * run in project history into permanent noise on this surface.
+   *
+   * Every git read here is async, a few branches at a time: one listing is
+   * dozens of git processes, and the desktop fetches it on its cold load.
    */
-  listBranches(): BranchEntry[] {
-    const refs = this.worktrees.listBranches(DISPATCH_BRANCH_PREFIX);
+  async listBranches(): Promise<BranchEntry[]> {
+    // Orphan refs have no recorded base branch of their own, so they're
+    // measured against the project's default base. Tolerant of failure: a
+    // repo with no remote and an unborn HEAD would otherwise take the whole
+    // listing down.
+    const [refs, epicRefs, worktrees, fallbackBase] = await Promise.all([
+      this.worktrees.listBranches(DISPATCH_BRANCH_PREFIX),
+      this.worktrees.listBranches(EPIC_BRANCH_PREFIX),
+      this.worktrees.listWorktrees(),
+      this.worktrees.defaultBaseBranchAsync().catch(() => 'HEAD'),
+    ]);
     const pathByBranch = new Map<string, string>();
-    for (const wt of this.worktrees.listWorktrees()) {
+    for (const wt of worktrees) {
       if (wt.branch !== undefined) pathByBranch.set(wt.branch, wt.path);
     }
     const runByBranch = this.newestRunByBranch();
-    // Orphan refs have no recorded base branch of their own, so they're
-    // measured against the project's default base. Resolved once per call
-    // (it shells out to git) and tolerant of failure: a repo with no remote
-    // and an unborn HEAD would otherwise take the whole listing down.
-    let fallbackBase: string;
-    try {
-      fallbackBase = this.worktrees.defaultBaseBranch();
-    } catch {
-      fallbackBase = 'HEAD';
-    }
 
-    const entries: BranchEntry[] = refs.map((ref) => {
-      const meta = runByBranch.get(ref.branch);
-      const wtPath = pathByBranch.get(ref.branch) ?? meta?.worktreePath;
-      const base = meta?.baseBranch ?? fallbackBase;
-      const worktreeExists = wtPath !== undefined && existsSync(wtPath);
-      const merged = this.worktrees.isMergedInto(ref.branch, base);
-      return {
-        branch: ref.branch,
-        worktreePath: wtPath,
-        worktreeExists,
-        // Only measured when the directory is actually there — a reclaimed
-        // worktree has nothing to weigh, and reporting 0 for it would read as
-        // "measured and empty" rather than "gone".
-        diskBytes: worktreeExists ? dirSizeBytes(wtPath).bytes : undefined,
-        dirty: wtPath !== undefined && this.worktrees.isWorktreeDirty(wtPath),
-        lastCommitAt: ref.lastCommitAt === '' ? undefined : ref.lastCommitAt,
-        ahead: this.worktrees.aheadCount(ref.branch, base),
-        // Only measured while unmerged: the count answers "how far has the
-        // base moved past this still-out work", which stops meaning anything
-        // once the work landed — and skipping it saves a git call per row.
-        behindBase: merged
-          ? undefined
-          : this.worktrees.behindCount(ref.branch, base),
-        mergedIntoBase: merged,
-        runId: meta?.id,
-        taskId: meta?.taskId,
-        taskTitle: meta?.taskTitle,
-        runState: meta?.state,
-        baseBranch: meta?.baseBranch,
-        reviewedAt: meta?.reviewedAt,
-        stackParents: meta?.stackParents,
-        prUrl: meta?.prUrl,
-        // The recorded merge commit is the only reliable probe for a squash
-        // merge; a branch git itself sees as merged (hand-merged, no run, or
-        // a run without a mergeCommit) is judged by its own tip instead, so
-        // "pushed" doesn't read false just because no run claims the ref.
-        pushedToOrigin:
-          meta?.mergeCommit !== undefined
-            ? this.worktrees.isOnOriginBase(meta.mergeCommit, base)
-            : merged && this.worktrees.isOnOriginBase(ref.branch, base),
-        status: branchEntryStatus(meta),
-      } satisfies BranchEntry;
-    });
+    const entries: BranchEntry[] = await mapLimit(
+      refs,
+      BRANCH_PROBE_CONCURRENCY,
+      async (ref) => {
+        const meta = runByBranch.get(ref.branch);
+        const wtPath = pathByBranch.get(ref.branch) ?? meta?.worktreePath;
+        const base = meta?.baseBranch ?? fallbackBase;
+        const worktreeExists = wtPath !== undefined && existsSync(wtPath);
+        const [counts, dirty, size] = await Promise.all([
+          this.worktrees.aheadBehind(ref.branch, base),
+          wtPath === undefined
+            ? false
+            : this.worktrees.isWorktreeDirtyAsync(wtPath),
+          worktreeExists ? dirSizeBytes(wtPath) : undefined,
+        ]);
+        // Nothing ahead is exactly "the base already reaches every commit";
+        // a ref git cannot resolve reads as unmerged with nothing to lose.
+        const merged = counts !== null && counts.ahead === 0;
+        return {
+          branch: ref.branch,
+          worktreePath: wtPath,
+          worktreeExists,
+          // Only measured when the directory is actually there — a reclaimed
+          // worktree has nothing to weigh, and reporting 0 for it would read
+          // as "measured and empty" rather than "gone".
+          diskBytes: size?.bytes,
+          dirty,
+          lastCommitAt: ref.lastCommitAt === '' ? undefined : ref.lastCommitAt,
+          ahead: counts?.ahead ?? 0,
+          // Only reported while unmerged: the count answers "how far has the
+          // base moved past this still-out work", which stops meaning
+          // anything once the work landed.
+          behindBase: merged ? undefined : (counts?.behind ?? 0),
+          mergedIntoBase: merged,
+          runId: meta?.id,
+          taskId: meta?.taskId,
+          taskTitle: meta?.taskTitle,
+          runState: meta?.state,
+          baseBranch: meta?.baseBranch,
+          reviewedAt: meta?.reviewedAt,
+          stackParents: meta?.stackParents,
+          prUrl: meta?.prUrl,
+          // The recorded merge commit is the only reliable probe for a squash
+          // merge; a branch git itself sees as merged (hand-merged, no run, or
+          // a run without a mergeCommit) is judged by its own tip instead, so
+          // "pushed" doesn't read false just because no run claims the ref.
+          pushedToOrigin:
+            meta?.mergeCommit !== undefined
+              ? await this.worktrees.isOnOriginBase(meta.mergeCommit, base)
+              : merged &&
+                (await this.worktrees.isOnOriginBase(ref.branch, base)),
+          status: branchEntryStatus(meta),
+        } satisfies BranchEntry;
+      }
+    );
 
     // Epic integration branches (`epic/<id>`) are part of the same surface:
     // dispatch created them, runs land on them, and a human eventually has to
@@ -3326,24 +4112,34 @@ export class Orchestrator {
     // Their `behindBase` is the drift signal: dispatch never updates an epic
     // branch against the default base on its own, it only reports how far
     // behind it has fallen.
-    for (const ref of this.worktrees.listBranches(EPIC_BRANCH_PREFIX)) {
-      entries.push({
-        branch: ref.branch,
-        worktreeExists: false,
-        dirty: false,
-        lastCommitAt: ref.lastCommitAt === '' ? undefined : ref.lastCommitAt,
-        ahead: this.worktrees.aheadCount(ref.branch, fallbackBase),
-        mergedIntoBase: this.worktrees.isMergedInto(ref.branch, fallbackBase),
-        behindBase: this.worktrees.behindCount(ref.branch, fallbackBase),
-        baseBranch: fallbackBase,
-        // "Pushed" for an integration branch means origin has its tip — the
-        // question a human asks before deleting the local ref. The branch
-        // name is passed as the commit-ish directly: resolving it first could
-        // throw on a ref deleted mid-listing, where this just reports false.
-        pushedToOrigin: this.worktrees.isOnOriginBase(ref.branch, ref.branch),
-        status: 'epic',
-      } satisfies BranchEntry);
-    }
+    const epicEntries = await mapLimit(
+      epicRefs,
+      BRANCH_PROBE_CONCURRENCY,
+      async (ref) => {
+        const [counts, pushedToOrigin] = await Promise.all([
+          this.worktrees.aheadBehind(ref.branch, fallbackBase),
+          // "Pushed" for an integration branch means origin has its tip — the
+          // question a human asks before deleting the local ref. The branch
+          // name is passed as the commit-ish directly: resolving it first
+          // could throw on a ref deleted mid-listing, where this just reports
+          // false.
+          this.worktrees.isOnOriginBase(ref.branch, ref.branch),
+        ]);
+        return {
+          branch: ref.branch,
+          worktreeExists: false,
+          dirty: false,
+          lastCommitAt: ref.lastCommitAt === '' ? undefined : ref.lastCommitAt,
+          ahead: counts?.ahead ?? 0,
+          mergedIntoBase: counts !== null && counts.ahead === 0,
+          behindBase: counts?.behind ?? 0,
+          baseBranch: fallbackBase,
+          pushedToOrigin,
+          status: 'epic',
+        } satisfies BranchEntry;
+      }
+    );
+    entries.push(...epicEntries);
 
     // Most-urgent-first within a stable order so the UI's grouping never has
     // to re-sort, and so two consecutive polls can't shuffle rows around.
@@ -3383,8 +4179,11 @@ export class Orchestrator {
    * tests `existsSync` on it and falls back to the snapshot persisted just
    * below — the same mechanism every review path already relies on.
    */
-  freeWorktreeDisk(branch: string): BranchEntry {
-    const entry = this.requireCleanableBranch(branch);
+  async freeWorktreeDisk(branch: string): Promise<BranchEntry> {
+    const listing = await this.listBranches();
+    // From the guard to the removal nothing awaits, so no run can start on
+    // this branch in between.
+    const entry = this.requireCleanableBranch(branch, listing);
     const meta =
       entry.runId !== undefined ? this.registry.get(entry.runId) : undefined;
     if (meta !== undefined) this.persistDiffSnapshot(meta);
@@ -3405,8 +4204,13 @@ export class Orchestrator {
    * the commits already landed on the base branch, and without that proof this
    * is the one action here that destroys work with no way back.
    */
-  deleteBranch(branch: string, opts: { force?: boolean } = {}): void {
-    const entry = this.requireCleanableBranch(branch);
+  async deleteBranch(
+    branch: string,
+    opts: { force?: boolean } = {}
+  ): Promise<void> {
+    const listing = await this.listBranches();
+    // From the guard to the deletion nothing awaits, as in freeWorktreeDisk.
+    const entry = this.requireCleanableBranch(branch, listing);
     if (!entry.mergedIntoBase && opts.force !== true) {
       throw new OrchestratorConflictError(
         `branch is not merged into ${entry.baseBranch ?? 'its base'} and has ${entry.ahead} unmerged commit(s): ${branch} — retry with force to delete anyway`
@@ -3423,8 +4227,8 @@ export class Orchestrator {
     this.ctx.events.broadcast({ type: 'run.changed' });
   }
 
-  private requireBranchEntry(branch: string): BranchEntry {
-    const entry = this.listBranches().find((e) => e.branch === branch);
+  private async requireBranchEntry(branch: string): Promise<BranchEntry> {
+    const entry = (await this.listBranches()).find((e) => e.branch === branch);
     if (entry === undefined) {
       throw new OrchestratorNotFoundError(`branch not found: ${branch}`);
     }
@@ -3433,24 +4237,27 @@ export class Orchestrator {
 
   // The shared guard for both destructive branch actions. Refuses anything
   // that would pull a worktree or ref out from under something still using it,
-  // naming the specific reason so the UI can show it verbatim.
-  private requireCleanableBranch(branch: string): BranchEntry {
-    const all = this.listBranches();
-    const entry = all.find((e) => e.branch === branch);
+  // naming the specific reason so the UI can show it verbatim. `listing` is
+  // the git side; the run side is re-read here, since a run can start or
+  // resume while the listing's git reads were out.
+  private requireCleanableBranch(
+    branch: string,
+    listing: BranchEntry[]
+  ): BranchEntry {
+    const entry = listing.find((e) => e.branch === branch);
     if (entry === undefined) {
       throw new OrchestratorNotFoundError(`branch not found: ${branch}`);
     }
+    const run = this.newestRunByBranch().get(branch);
     // A live agent is actively writing into this worktree.
-    if (entry.status === 'active') {
+    if (branchEntryStatus(run) === 'active') {
       throw new OrchestratorConflictError(
-        `branch has a live run: ${branch} (run ${entry.runId ?? 'unknown'}, state ${entry.runState ?? 'unknown'})`
+        `branch has a live run: ${branch} (run ${run?.id ?? 'unknown'}, state ${run?.state ?? 'unknown'})`
       );
     }
     // Same rule review() enforces: an open PR points at exactly this branch
     // and worktree, so tearing them down would break the remote review.
-    const meta =
-      entry.runId !== undefined ? this.registry.get(entry.runId) : undefined;
-    if (meta !== undefined) this.requireNoOpenPr(meta);
+    if (run !== undefined) this.requireNoOpenPr(run);
     // `git branch -D` would refuse the checked-out branch anyway; failing
     // here names the reason instead of surfacing git's error text.
     if (branch === this.currentMainBranch()) {
@@ -3458,7 +4265,7 @@ export class Orchestrator {
         `branch is checked out in the main repo: ${branch}`
       );
     }
-    this.requireNoStackedDependent(branch, all);
+    this.requireNoStackedDependent(branch, listing);
     return entry;
   }
 
@@ -3484,18 +4291,27 @@ export class Orchestrator {
    *
    * `entries` is passed in by callers that already computed listBranches() so
    * the guard and the rows the user is looking at can never disagree about what
-   * depends on what.
+   * depends on what. A live run cut from `branch` counts too, since its ref
+   * may postdate that listing.
    */
   private requireNoStackedDependent(
     branch: string,
-    entries = this.listBranches()
+    entries: BranchEntry[]
   ): void {
-    const dependent = entries.find(
-      (e) => e.branch !== branch && e.baseBranch === branch
-    );
+    const dependent =
+      entries.find((e) => e.branch !== branch && e.baseBranch === branch)
+        ?.branch ??
+      this.registry
+        .list()
+        .find(
+          (m) =>
+            m.branch !== branch &&
+            m.baseBranch === branch &&
+            !TERMINAL_RUN_STATES.has(m.state)
+        )?.branch;
     if (dependent !== undefined) {
       throw new OrchestratorConflictError(
-        `branch is the base of ${dependent.branch} — clean that up first`
+        `branch is the base of ${dependent} — clean that up first`
       );
     }
   }
@@ -3745,7 +4561,10 @@ export class Orchestrator {
   // eligible — never un-archives one that already was.
   reconcileArchives(): number {
     if (!this.worktrees.hasOriginRemote()) return 0;
-    const doneTasks = this.ctx.cache.query({ status: 'landed' });
+    const model = this.statuses();
+    const doneTasks = this.ctx.cache
+      .query()
+      .filter((t) => isCompletedStatus(t.meta.status, model));
     if (doneTasks.length === 0) return 0;
     // Newest merged run per task, scanned once against registry.list()'s own
     // most-recent-first order — mirrors newestRunByBranch()'s same shape. Safe
@@ -3762,19 +4581,26 @@ export class Orchestrator {
       }
     }
     const now = new Date().toISOString();
-    let count = 0;
+    const archived: string[] = [];
+    const isPushed = this.pushedMerges(
+      doneTasks.flatMap((task) => {
+        const run = newestMergedByTask.get(task.meta.id);
+        return run?.mergeCommit === undefined
+          ? []
+          : [{ commit: run.mergeCommit, base: run.baseBranch }];
+      })
+    );
     for (const task of doneTasks) {
       const run = newestMergedByTask.get(task.meta.id);
       if (run?.mergeCommit === undefined) continue;
-      if (!this.worktrees.isOnOriginBase(run.mergeCommit, run.baseBranch)) {
-        continue;
-      }
+      if (!isPushed(run.mergeCommit, run.baseBranch)) continue;
       this.ctx.store.update(task.meta.id, { archivedAt: now }, now);
-      count++;
+      archived.push(task.meta.id);
     }
+    const count = archived.length;
     if (count > 0) {
-      this.ctx.cache.rebuild(this.ctx.store);
-      this.ctx.events.broadcast({ type: 'task.changed' });
+      this.ctx.cache.refresh(this.ctx.store, archived);
+      this.ctx.events.broadcast({ type: 'task.changed', ids: archived });
     }
     return count;
   }
@@ -3824,6 +4650,7 @@ export class Orchestrator {
               error: BOOT_FORCE_FAIL_ERROR,
             };
             crashedRunIds.push(meta.id);
+            this.removeRunToken(meta.id);
           }
           this.registry.create(meta);
           bootRuns.push(meta);
@@ -3924,8 +4751,8 @@ export class Orchestrator {
       },
       now
     );
-    this.ctx.cache.rebuild(this.ctx.store);
-    this.ctx.events.broadcast({ type: 'task.changed' });
+    this.ctx.cache.refresh(this.ctx.store, [meta.taskId]);
+    this.ctx.events.broadcast({ type: 'task.changed', ids: [meta.taskId] });
   }
 
   private requireRun(runId: string): RunMeta {
@@ -3943,7 +4770,7 @@ export class Orchestrator {
   // already registered as 'running'). reconcileOnBoot() already heals this
   // exact shape of zombie once, at boot, for every run whose transcript is
   // non-terminal; this covers the same run going zombie *after* boot, lazily,
-  // the moment approve()/sendMessage()/inject() next tries to reach its
+  // the moment approve()/sendMessage()/deliverToRun() next tries to reach its
   // executor and finds nothing there.
   //
   // Reuses transition()'s state-line/registry-update/`run.changed` broadcast
@@ -3988,10 +4815,13 @@ export class Orchestrator {
         appendActivity: `${now} ${activityNote}`,
         activityActor: 'none',
       };
-      if (task.meta.status === 'working') patch.status = 'review';
+      const model = this.statuses();
+      if (hasStatusRole(task.meta.status, 'dispatched', model)) {
+        patch.status = model.roles.review;
+      }
       this.ctx.store.update(meta.taskId, patch, now);
-      this.ctx.cache.rebuild(this.ctx.store);
-      this.ctx.events.broadcast({ type: 'task.changed' });
+      this.ctx.cache.refresh(this.ctx.store, [meta.taskId]);
+      this.ctx.events.broadcast({ type: 'task.changed', ids: [meta.taskId] });
     }
     this.fireTerminalHooks(meta.id);
     // Deferred, same as reconcileOnBoot()'s crash sweep — a zombied run's
@@ -4001,7 +4831,7 @@ export class Orchestrator {
 
   // Starts `executor` for a run that dispatch()/requestChanges() has already
   // registered and transitioned to 'running', then records its live
-  // ExecutorRun so approve()/sendMessage()/inject() can reach it.
+  // ExecutorRun so approve()/sendMessage()/deliverToRun() can reach it.
   //
   // If start() throws *synchronously* — most commonly the Claude Agent SDK
   // failing to locate its native CLI binary (a broken `--omit=optional`
@@ -4021,6 +4851,10 @@ export class Orchestrator {
   ): void {
     let executorRun;
     try {
+      if (this.mintRunToken !== null) {
+        const token = this.mintRunToken(runId);
+        opts = { ...opts, runTokenFile: this.writeRunToken(runId, token) };
+      }
       executorRun = executor.start(opts, this.makeEvents(runId));
     } catch (err) {
       const raw = (err as Error).message;
@@ -4035,6 +4869,36 @@ export class Orchestrator {
       return;
     }
     this.registry.setExecutorRun(runId, executorRun);
+    const meta = this.registry.get(runId);
+    if (meta !== undefined) {
+      for (const listener of this.runStartedListeners) {
+        // A listener throwing must never fail the dispatch that triggered it.
+        try {
+          listener(meta);
+        } catch (err) {
+          console.error(
+            `dispatchd: onRunStarted listener failed for ${runId}: ${(err as Error).message}`
+          );
+        }
+      }
+    }
+  }
+
+  // Writes a run's token to a fresh owner-only file and returns its path; a
+  // leftover file is replaced so its mode can never be wider than 0600.
+  private writeRunToken(runId: string, token: string): string {
+    const path = runTokenPath(this.ctx.rootDir, runId);
+    mkdirSync(runsDir(this.ctx.rootDir), { recursive: true });
+    rmSync(path, { force: true });
+    writeFileSync(path, token, { mode: 0o600, flag: 'wx' });
+    return path;
+  }
+
+  // A run's token file outlives nothing: removed once the run is terminal.
+  private removeRunToken(runId: string): void {
+    this.bestEffort(`removing run token file for run ${runId}`, () => {
+      rmSync(runTokenPath(this.ctx.rootDir, runId), { force: true });
+    });
   }
 
   // I4: once PrManager.openPr has pushed a run's branch and opened a PR
@@ -4087,6 +4951,43 @@ export class Orchestrator {
         // reads as a file list rather than as git status output.
         .map((line) => line.replace(/^\S+\s+/, ''))
     );
+  }
+
+  // The main checkout's dirty paths, after committing Dispatch's own setup
+  // files (see setupFiles.ts) when they are the only thing dirty. Project init
+  // leaves .gitattributes/.gitignore uncommitted, which would otherwise block
+  // a new project's first land. Anything else dirty, or staged, commits nothing.
+  private mainDirtyPathsAfterSetupCommit(): string[] {
+    const dirtyPaths = this.mainDirtyPathsOutsideDispatch();
+    if (dirtyPaths.length === 0) return dirtyPaths;
+    if (this.worktrees.hasStagedChanges()) return dirtyPaths;
+    const rootDir = this.ctx.rootDir;
+    const allSetup = dirtyPaths.every((path) => {
+      if (!(SETUP_FILE_PATHS as readonly string[]).includes(path)) return false;
+      const head = spawnGitSync(rootDir, ['show', `HEAD:${path}`]);
+      const full = join(rootDir, path);
+      if (!existsSync(full)) return false;
+      return isDispatchSetupChange(
+        path,
+        head.exitCode === 0 ? head.stdout : undefined,
+        readFileSync(full, 'utf8')
+      );
+    });
+    if (!allSetup) return dirtyPaths;
+    const add = spawnGitSync(rootDir, ['add', '--', ...dirtyPaths]);
+    if (add.exitCode !== 0) return dirtyPaths;
+    const commit = spawnGitSync(rootDir, [
+      'commit',
+      '-m',
+      'chore: set up Dispatch',
+      '--',
+      ...dirtyPaths,
+    ]);
+    if (commit.exitCode !== 0) {
+      spawnGitSync(rootDir, ['reset', '-q', '--', ...dirtyPaths]);
+      return dirtyPaths;
+    }
+    return this.mainDirtyPathsOutsideDispatch();
   }
 
   // Renders the dirty paths into the refusal message. Naming them is the
@@ -4212,7 +5113,12 @@ export class Orchestrator {
     // Whatever ended this run — winding down after a stop, its own finish, a
     // cancel, an escalation — there is nothing left for the stop backstop to
     // catch. This is the one point every terminal state passes through.
-    if (TERMINAL_RUN_STATES.has(state)) this.clearStopEscalation(runId);
+    if (TERMINAL_RUN_STATES.has(state)) {
+      this.clearStopEscalation(runId);
+      this.stoppingRuns.delete(runId);
+      this.removeRunToken(runId);
+      this.registry.clearPendingApprovals(runId);
+    }
     // A finish that reports no session must not erase the one recordSession
     // already stored: spreading `sessionId: undefined` over the meta did
     // exactly that, so a run whose agent reported its handle and then died
@@ -4222,9 +5128,13 @@ export class Orchestrator {
     // `reviewFailure` is likewise only written when the finish carries it:
     // `null` clears a prior failure, absent leaves it alone.
     const { reviewFailure, sessionId, ...fields } = finish ?? {};
+    // A step is what a live run is doing; a finished one is doing nothing.
+    const ended = TERMINAL_RUN_STATES.has(state);
+    if (ended) this.stepsFollowed.delete(runId);
     this.registry.updateMeta(runId, {
       state,
       updatedAt: now,
+      ...(ended ? { lastStep: undefined } : {}),
       ...fields,
       ...(sessionId !== undefined ? { sessionId } : {}),
       ...(reviewFailure !== undefined
@@ -4257,7 +5167,18 @@ export class Orchestrator {
     if (meta === undefined) return;
     // Nothing will ever refresh a terminal run's claims again.
     this.lastClaimsCheck.delete(runId);
+    this.endRunMemory(runId);
     this.invokeHooksSafely(this.terminalHooks, meta);
+  }
+
+  // Tells the memory port a run ended, so it stops following the run's export.
+  private endRunMemory(runId: string): void {
+    const meta = this.registry.get(runId);
+    const port = this.memoryPort;
+    if (meta === undefined || port === null) return;
+    this.bestEffort(`ending memory for run ${runId}`, () => {
+      port.runEnded(meta);
+    });
   }
 
   // C2(b): runs every hook in `hooks` against `meta`, isolating each call —
@@ -4291,8 +5212,11 @@ export class Orchestrator {
             },
             now
           );
-          this.ctx.cache.rebuild(this.ctx.store);
-          this.ctx.events.broadcast({ type: 'task.changed' });
+          this.ctx.cache.refresh(this.ctx.store, [meta.taskId]);
+          this.ctx.events.broadcast({
+            type: 'task.changed',
+            ids: [meta.taskId],
+          });
         } catch {
           // Even the Activity append failing must not propagate — the
           // triggering operation's own result already stands regardless.
@@ -4317,8 +5241,18 @@ export class Orchestrator {
     return {
       onEntry: (entry) => {
         this.transcriptFor(runId).appendEntry(entry);
+        // The step rides on the meta so a list read has it without the log;
+        // a stray entry after the finish names no step.
+        const state = this.registry.get(runId)?.state;
+        const live = state !== undefined && !TERMINAL_RUN_STATES.has(state);
+        const text = live ? runStepFromEntry(entry, runId) : null;
+        if (live) this.stepsFollowed.add(runId);
+        const now = new Date().toISOString();
         this.registry.updateMeta(runId, {
-          updatedAt: new Date().toISOString(),
+          updatedAt: now,
+          ...(text === null
+            ? {}
+            : { lastStep: { text, at: entry.ts === '' ? now : entry.ts } }),
         });
         const fanOutChanged = this.recordSubagentEvent(runId, entry);
         this.ctx.events.broadcast({ type: 'run.log', runId, entry });
@@ -4328,21 +5262,66 @@ export class Orchestrator {
         this.scheduleClaimsRefresh(runId);
       },
       onApprovalRequest: (request) => {
-        this.registry.setPendingApproval(runId, request);
-        this.transition(runId, 'awaiting-approval');
-        this.ctx.events.broadcast({
-          type: 'approval.requested',
-          runId,
-          requestId: request.requestId,
-          toolName: request.toolName,
-        });
+        this.registry.addPendingApproval(runId, request);
+        if (this.registry.get(runId)?.state !== 'awaiting-approval')
+          this.transition(runId, 'awaiting-approval');
+        const meta = this.registry.get(runId);
+        if (meta !== undefined) {
+          this.approvalGate?.raise({
+            runId,
+            taskId: meta.taskId,
+            taskTitle: meta.taskTitle,
+            requestId: request.requestId,
+            toolName: request.toolName,
+            input: request.input,
+          });
+        }
         // Awaiting-approval can sit for arbitrarily long — capture whatever
         // this run just did rather than letting the cooldown delay it.
         this.forceClaimsRefresh(runId);
       },
       onSession: (sessionId) => this.recordSession(runId, sessionId),
+      onEnding: () => {
+        this.stoppingRuns.add(runId);
+        this.releaseParkedApprovals(runId, 'the run ended');
+      },
+      onMemoryMode: (mode, detail) =>
+        this.recordMemoryMode(runId, mode, detail),
+      onMemoryRecall: (paths, via) => {
+        const meta = this.registry.get(runId);
+        if (meta === undefined || this.memoryPort === null) return;
+        const port = this.memoryPort;
+        this.bestEffort(`recording memory recalls for run ${runId}`, () => {
+          port.recall(runId, runLineage(meta), paths, via);
+        });
+      },
       onFinish: (finish) => this.handleFinish(runId, finish),
     };
+  }
+
+  // Export mode's load check moved the run to another memory mode: kept on a
+  // state line, with the executor's reason in the Session log.
+  private recordMemoryMode(
+    runId: string,
+    mode: MemoryMode,
+    detail: string
+  ): void {
+    const meta = this.registry.get(runId);
+    if (meta === undefined || TERMINAL_RUN_STATES.has(meta.state)) return;
+    const now = new Date().toISOString();
+    this.registry.updateMeta(runId, { memoryMode: mode, updatedAt: now });
+    const entry: NormalizedEntry = {
+      ts: now,
+      kind: 'system',
+      text: `Memory mode ${mode}: ${detail}`,
+    };
+    this.bestEffort(`recording memory mode for run ${runId}`, () => {
+      const transcript = this.transcriptFor(runId);
+      transcript.appendState(meta.state, now, { memoryMode: mode });
+      transcript.appendEntry(entry);
+    });
+    this.ctx.events.broadcast({ type: 'run.log', runId, entry });
+    this.ctx.events.broadcast({ type: 'run.changed' });
   }
 
   // Keeps RunMeta.subagents current from the `agent` entries as they are
@@ -4381,12 +5360,10 @@ export class Orchestrator {
     const meta = this.registry.get(runId);
     if (meta === undefined || meta.sessionId === sessionId) return;
     if (TERMINAL_RUN_STATES.has(meta.state)) return;
-    // A resumed run is born holding the session it was told to continue, so
-    // an executor reporting a DIFFERENT one has opened a conversation with
-    // none of the history this run claims. ClaudeExecutor fails the run
-    // itself before this can happen; for any executor that does not, the
-    // Session log at least says so, rather than letting the successor pass
-    // as a continuation while the agent underneath it starts from nothing.
+    // A resumed run is born holding the session it was told to continue, so a
+    // DIFFERENT one reported here has none of the history this run claims: an
+    // export fallback's fresh session, or a resume an executor did not refuse.
+    // The Session log says so rather than letting it pass as a continuation.
     if (meta.resumedFrom !== undefined && meta.sessionId !== undefined) {
       const notice: NormalizedEntry = {
         ts: new Date().toISOString(),
@@ -4475,7 +5452,7 @@ export class Orchestrator {
     }
 
     // Synchronous, no await before this — closes the window a concurrent
-    // approve()/sendMessage()/inject() could otherwise race (see below).
+    // approve()/sendMessage()/deliverToRun() could otherwise race (see below).
     this.transition(runId, effectiveFinish.state, {
       costUsd: effectiveFinish.costUsd,
       turns: effectiveFinish.turns,
@@ -4515,10 +5492,13 @@ export class Orchestrator {
         // daemon right now.
         activityActor: this.ctx.actorContext?.agentRef(meta.executor),
       };
-      if (task.meta.status === 'working') patch.status = 'review';
+      const model = this.statuses();
+      if (hasStatusRole(task.meta.status, 'dispatched', model)) {
+        patch.status = model.roles.review;
+      }
       this.ctx.store.update(meta.taskId, patch, now);
-      this.ctx.cache.rebuild(this.ctx.store);
-      this.ctx.events.broadcast({ type: 'task.changed' });
+      this.ctx.cache.refresh(this.ctx.store, [meta.taskId]);
+      this.ctx.events.broadcast({ type: 'task.changed', ids: [meta.taskId] });
     });
     this.fireTerminalHooks(runId);
   }
@@ -4565,15 +5545,20 @@ export class Orchestrator {
   private requestChanges(
     oldMeta: RunMeta,
     text: string,
-    actor: string | undefined
+    actor: string | undefined,
+    operator: string | null
   ): RunMeta {
+    this.refuseHeld();
     const {
       executor,
       name: executorName,
       substituted,
     } = this.resolveExecutorForResume(oldMeta.executor);
     const now = new Date().toISOString();
-    const runId = generateRunId(now);
+    const runId = this.mintRunId(now);
+    // For the person who asked; the fix loop's rounds ('none') stay with
+    // whomever the conversation was for.
+    const owner = humanOwner(actor) ?? oldMeta.dispatchedBy;
     const meta: RunMeta = {
       id: runId,
       taskId: oldMeta.taskId,
@@ -4596,6 +5581,10 @@ export class Orchestrator {
       // follow-up must not look like it has never touched anything.
       claims: oldMeta.claims,
       resumedFrom: oldMeta.id,
+      // Acts for whoever asked for it, never the predecessor's operator as such.
+      operator: this.a2a(oldMeta.taskId) ? null : operator,
+      memoryLineage: runLineage(oldMeta),
+      ...(owner === undefined ? {} : { dispatchedBy: owner }),
       // The resumed run inherits the same worktree and the same BRANCH, so it
       // inherits the branch's stacking facts too. Dropping them here was how a
       // still-running resume ended up invisible to the merge queue: with no
@@ -4612,8 +5601,7 @@ export class Orchestrator {
         ? { stackBaseCommit: oldMeta.stackBaseCommit }
         : {}),
     };
-    this.registry.create(meta);
-    this.transcriptFor(runId).writeHeader(meta);
+    const prepared = this.registerRun(meta, true);
 
     // The user's feedback is this run's opening conversation turn — record
     // it on the NEW run's transcript (mirroring the live-run branch of
@@ -4639,14 +5627,14 @@ export class Orchestrator {
     this.ctx.store.update(
       oldMeta.taskId,
       {
-        status: 'working',
+        status: this.statuses().roles.dispatched,
         appendActivity: `${now} requested changes (run ${runId}): ${text}${substitutionNote}`,
         activityActor: actor,
       },
       now
     );
-    this.ctx.cache.rebuild(this.ctx.store);
-    this.ctx.events.broadcast({ type: 'task.changed' });
+    this.ctx.cache.refresh(this.ctx.store, [oldMeta.taskId]);
+    this.ctx.events.broadcast({ type: 'task.changed', ids: [oldMeta.taskId] });
 
     this.transition(runId, 'running');
     const caps = this.orchestratorCaps();
@@ -4663,6 +5651,9 @@ export class Orchestrator {
         maxBudgetUsd: caps.maxBudgetUsd,
         model: oldMeta.model,
         effort: oldMeta.effort,
+        ...this.memoryOption(prepared, (section) =>
+          this.freshPromptFor(oldMeta.taskId, executorName, runId, section)
+        ),
       },
       executor
     );
@@ -4690,11 +5681,22 @@ export class Orchestrator {
   // run back rather than crediting the human whose daemon happened to reboot.
   // `actor` is the same override dispatch() takes, for the callers that resume
   // on someone else's behalf (dispatchOrResume, reached from the epic
-  // auto-fill, credits 'none' exactly as its dispatch does).
+  // auto-fill, credits 'none' exactly as its dispatch does). The successor is
+  // for `dispatchedBy` when given, else whoever pressed resume, else — the
+  // boot sweep, an automatic caller — whomever its predecessor was for.
+  // `operator` is who the successor acts for, absent meaning no one; only the
+  // boot sweep (`auto`) with none named keeps the run's own, as no new
+  // principal is acting.
   resumeRun(
     runId: string,
-    opts: { auto?: boolean; actor?: string } = {}
+    opts: {
+      auto?: boolean;
+      actor?: string;
+      dispatchedBy?: string;
+      operator?: string | null;
+    } = {}
   ): RunMeta {
+    this.refuseHeld();
     const meta = this.requireRun(runId);
     if (!TERMINAL_RUN_STATES.has(meta.state)) {
       throw new OrchestratorClientError(`run is still live: ${runId}`);
@@ -4723,8 +5725,14 @@ export class Orchestrator {
       substituted,
     } = this.resolveExecutorForResume(meta.executor);
     const now = new Date().toISOString();
-    const newRunId = generateRunId(now);
+    const newRunId = this.mintRunId(now);
     const continuing = meta.sessionId !== undefined;
+    const owner =
+      humanOwner(opts.dispatchedBy) ??
+      (opts.auto === true
+        ? undefined
+        : humanOwner(opts.actor ?? this.ctx.actorContext?.humanRef)) ??
+      meta.dispatchedBy;
     const newMeta: RunMeta = {
       id: newRunId,
       taskId: meta.taskId,
@@ -4747,6 +5755,16 @@ export class Orchestrator {
       // its predecessor had already claimed.
       claims: meta.claims,
       resumedFrom: meta.id,
+      // A fresh session starts its own lineage.
+      operator: this.a2a(meta.taskId)
+        ? null
+        : opts.operator !== undefined
+          ? opts.operator
+          : opts.auto === true
+            ? runOperator(meta)
+            : null,
+      memoryLineage: continuing ? runLineage(meta) : newRunId,
+      ...(owner === undefined ? {} : { dispatchedBy: owner }),
       ...(meta.stackParents !== undefined
         ? { stackParents: meta.stackParents }
         : {}),
@@ -4754,8 +5772,7 @@ export class Orchestrator {
         ? { stackBaseCommit: meta.stackBaseCommit }
         : {}),
     };
-    this.registry.create(newMeta);
-    this.transcriptFor(newRunId).writeHeader(newMeta);
+    const prepared = this.registerRun(newMeta, continuing);
 
     // A fresh start opens the successor's Session log with the reason, so a
     // reader of that log is never left inferring from an agent that orients
@@ -4779,43 +5796,23 @@ export class Orchestrator {
       });
     }
 
-    // The predecessor's scope requests follow it into the successor: an open
-    // one is still a card in front of a human, and it has to belong to the run
-    // whose agent can act on the answer. Carried BEFORE the prompt is built so
-    // the agent is told what it was waiting on; the re-broadcast is what moves
-    // the card to the new run in an open app.
-    const carried = this.ctx.scopeRequests?.carry(meta.id, newRunId) ?? [];
-    for (const request of carried) {
-      if (request.granted !== null) continue;
-      this.ctx.events.broadcast({
-        type: 'scope.requested',
-        runId: newRunId,
-        requestId: request.id,
-      });
-    }
-    // A reattached session already holds every ruling the agent was GIVEN,
-    // but not the one its dead request_scope poll never received — so the
-    // carried section goes on both prompt shapes.
-    const prompt = [
-      continuing
+    // A continuing session's prompt is the continuation, and its fallback the
+    // brief when that builds; a fresh one gets the brief with the notice.
+    const brief = continuing
+      ? null
+      : this.taskBrief(task, executorName, newRunId);
+    const briefing = (section: string | null): string | null =>
+      brief === null
+        ? this.freshPromptFor(meta.taskId, executorName, newRunId, section)
+        : `${brief(section)}\n\n${renderFreshSessionNotice(meta, newRunId)}`;
+    const prompt =
+      brief === null
         ? renderContinuationPrompt(meta, newRunId)
-        : `${this.promptForTask(task, executorName)}\n\n${renderFreshSessionNotice(meta, newRunId)}`,
-      renderScopeRequestsSection(carried),
-    ]
-      .filter((section): section is string => section !== null)
-      .join('\n\n');
+        : `${brief(prepared?.text ?? null)}\n\n${renderFreshSessionNotice(meta, newRunId)}`;
 
     const substitutionNote = substituted
       ? ` (executor '${meta.executor}' is no longer registered — substituted '${executorName}')`
       : '';
-    const openCarried = carried.filter((r) => r.granted === null).length;
-    const carriedNote =
-      openCarried > 0
-        ? `; carried ${openCarried} undecided scope request${openCarried === 1 ? '' : 's'} (${carried
-            .filter((r) => r.granted === null)
-            .map((r) => r.id)
-            .join(', ')})`
-        : '';
     const how =
       opts.auto === true
         ? `auto-resumed after ${meta.state} (daemon restart)`
@@ -4826,8 +5823,8 @@ export class Orchestrator {
     this.ctx.store.update(
       meta.taskId,
       {
-        status: 'working',
-        appendActivity: `${now} ${how} (run ${newRunId})${sessionNote}${substitutionNote}${carriedNote}`,
+        status: this.statuses().roles.dispatched,
+        appendActivity: `${now} ${how} (run ${newRunId})${sessionNote}${substitutionNote}`,
         // Left unattributed on the auto path: no person asked for this one, and
         // crediting the daemon's operator would misreport who acted.
         activityActor:
@@ -4836,8 +5833,8 @@ export class Orchestrator {
       },
       now
     );
-    this.ctx.cache.rebuild(this.ctx.store);
-    this.ctx.events.broadcast({ type: 'task.changed' });
+    this.ctx.cache.refresh(this.ctx.store, [meta.taskId]);
+    this.ctx.events.broadcast({ type: 'task.changed', ids: [meta.taskId] });
 
     this.transition(newRunId, 'running');
     const caps = this.orchestratorCaps();
@@ -4854,6 +5851,7 @@ export class Orchestrator {
         maxBudgetUsd: caps.maxBudgetUsd,
         model: meta.model,
         effort: meta.effort,
+        ...this.memoryOption(prepared, briefing),
       },
       executor
     );
@@ -4883,26 +5881,164 @@ export class Orchestrator {
   // exact text is unit-testable independent of the orchestrator. A corrupt
   // parent epic file degrades to "no epic context" rather than failing the
   // whole dispatch — the task being dispatched is still perfectly valid.
-  private promptForTask(task: TaskDoc, executorName: string): string {
+  // The epic and orientation are read once; each call renders with its own
+  // memory section, so a run's prompt and its fallback share them.
+  private taskBrief(
+    task: TaskDoc,
+    executorName: string,
+    runId: string
+  ): (memorySection: string | null) => string {
+    // An A2A task's prompt fences its spec, amendments and comments, no epic.
+    const a2aOrigin = this.a2a(task.meta.id);
     let parentEpic: TaskDoc | null = null;
-    if (task.meta.parent !== null) {
+    // An A2A task's body is never parent context, whichever task runs.
+    if (
+      task.meta.parent !== null &&
+      !a2aOrigin &&
+      !this.a2a(task.meta.parent)
+    ) {
       try {
         parentEpic = this.ctx.store.get(task.meta.parent);
       } catch (err) {
         if (!(err instanceof TaskParseError)) throw err;
       }
     }
-    const ledgerEntries = this.ledgerStore.entriesFor(
-      task.meta.id,
-      task.meta.parent
-    );
-    return buildTaskPrompt(
-      task,
-      parentEpic,
-      ledgerEntries,
-      this.orientationFor(task.meta.id),
-      this.executorProfile(executorName).dispatchMcp !== false
-    );
+    const dispatchTools =
+      this.executorProfile(executorName).dispatchMcp !== false;
+    const orientation = this.orientationFor(task.meta.id);
+    const humanRef =
+      this.routing?.humanFor(runId) ?? this.ctx.actorContext?.humanRef ?? null;
+    const scopeDecider = this.routing?.gateFor(runId).to ?? null;
+    const docs = this.docsSection(task.meta.id, runId, dispatchTools);
+    const comments = this.commentsFor(task.meta.id);
+    return (memorySection) =>
+      buildTaskPrompt(
+        task,
+        parentEpic,
+        memorySection,
+        orientation,
+        dispatchTools,
+        humanRef,
+        docs,
+        comments,
+        a2aOrigin,
+        scopeDecider
+      );
+  }
+
+  // The task's brief with `section` as its memory, for a restart that has only
+  // the brief to open with; null when the task is gone or will not read.
+  private freshPromptFor(
+    taskId: string,
+    executorName: string,
+    runId: string,
+    section: string | null
+  ): string | null {
+    try {
+      const task = this.ctx.store.get(taskId);
+      return task === null
+        ? null
+        : this.taskBrief(task, executorName, runId)(section);
+    } catch (err) {
+      console.error(
+        `dispatchd: no fallback prompt for task ${taskId}: ${(err as Error).message}`
+      );
+      return null;
+    }
+  }
+
+  // A failure here costs the section, never the dispatch (as orientation's does).
+  private docsSection(
+    taskId: string,
+    runId: string,
+    dispatchTools: boolean
+  ): string | null {
+    if (this.docsPort === null) return null;
+    try {
+      return this.docsPort.promptSection({ runId, taskId, dispatchTools });
+    } catch (err) {
+      console.error(`dispatchd: docs prompt section for ${taskId} failed`, err);
+      return null;
+    }
+  }
+
+  // A failed read costs the prompt its comments, never the dispatch.
+  private commentsFor(taskId: string): TaskComment[] {
+    try {
+      return this.ctx.comments?.list(taskId) ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  // Records a new run, asks the memory port once how it carries memory, and
+  // writes its transcript header with the chosen mode.
+  private registerRun(meta: RunMeta, continues = false): PreparedMemory | null {
+    this.registry.create(meta);
+    const prepared = this.prepareMemory(meta, continues);
+    this.transcriptFor(meta.id).writeHeader(this.registry.get(meta.id) ?? meta);
+    return prepared;
+  }
+
+  // How a new run carries memory, recorded on it; null for a non-Claude run
+  // with no port. A missing or throwing port leaves auto memory off.
+  private prepareMemory(
+    meta: RunMeta,
+    continues: boolean
+  ): PreparedMemory | null {
+    const port = this.memoryPort;
+    const profile = this.executorProfile(meta.executor);
+    // Only the port may choose native, so a Claude run started without one gets prompt.
+    if (port === null && profile.autoMemory !== true) return null;
+    const prepared =
+      port === null
+        ? PROMPT_ONLY
+        : this.askMemoryPort(port, meta, profile, continues);
+    this.registry.updateMeta(meta.id, { memoryMode: prepared.memory.mode });
+    return prepared;
+  }
+
+  // The port's answer, or prompt mode with no section when it throws.
+  private askMemoryPort(
+    port: MemoryPromptPort,
+    meta: RunMeta,
+    profile: ExecutorProfile,
+    continues: boolean
+  ): PreparedMemory {
+    try {
+      return port.prepare({
+        runId: meta.id,
+        taskId: meta.taskId,
+        lineage: runLineage(meta),
+        runKind: runKind(meta),
+        isClaude: profile.autoMemory === true,
+        dispatchTools: profile.dispatchMcp !== false,
+        continues,
+      });
+    } catch (err) {
+      console.error(
+        `dispatchd: preparing memory for run ${meta.id} failed`,
+        err
+      );
+      return PROMPT_ONLY;
+    }
+  }
+
+  // The start option a prepared run passes; export mode adds the prompt a
+  // prompt-mode restart opens with, which carries the index section instead.
+  private memoryOption(
+    prepared: PreparedMemory | null,
+    fallbackPrompt: (section: string | null) => string | null
+  ): { memory?: ExecutorMemoryOptions } {
+    if (prepared === null) return {};
+    if (prepared.memory.mode !== 'export') return { memory: prepared.memory };
+    const fallback = fallbackPrompt(prepared.indexSection);
+    return {
+      memory:
+        fallback === null
+          ? prepared.memory
+          : { ...prepared.memory, fallbackPrompt: fallback },
+    };
   }
 
   // The repo facts injected into this task's prompt (see orientation.ts): the
@@ -4910,7 +6046,7 @@ export class Orchestrator {
   // cached repo map, and who else is running right now. Collecting reads a
   // handful of small files and this project's own transcripts; a failure
   // anywhere in there costs the section, never the dispatch, because a
-  // throwing promptForTask strands the run in `provisioning`.
+  // throwing taskBrief strands the run in `provisioning`.
   private orientationFor(taskId: string): RepoOrientation | null {
     try {
       return collectOrientation({

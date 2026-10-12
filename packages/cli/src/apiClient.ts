@@ -2,11 +2,15 @@ import type {
   CommandEvidence,
   CreateInput,
   Finding,
+  LabelDefinition,
   LedgerEntry,
+  MilestoneMigrationReport,
   MutationEvidence,
+  Person,
+  TaskComment,
   TaskDoc,
   UpdatePatch,
-} from '@dispatch/core';
+} from '@dispatch-foo/core';
 
 import { CliError } from './context.js';
 
@@ -42,7 +46,8 @@ export interface RunMeta {
   turns?: number;
   sessionId?: string;
   error?: string;
-  /** ActorRef of the human who dispatched this run — see the server's RunMeta. */
+  /** ActorRef of the human the run is for (who dispatched it, or started its
+   *  fan-out) — see the server's RunMeta. */
   dispatchedBy?: string;
   model?: string;
   reviewedAt?: string;
@@ -62,10 +67,6 @@ export interface RunMeta {
   survey?: unknown;
   kind?: 'execute' | 'review' | 'verify';
   claims?: string[];
-  // The approval the run is parked on while `state` is 'awaiting-approval' —
-  // the daemon decorates run reads with it so `dispatch approve` can find the
-  // request id without having watched the run live.
-  pendingApproval?: { requestId: string; toolName: string; input?: unknown };
   // How many sub-agents the run's agent fanned out into and where they
   // stand — mirrors RunMeta.subagents server-side.
   subagents?: {
@@ -75,6 +76,9 @@ export interface RunMeta {
     failed: number;
     stopped: number;
   };
+  // What a live run's agent is doing, in words, and when it said so; absent
+  // before its first step and once terminal — mirrors RunMeta.lastStep.
+  lastStep?: { text: string; at: string };
 }
 
 export interface NormalizedEntry {
@@ -94,7 +98,7 @@ export interface NormalizedEntry {
   // Set on entries a sub-agent made rather than the run's own agent.
   parentToolUseId?: string;
   // `kind: 'agent'` only: one lifecycle event of a spawned sub-agent —
-  // mirrors SubagentEvent in @dispatch/core.
+  // mirrors SubagentEvent in @dispatch-foo/core.
   agent?: {
     id: string;
     phase: 'started' | 'progress' | 'finished';
@@ -103,8 +107,8 @@ export interface NormalizedEntry {
     type?: string;
     summary?: string;
   };
-  // `kind: 'message'` only: this run's human (`user`), another run's
-  // agent_message (`fromLabel`), or this run's own message_user (`toUser`).
+  // `kind: 'message'` only: this run's human (`user`), another agent
+  // (`fromLabel`), or a message this run sent to a human (`toUser`).
   from?: 'user' | 'agent';
   fromLabel?: string;
   toUser?: boolean;
@@ -286,31 +290,61 @@ interface EpicSessionOptions {
 // The subset of packages/server/src/events.ts's ServerEvent union that
 // `--watch` acts on — deliberately partial; any other event is ignored.
 export type ServerEvent =
-  | { type: 'task.changed' }
+  | { type: 'task.changed'; ids?: string[] }
+  | { type: 'comment.changed'; taskId: string; commentIds: string[] }
   | { type: 'hello'; version: string }
   | { type: 'run.changed' }
   | { type: 'run.log'; runId: string; entry: NormalizedEntry }
-  | {
-      type: 'approval.requested';
-      runId: string;
-      requestId: string;
-      toolName: string;
-    }
+  | { type: 'message.new'; message: Message }
   | { type: 'plan.changed'; planId: string }
   | { type: 'epic.changed'; epicId: string }
   | { type: 'epic.paused'; epicId: string; reason: EpicPauseReason };
 
-// Mirrors RunScopeRequest in packages/server/src/orchestrator/scopeRequests.ts:
-// an out-of-fence edit an agent asked for, blocked until someone decides it.
-interface ScopeRequest {
+// Mirrors Message in packages/protocol/src/envelope.ts. A gate is a blocking
+// question whose `data.type` names what answering it decides.
+export interface Message {
   id: string;
-  runId: string;
-  paths: string[];
-  reason: string;
-  requestedAt: string;
-  granted: boolean | null;
-  decisionReason: string | null;
-  decidedAt: string | null;
+  thread: string;
+  replyTo: string | null;
+  from: string;
+  session?: string;
+  to: string[];
+  kind: string;
+  body: string;
+  refs: { type: string; id: string; at?: string }[];
+  data?: unknown;
+  urgent: boolean;
+  blocking: boolean;
+  choices?: string[];
+  choice?: string;
+  wake: 'none' | 'request';
+  createdAt: string;
+}
+
+// Mirrors GET /api/agents/roster's rows (packages/server's listAgentRoster):
+// `remote` names a teammate's agent's machine, null for this one's, and is
+// absent when the daemon has no team.
+interface RosterAgent {
+  address: string;
+  displayName: string;
+  client: string;
+  status: 'pending' | 'approved' | 'revoked';
+  muted: boolean;
+  approvedBy: string | null;
+  createdAt: string;
+  remote?: string | null;
+}
+
+// Mirrors SendResult in packages/protocol/src/engine.ts.
+interface SendResult {
+  message: Message;
+  deliveries: {
+    id: string;
+    recipient: string;
+    runId: string | null;
+    state: string;
+  }[];
+  downgraded: boolean;
 }
 
 /** Where a request goes and which daemon token it presents. */
@@ -383,8 +417,15 @@ async function request<T>(
     );
   }
   if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new CliError(body.error ?? `request failed: ${res.status}`);
+    const body = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      code?: string;
+    };
+    throw new CliError(
+      body.error ?? `request failed: ${res.status}`,
+      1,
+      body.code
+    );
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -422,8 +463,37 @@ export interface TaskApiClient {
   listTasks(query?: TaskListQuery): Promise<TaskDoc[]>;
   readyTasks(): Promise<TaskDoc[]>;
   getTask(id: string): Promise<TaskDoc>;
+  /** A `milestone` names a project or milestone the daemon files the task
+   * under (as `parent`); it 400s when none matches and never stores it. */
   createTask(input: CreateInput): Promise<TaskDoc>;
+  /** `milestone` moves the task the same way `createTask`'s does. */
   updateTask(id: string, patch: UpdatePatch): Promise<TaskDoc>;
+  /** `POST /api/migrations/milestones`: legacy milestones to projects. */
+  migrateMilestones(dryRun: boolean): Promise<MilestoneMigrationReport>;
+  /** `GET /api/people`: the people registry and the caller's own ref. */
+  listPeople(): Promise<{ me: string; people: Person[] }>;
+  /** `GET /api/labels`: the label registry (colors and external links). */
+  listLabels(): Promise<{ labels: LabelDefinition[] }>;
+  /** `PUT /api/labels`: one label's color; `null` clears it. */
+  setLabelColor(
+    name: string,
+    color: string | null
+  ): Promise<{ labels: LabelDefinition[] }>;
+  /** `GET /api/tasks/:id/comments`, oldest first. */
+  listComments(id: string): Promise<TaskComment[]>;
+  /** `POST /api/tasks/:id/comments`, credited to the caller by the server. */
+  addComment(
+    id: string,
+    input: { body: string; parentId?: string | null; runId?: string }
+  ): Promise<TaskComment>;
+  /** Author only (403 otherwise). */
+  updateComment(
+    id: string,
+    commentId: string,
+    patch: { body: string }
+  ): Promise<TaskComment>;
+  /** Author only; removes its replies too, and 409s while others replied. */
+  deleteComment(id: string, commentId: string): Promise<{ removed: string[] }>;
   /**
    * `GET /api/health`, reduced to what doctor reports: `problems` are records
    * the daemon's last cache rebuild could not read (they never appear in
@@ -486,6 +556,35 @@ export function createTaskApiClient(
         ...jsonBody(patch),
         method: 'PATCH',
       }),
+    migrateMilestones: (dryRun) =>
+      request(target, '/api/migrations/milestones', jsonBody({ dryRun })),
+    listPeople: () => request(target, '/api/people'),
+    listLabels: () => request(target, '/api/labels'),
+    setLabelColor: (name, color) =>
+      request(target, '/api/labels', {
+        ...jsonBody({ name, color }),
+        method: 'PUT',
+      }),
+    listComments: (id) =>
+      request(target, `/api/tasks/${encodeURIComponent(id)}/comments`),
+    addComment: (id, input) =>
+      request(
+        target,
+        `/api/tasks/${encodeURIComponent(id)}/comments`,
+        jsonBody(input)
+      ),
+    updateComment: (id, commentId, patch) =>
+      request(
+        target,
+        `/api/tasks/${encodeURIComponent(id)}/comments/${encodeURIComponent(commentId)}`,
+        { ...jsonBody(patch), method: 'PATCH' }
+      ),
+    deleteComment: (id, commentId) =>
+      request(
+        target,
+        `/api/tasks/${encodeURIComponent(id)}/comments/${encodeURIComponent(commentId)}`,
+        { method: 'DELETE' }
+      ),
   };
 }
 
@@ -598,12 +697,6 @@ export interface ApiClient {
   resumeRun(runId: string): Promise<RunMeta>;
   listRuns(): Promise<RunMeta[]>;
   getRun(id: string): Promise<RunDetail>;
-  approveRun(runId: string, requestId: string, allow: boolean): Promise<void>;
-  sendRunMessage(
-    runId: string,
-    text: string,
-    opts?: { resume?: boolean }
-  ): Promise<RunMeta>;
   cancelRun(runId: string): Promise<void>;
   getRunDiff(runId: string): Promise<DiffResult>;
   /** Findings raised against one task. `dispatch share` folds them into a
@@ -616,6 +709,8 @@ export interface ApiClient {
     runId: string,
     action: 'merge' | 'discard' | 'pr'
   ): Promise<RunMeta>;
+  // Replays a locally merged run's squash onto origin when it never got there.
+  publishRun(runId: string): Promise<RunMeta>;
   startPlan(prompt: string, planner?: string): Promise<{ planId: string }>;
   getPlan(planId: string): Promise<PlanRecord>;
   sendPlanMessage(planId: string, text: string): Promise<PlanRecord>;
@@ -633,14 +728,37 @@ export interface ApiClient {
   fetchExecutors(): Promise<ExecutorsResponse>;
   stopEpic(epicId: string): Promise<EpicSession>;
   getEpicProgress(epicId: string): Promise<EpicProgress>;
-  getScopeRequest(runId: string, requestId: string): Promise<ScopeRequest>;
-  // Decide-tier: only a client built on the app token can call this.
-  decideScopeRequest(
-    runId: string,
-    requestId: string,
-    granted: boolean,
-    reason: string
-  ): Promise<ScopeRequest>;
+  // The messaging routes refuse the daemon file's agent token: build the
+  // client on a human's token (the app token) to call these.
+  /** Open blocking questions and gates addressed to a human. */
+  openDecisions(): Promise<{ items: Message[] }>;
+  /** Every registered agent, this machine's and teammates' synced ones. */
+  listAgentRoster(): Promise<{ agents: RosterAgent[] }>;
+  getMessage(id: string): Promise<Message>;
+  /** The answer to a question, or null while it is open. */
+  getAnswer(id: string): Promise<{ answer: Message | null }>;
+  replyToMessage(
+    id: string,
+    input: { body: string; choice?: string }
+  ): Promise<SendResult>;
+  sendMessage(input: {
+    to: string[];
+    kind: string;
+    body: string;
+    wake?: 'none' | 'request';
+  }): Promise<SendResult>;
+  /** GET /api/conversations: flat, participant-scoped talk with `with` (an
+   *  address) or `about` (task:, channel: or doc:), a page oldest first. */
+  getConversation(query: {
+    with?: string;
+    about?: string;
+    before?: string;
+    limit?: number;
+  }): Promise<{ messages: Message[]; next: string | null }>;
+  /** The caller's own mail in the given delivery states. */
+  getMailbox(
+    states: string[]
+  ): Promise<{ items: { delivery: { id: string }; message: Message }[] }>;
   /** Decide-tier: build the client on the app token. */
   issueTeamToken(input: {
     email?: string;
@@ -662,13 +780,301 @@ export interface ApiClient {
   getLicense(): Promise<LicenseStatus>;
   /** Installs a license key (operator tier). */
   installLicense(key: string): Promise<LicenseStatus>;
+  /** Decide-tier: imports ledger lessons into memory and reports count
+   *  parity; `dryRun` reports without writing. */
+  importLedger(
+    dryRun: boolean
+  ): Promise<{ report: { outcome: string }; text: string }>;
+  /** The daemon's own human only: re-runs the import of their Claude notes;
+   *  `from` (absolute) or `none` answers an unconfirmed one. */
+  importClaude(opts: {
+    from?: string;
+    none?: boolean;
+    dryRun?: boolean;
+  }): Promise<{ report: ClaudeImportReport }>;
+  // Memory refuses the agent token, as messaging does: build the client on
+  // the app token or a teammate's token. `ref` is an id or a #handle.
+  listMemory(q: {
+    scope?: string;
+    kind?: string;
+    state?: string;
+    origin?: 'ledger' | 'claude';
+    trust?: 'agent';
+    limit?: number;
+  }): Promise<{ entries: MemoryEntry[] }>;
+  getMemory(
+    ref: string
+  ): Promise<{ entry: MemoryEntry; revisions: unknown[]; recallCount: number }>;
+  saveMemory(input: {
+    scope: string;
+    kind: string;
+    title: string;
+    body: string;
+    projectOnly?: boolean;
+  }): Promise<MemorySaveResult>;
+  retireMemory(ref: string, reason: string): Promise<MemorySaveResult>;
+  undoMemory(ref: string): Promise<MemoryEntry>;
+  confirmMemory(ref: string): Promise<MemoryEntry>;
+  pinMemory(ref: string, pinned: boolean): Promise<MemoryEntry>;
+  promoteMemory(ref: string, scope: string): Promise<MemorySaveResult>;
+  deleteMemory(ref: string): Promise<void>;
+  listMemoryProposals(state?: string): Promise<{ proposals: MemoryProposal[] }>;
+  startMemoryLink(opts: {
+    fresh?: boolean;
+  }): Promise<{ code: string; expiresAt: string } | { identity: string }>;
+  completeMemoryLink(code: string): Promise<{ identity: string }>;
+  // The signed team roster (decide tier to read, operator tier to change):
+  // build the client on the app token.
+  getTeamKeys(): Promise<TeamKeys>;
+  /** The team in one line, with plain-worded problems and their fixes. */
+  getTeamStatus(): Promise<TeamStatus>;
+  /** Founds the team and moves it to the relay (by default) in one step. */
+  startTeam(input: StartTeamInput): Promise<StartedTeam>;
+  /** Lets go of an invite this machine waits on. */
+  leaveTeam(): Promise<RosterAnswer>;
+  foundTeam(name?: string): Promise<
+    {
+      teamId: string;
+      recoveryCode: string;
+      fingerprint: string;
+    } & RosterAnswer
+  >;
+  trustFounder(fingerprint: string): Promise<void>;
+  /** An invite for a handle, or an email (team.yml's handle for it). */
+  inviteToTeam(handleOrEmail: string): Promise<TeamInvite>;
+  /** Joins with a team link (or an older invite code). */
+  joinTeam(code: string, opts?: { confirmRepo?: boolean }): Promise<JoinedTeam>;
+  recoverTeam(code: string): Promise<RosterAnswer>;
+  newRecoveryCode(): Promise<{ recoveryCode: string }>;
+  shareTeamLicense(): Promise<void>;
+  admitReplica(replica: string, body: AdmitBody): Promise<RosterAnswer>;
+  revokeReplica(replica: string, reason?: string): Promise<RosterAnswer>;
+  setReplicaRole(
+    replica: string,
+    role: 'member' | 'admin'
+  ): Promise<RosterAnswer>;
+  setReplicaHosts(replica: string, hosts: string[]): Promise<RosterAnswer>;
+  closeLegacy(): Promise<void>;
+  /** Takes an op no build reads out of every fold, when this admin may. */
+  dismissRosterOp(
+    replica: string,
+    seq: number,
+    hash: string
+  ): Promise<RosterAnswer>;
+  /** Lets go of the invite this machine joined with. */
+  abandonInvite(): Promise<void>;
+  /** Acknowledges a race, cut, merge or route note; it is not raised again. */
+  ackProblem(subject: string): Promise<void>;
+  /** An admin binds a run two machines claim first to one of them. */
+  resolveRunConflict(run: string, replica: string): Promise<RosterAnswer>;
+  /** Switches the team between git and a relay (operator tier); a relay
+   *  needs `confirmed: true` after its disclosure was shown, and
+   *  registers the team at the relay first. */
+  switchTransport(body: {
+    kind: 'git' | 'relay';
+    url?: string;
+    confirmed?: boolean;
+    /** Sent only in the relay registration the switch makes; never kept. */
+    registrationToken?: string;
+  }): Promise<RosterAnswer>;
 }
 
-/** Mirrors SyncStatus in packages/server/src/team/boardSync/service.ts.
+/** The fields of @dispatch/memory's entry view the CLI prints. */
+export interface MemoryEntry {
+  id: string;
+  handle: string;
+  kind: string;
+  scope: string;
+  state: string;
+  title: string;
+  body: string;
+  trust: string;
+  author: string;
+  rev: number;
+}
+
+/** Mirrors ClaudeImportReport in packages/server/src/memory/claudeImport.ts. */
+export interface ClaudeImportReport {
+  state: 'complete' | 'failed' | 'unconfirmed';
+  source: string | null;
+  imported: number;
+  updated: number;
+  unchanged: number;
+  duplicates: number;
+  tombstoned: number;
+  problems: string[];
+  candidates: string[];
+}
+
+/** Mirrors SaveResult in packages/memory/src/engine.ts. */
+export type MemorySaveResult =
+  | { status: 'active' | 'retired'; id: string; handle: string }
+  | { status: 'proposed'; proposal: string; gate: string | null };
+
+/** The fields of @dispatch/memory's proposal the CLI prints. */
+export interface MemoryProposal {
+  id: string;
+  state: string;
+  action: string;
+  scope: string;
+  target: string | null;
+  content: { kind: string; title: string } | null;
+}
+
+/** What `keys admit` sends. */
+interface AdmitBody {
+  fingerprint: string;
+  handle?: string;
+  role?: 'member' | 'admin';
+  hosts?: string[];
+  observer?: boolean;
+}
+
+/** Mirrors TeamStatus in packages/server/src/team/federation/onboarding.ts. */
+export interface TeamStatus {
+  state: 'off' | 'none' | 'joining' | 'member';
+  line: string;
+  team: { id: string; name: string } | null;
+  role: 'admin' | 'member' | 'observer' | null;
+  seats: { used: number; total: number } | null;
+  sync: {
+    kind: 'git' | 'relay';
+    where: string | null;
+    lastSyncAt: string | null;
+  } | null;
+  teammates: {
+    handle: string;
+    device: string;
+    role: 'admin' | 'member' | 'observer';
+    you: boolean;
+    check: string | null;
+  }[];
+  check: string | null;
+  problems: {
+    message: string;
+    fix: string | null;
+  }[] /** True when the token's tier withheld teammates, checks and problems. */;
+  reduced?: true;
+}
+
+/** What `team start` sends; see POST /api/team/start. */
+interface StartTeamInput {
+  name?: string;
+  git?: boolean;
+  /** Where the team's board is kept: one of this project's remotes, or a
+   *  repository of its own. */
+  remote?: string;
+  repo?: string;
+  relayUrl?: string;
+  confirmed?: boolean;
+  registrationToken?: string;
+}
+
+/** A started team; `notice` says why it stayed on git, when it did. */
+interface StartedTeam extends RosterAnswer {
+  teamId: string;
+  name: string;
+  recoveryCode: string;
+  fingerprint: string;
+  transport: { kind: 'git' | 'relay'; url?: string };
+  notice: string | null;
+}
+
+/** An invite: one link, its URL form, and the older code form. */
+export interface TeamInvite extends RosterAnswer {
+  code: string;
+  expires: string;
+  handle: string;
+  link?: string;
+  url?: string;
+}
+
+/** What joining answers: the team, who invited, and the optional check. */
+export interface JoinedTeam extends RosterAnswer {
+  team: { id: string; name: string | null };
+  by?: string;
+  check?: string;
+}
+
+/** A roster change's answer: a warning when it could not pull first, and
+ *  pending while its sync is still running. */
+export interface RosterAnswer {
+  warning?: string;
+  pending?: boolean;
+  /** The roster already showed this change; nothing new was signed. */
+  already?: boolean;
+}
+
+/** Mirrors TeamKeys in packages/server/src/team/federation/teamKeys.ts. */
+export interface TeamKeys {
+  machine: {
+    replica: string;
+    handle: string;
+    device: string;
+    fingerprint: string;
+  };
+  team: {
+    id: string;
+    name: string;
+    founder: { replica: string; handle: string; fingerprint: string };
+  } | null;
+  foundings: { replica: string; fingerprint: string }[];
+  roster: {
+    replica: string;
+    handle: string;
+    device: string;
+    build: string;
+    role: 'member' | 'admin';
+    rank: number | null;
+    hosts: string[];
+    observer: boolean;
+    recovered: boolean;
+    fingerprint: string;
+    lastSeen: string | null;
+    skewMs: number | null;
+  }[];
+  waiting: {
+    replica: string;
+    handle: string;
+    device: string;
+    fingerprint: string;
+    invitedBy: string | null;
+  }[];
+  invites: { handle: string; expires: string; by: string }[];
+  legacy: { until: string | null; closed: boolean; olderBuilds: string[] };
+  transport: {
+    kind: 'git' | 'relay';
+    lastExchangeAt: string | null;
+    lastError: string | null;
+    unpublished: number;
+    sizeBytes: number | null;
+    acks: Record<string, string>;
+    /** The relay's URL while the team syncs over one. */
+    url?: string;
+  };
+  license: {
+    seats: number;
+    org: string | null;
+    sharedBy: string | null;
+  } | null;
+  pruningBlockers: {
+    replica: string;
+    handle: string;
+    lastAck: string | null;
+  }[];
+  originWarning: string | null;
+  relayDisclosure: string;
+  warnings: string[];
+  problems: { subject: string; message: string; at: string }[];
+  /** The roster op a pause waits on, for a dismiss (FW-R8/R9); else null. */
+  pause: { replica: string; seq: number; hash: string } | null;
+}
+
+/** Mirrors FederationStatus in packages/server/src/team/federation/service.ts.
  *  `reason` (BoardSyncOffReason in packages/server/src/api.ts) is absent on
  *  daemons older than it. */
 export type SyncStatus =
-  | { enabled: false; reason?: 'files' | 'off' | 'not-started' }
+  | { enabled: false; reason?: 'files' | 'off' | 'not-started' | 'no-place' }
   | {
       enabled: true;
       replica: string;
@@ -682,6 +1088,16 @@ export type SyncStatus =
       people: number;
       seats: number;
       paused: string | null;
+      // From a daemon with federation (FederationStatus); absent on older ones.
+      founded?: boolean;
+      teamId?: string | null;
+      legacyUntil?: string | null;
+      transport?: 'git' | 'relay';
+      federationProblems?: { subject: string; message: string; at: string }[];
+      /** On POST /now: the pass outran the daemon's wait and carries on. */
+      running?: boolean;
+      /** config.yml names other sync settings than the running ones. */
+      restartRequired?: string;
     };
 
 /** Mirrors licenseView in packages/server/src/team/routes.ts. */
@@ -716,11 +1132,11 @@ interface TeamTokenHolder {
   expiresAt: string | null;
   lastUsedAt: string | null;
   expired: boolean;
+  unusable?: boolean;
 }
 
-// `token` is the credential every call presents — the agent token from the
-// daemon file for ordinary commands, and only for `dispatch scope decide` an
-// app token the user supplied explicitly.
+// `token` is the credential every call presents: the agent token from the
+// daemon file, or an app token the user supplied for gates and messages.
 export function createApiClient(baseUrl: string, token: string): ApiClient {
   const target: ApiTarget = { baseUrl, token };
   return {
@@ -736,14 +1152,6 @@ export function createApiClient(baseUrl: string, token: string): ApiClient {
       request(target, `/api/runs/${runId}/resume`, { method: 'POST' }),
     listRuns: () => request(target, '/api/runs'),
     getRun: (id) => request(target, `/api/runs/${id}`),
-    approveRun: (runId, requestId, allow) =>
-      request(target, `/api/runs/${runId}/approval`, {
-        ...jsonBody({ requestId, allow }),
-      }),
-    sendRunMessage: (runId, text, opts = {}) =>
-      request(target, `/api/runs/${runId}/message`, {
-        ...jsonBody({ text, resume: opts.resume }),
-      }),
     cancelRun: (runId) =>
       request(target, `/api/runs/${runId}/cancel`, { ...jsonBody({}) }),
     getRunDiff: (runId) => request(target, `/api/runs/${runId}/diff`),
@@ -754,6 +1162,8 @@ export function createApiClient(baseUrl: string, token: string): ApiClient {
       request(target, `/api/runs/${runId}/review`, {
         ...jsonBody({ action }),
       }),
+    publishRun: (runId) =>
+      request(target, `/api/runs/${runId}/publish`, { method: 'POST' }),
     startPlan: (prompt, planner) =>
       request(target, '/api/plan', {
         ...jsonBody(planner !== undefined ? { prompt, planner } : { prompt }),
@@ -833,13 +1243,31 @@ export function createApiClient(baseUrl: string, token: string): ApiClient {
       request(target, `/api/browser/${encodeURIComponent(id)}/pick`),
     getEpicProgress: (epicId) =>
       request(target, `/api/epics/${epicId}/progress`),
-    getScopeRequest: (runId, requestId) =>
-      request(target, `/api/runs/${runId}/scope-requests/${requestId}`),
-    decideScopeRequest: (runId, requestId, granted, reason) =>
+    openDecisions: () => request(target, '/api/decisions/open'),
+    listAgentRoster: () => request(target, '/api/agents/roster'),
+    getMessage: (id) =>
+      request(target, `/api/messages/${encodeURIComponent(id)}`),
+    getAnswer: (id) =>
+      request(target, `/api/messages/${encodeURIComponent(id)}/answer`),
+    replyToMessage: (id, input) =>
       request(
         target,
-        `/api/runs/${runId}/scope-requests/${requestId}/decide`,
-        jsonBody({ granted, reason })
+        `/api/messages/${encodeURIComponent(id)}/reply`,
+        jsonBody(input)
+      ),
+    sendMessage: (input) => request(target, '/api/messages', jsonBody(input)),
+    getConversation: (query) => {
+      const params = new URLSearchParams();
+      if (query.with !== undefined) params.set('with', query.with);
+      if (query.about !== undefined) params.set('about', query.about);
+      if (query.before !== undefined) params.set('before', query.before);
+      if (query.limit !== undefined) params.set('limit', String(query.limit));
+      return request(target, `/api/conversations?${params.toString()}`);
+    },
+    getMailbox: (states) =>
+      request(
+        target,
+        `/api/mailbox?${new URLSearchParams({ state: states.join(',') }).toString()}`
       ),
     issueTeamToken: (input) =>
       request(target, '/api/team/tokens', jsonBody(input)),
@@ -852,10 +1280,456 @@ export function createApiClient(baseUrl: string, token: string): ApiClient {
         ...jsonBody({ key }),
         method: 'PUT',
       }),
+    getTeamKeys: () => request(target, '/api/team/keys'),
+    getTeamStatus: () => request(target, '/api/team/status'),
+    startTeam: (input) =>
+      afterSharingRestart(target, () =>
+        request(target, '/api/team/start', jsonBody(input))
+      ),
+    leaveTeam: () => request(target, '/api/team/leave', jsonBody({})),
+    foundTeam: (name) =>
+      request(
+        target,
+        '/api/team/found',
+        jsonBody(name === undefined ? {} : { name })
+      ),
+    trustFounder: async (fingerprint) => {
+      await request(target, '/api/team/trust', jsonBody({ fingerprint }));
+    },
+    inviteToTeam: (who) =>
+      request(
+        target,
+        '/api/team/invite',
+        jsonBody(who.includes('@') ? { email: who } : { handle: who })
+      ),
+    joinTeam: (code, opts) =>
+      afterSharingRestart(target, () =>
+        request(
+          target,
+          '/api/team/join',
+          jsonBody({
+            code,
+            ...(opts?.confirmRepo === true ? { confirmRepo: true } : {}),
+          })
+        )
+      ),
+    recoverTeam: (code) =>
+      request(target, '/api/team/recover', jsonBody({ code })),
+    newRecoveryCode: () =>
+      request(target, '/api/team/recovery-key', jsonBody({})),
+    shareTeamLicense: async () => {
+      await request(target, '/api/team/license', jsonBody({}));
+    },
+    admitReplica: (replica, body) =>
+      request(target, rosterPath(replica, 'admit'), jsonBody(body)),
+    revokeReplica: (replica, reason) =>
+      request(
+        target,
+        rosterPath(replica, 'revoke'),
+        jsonBody(reason === undefined ? {} : { reason })
+      ),
+    setReplicaRole: (replica, role) =>
+      request(target, rosterPath(replica, 'role'), jsonBody({ role })),
+    setReplicaHosts: (replica, hosts) =>
+      request(target, rosterPath(replica, 'hosts'), jsonBody({ hosts })),
+    closeLegacy: async () => {
+      await request(target, '/api/team/close-legacy', jsonBody({}));
+    },
+    dismissRosterOp: (replica, seq, hash) =>
+      request(target, '/api/team/dismiss', jsonBody({ replica, seq, hash })),
+    abandonInvite: async () => {
+      await request(target, '/api/team/abandon-invite', jsonBody({}));
+    },
+    ackProblem: async (subject) => {
+      await request(target, '/api/team/problems/ack', jsonBody({ subject }));
+    },
+    resolveRunConflict: (run, replica) =>
+      request(
+        target,
+        `/api/team/runs/${encodeURIComponent(run)}/resolve`,
+        jsonBody({ replica })
+      ),
+    switchTransport: (body) =>
+      request(target, '/api/team/transport', jsonBody(body)),
     revokeTeamToken: async (handle) => {
       await request(target, `/api/team/tokens/${encodeURIComponent(handle)}`, {
         method: 'DELETE',
       });
     },
+    importLedger: (dryRun) =>
+      request(target, `/api/memory/import/ledger${dryRun ? '?dryRun=1' : ''}`, {
+        method: 'POST',
+      }),
+    importClaude: (opts) =>
+      request(
+        target,
+        `/api/memory/import/claude${memoryQuery({
+          from: opts.from,
+          none: opts.none === true ? 1 : undefined,
+          dryRun: opts.dryRun === true ? 1 : undefined,
+        })}`,
+        { method: 'POST' }
+      ),
+    listMemory: (q) => request(target, `/api/memory${memoryQuery(q)}`),
+    getMemory: (ref) => request(target, memoryPath(ref)),
+    saveMemory: (input) => request(target, '/api/memory', jsonBody(input)),
+    retireMemory: (ref, reason) =>
+      request(target, `${memoryPath(ref)}/retire`, jsonBody({ reason })),
+    undoMemory: (ref) =>
+      request(target, `${memoryPath(ref)}/undo`, { method: 'POST' }),
+    confirmMemory: (ref) =>
+      request(target, `${memoryPath(ref)}/confirm`, { method: 'POST' }),
+    pinMemory: (ref, pinned) =>
+      request(target, `${memoryPath(ref)}/${pinned ? 'pin' : 'unpin'}`, {
+        method: 'POST',
+      }),
+    promoteMemory: (ref, scope) =>
+      request(target, `${memoryPath(ref)}/promote`, jsonBody({ scope })),
+    deleteMemory: (ref) =>
+      request(target, memoryPath(ref), { method: 'DELETE' }),
+    listMemoryProposals: (state) =>
+      request(target, `/api/memory/proposals${memoryQuery({ state })}`),
+    startMemoryLink: (opts) =>
+      request(
+        target,
+        '/api/memory/link',
+        jsonBody(opts.fresh === true ? { fresh: true } : {})
+      ),
+    completeMemoryLink: (code) =>
+      request(target, `/api/memory/link/${encodeURIComponent(code)}`, {
+        method: 'POST',
+      }),
   };
+}
+
+// An entry's route; a `#handle` travels as %23 so it is not read as a fragment.
+function memoryPath(ref: string): string {
+  return `/api/memory/${encodeURIComponent(ref)}`;
+}
+
+// `?k=v&…` from the defined values in order; '' when none is defined.
+function memoryQuery(
+  params: Record<string, string | number | undefined>
+): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params))
+    if (value !== undefined) search.set(key, String(value));
+  return search.size > 0 ? `?${search.toString()}` : '';
+}
+
+// A roster action on one replica's key.
+function rosterPath(replica: string, action: string): string {
+  return `/api/team/keys/${encodeURIComponent(replica)}/${action}`;
+}
+
+// The A2A control surface. Mirrors packages/server/src/a2a/routes.ts and its
+// settings.ts; keep the two in step.
+interface A2AListenerSettings {
+  enabled: boolean;
+  host: string;
+  port: number | null;
+  publicUrl: string | null;
+  tls: { certPath: string; keyPath: string } | null;
+  trustForwardedFor: boolean;
+  // Left out, the daemon keeps its current switch.
+  standalone?: boolean;
+}
+
+export interface A2AListenerStatus {
+  enabled: boolean;
+  listening: boolean;
+  url: string | null;
+  error: string | null;
+  warnings: string[];
+  legacyClients: string[];
+}
+
+export interface A2AClientSummary {
+  address: string;
+  name: string;
+  recipients: string[];
+  status: 'pending' | 'approved' | 'revoked';
+  createdBy: string;
+  createdAt: string;
+}
+
+interface A2ATaskSummary {
+  id: string;
+  client: string;
+  contextId: string;
+  skill: 'ask' | 'handoff';
+  state: string;
+  statusAt: string;
+  dispatchTask: string | null;
+}
+
+// An outbound peer as /api/a2a/peers shows it; never its credential.
+// Mirrors packages/server/src/a2a/peers.ts PeerSummary.
+export interface A2APeerSummary {
+  alias: string;
+  cardUrl: string;
+  interfaceUrl: string;
+  binding: 'HTTP+JSON' | 'JSONRPC';
+  status: 'active' | 'disabled' | 'auth-failed';
+  name: string;
+  description: string;
+  skills: { id: string; name: string; description: string }[];
+  streaming: boolean;
+  addedBy: string;
+  addedTier: 'decide' | 'operator';
+  fetchedAt: string;
+  createdAt: string;
+  auth?: 'bearer' | 'signature' | 'link';
+  fingerprint?: string | null;
+}
+
+/** A pairing as /api/a2a/pairings lists it; never its secret. */
+interface A2APairingSummary {
+  id: string;
+  role: 'offer' | 'accept' | 'upgrade';
+  alias: string;
+  state: string;
+  createdBy: string;
+  createdAt: string;
+  expiresAt: string;
+  completedAt: string | null;
+  fingerprint: string | null;
+  sas: string | null;
+}
+
+interface A2AKeys {
+  current: { fingerprint: string; thumbprint?: string };
+  next: { fingerprint: string; since: string; until: string } | null;
+}
+
+interface A2ARelayStatus {
+  enabled: boolean;
+  url: string | null;
+  connected: boolean;
+  tenantUrl: string | null;
+  error: string | null;
+}
+
+interface A2ARotation {
+  fingerprint: string;
+  told: string[];
+  untold: string[];
+  mustRepair: string[];
+  overlapUntil: string | null;
+}
+
+// Separate from ApiClient so its test fakes need not grow the A2A routes.
+export interface A2AApiClient {
+  listenerStatus(): Promise<A2AListenerStatus>;
+  setListener(settings: A2AListenerSettings): Promise<A2AListenerStatus>;
+  disableListener(): Promise<A2AListenerStatus>;
+  card(): Promise<unknown>;
+  clients(): Promise<{ clients: A2AClientSummary[] }>;
+  addClient(input: {
+    name: string;
+    to?: string[];
+    approve?: boolean;
+  }): Promise<{ address: string; token: string; status: string }>;
+  rotateClient(name: string): Promise<{ token: string }>;
+  revokeAgent(address: string): Promise<unknown>;
+  tasks(client?: string): Promise<{ tasks: A2ATaskSummary[] }>;
+  declineTask(id: string, reason?: string): Promise<unknown>;
+  peers(): Promise<{ peers: A2APeerSummary[] }>;
+  addPeer(input: {
+    alias: string;
+    cardUrl: string;
+    token?: string;
+    apiKeyHeader?: string;
+    allowHttp?: boolean;
+    allowOrigin?: boolean;
+  }): Promise<A2APeerSummary>;
+  refreshPeer(alias: string): Promise<A2APeerSummary>;
+  setPeerEnabled(
+    alias: string,
+    enabled: boolean,
+    token?: string
+  ): Promise<A2APeerSummary>;
+  removePeer(alias: string): Promise<void>;
+  hosts(): Promise<{ standalone: boolean; hosts: A2AHostSummary[] }>;
+  addHost(
+    name: string,
+    publicUrl: string
+  ): Promise<{ id: string; name: string; publicUrl: string; token: string }>;
+  removeHost(id: string): Promise<void>;
+  setStandalone(enabled: boolean): Promise<{ standalone: boolean }>;
+  createPairing(input: {
+    alias: string;
+    ttlMin?: number;
+    link?: { remote: string };
+  }): Promise<{
+    id: string;
+    code: string;
+    fingerprint: string;
+    expiresAt: string;
+  }>;
+  acceptPairing(input: {
+    code: string;
+    alias: string;
+  }): Promise<{ alias: string; sas: string; fingerprint: string }>;
+  pairings(): Promise<{ pairings: A2APairingSummary[] }>;
+  cancelPairing(id: string): Promise<void>;
+  upgradePeer(
+    alias: string,
+    confirmFingerprint: string,
+    client?: string
+  ): Promise<{ state: 'pending'; id: string; fingerprint: string }>;
+  keys(): Promise<A2AKeys>;
+  relayStatus(): Promise<A2ARelayStatus>;
+  setRelay(settings: {
+    enabled: boolean;
+    url: string;
+  }): Promise<A2ARelayStatus>;
+  disableRelay(): Promise<A2ARelayStatus>;
+  rotateKey(compromised: boolean): Promise<A2ARotation>;
+}
+
+// A standalone host as /api/a2a/hosts lists it; never its token or hash.
+interface A2AHostSummary {
+  id: string;
+  name: string;
+  publicUrl: string;
+  createdBy: string;
+  createdAt: string;
+  revokedAt: string | null;
+}
+
+export function createA2AApiClient(
+  baseUrl: string,
+  token: string
+): A2AApiClient {
+  const target: ApiTarget = { baseUrl, token };
+  return {
+    listenerStatus: () => request(target, '/api/a2a/listener'),
+    setListener: (settings) =>
+      request(target, '/api/a2a/listener', {
+        ...jsonBody(settings),
+        method: 'PUT',
+      }),
+    disableListener: () =>
+      request(target, '/api/a2a/listener', { method: 'DELETE' }),
+    card: () => request(target, '/api/a2a/card'),
+    clients: () => request(target, '/api/a2a/clients'),
+    addClient: (input) => request(target, '/api/a2a/clients', jsonBody(input)),
+    rotateClient: (name) =>
+      request(target, `/api/a2a/clients/${encodeURIComponent(name)}/rotate`, {
+        method: 'POST',
+      }),
+    revokeAgent: (address) =>
+      request(target, `/api/agents/${encodeURIComponent(address)}/revoke`, {
+        method: 'POST',
+      }),
+    tasks: (client) =>
+      request(
+        target,
+        client === undefined
+          ? '/api/a2a/tasks'
+          : `/api/a2a/tasks?${new URLSearchParams({ client }).toString()}`
+      ),
+    declineTask: (id, reason) =>
+      request(
+        target,
+        `/api/a2a/tasks/${encodeURIComponent(id)}/decline`,
+        jsonBody(reason === undefined ? {} : { reason })
+      ),
+    peers: () => request(target, '/api/a2a/peers'),
+    addPeer: (input) => request(target, '/api/a2a/peers', jsonBody(input)),
+    refreshPeer: (alias) =>
+      request(target, `/api/a2a/peers/${encodeURIComponent(alias)}/refresh`, {
+        method: 'POST',
+      }),
+    setPeerEnabled: (alias, enabled, token) =>
+      request(
+        target,
+        `/api/a2a/peers/${encodeURIComponent(alias)}/${enabled ? 'enable' : 'disable'}`,
+        jsonBody(token === undefined ? {} : { token })
+      ),
+    removePeer: (alias) =>
+      request(target, `/api/a2a/peers/${encodeURIComponent(alias)}`, {
+        method: 'DELETE',
+      }),
+    hosts: () => request(target, '/api/a2a/hosts'),
+    addHost: (name, publicUrl) =>
+      request(target, '/api/a2a/hosts', jsonBody({ name, publicUrl })),
+    removeHost: (id) =>
+      request(target, `/api/a2a/hosts/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      }),
+    setStandalone: (enabled) =>
+      request(target, '/api/a2a/listener/standalone', {
+        ...jsonBody({ enabled }),
+        method: 'PUT',
+      }),
+    createPairing: (input) =>
+      request(target, '/api/a2a/pairings', jsonBody(input)),
+    acceptPairing: (input) =>
+      request(target, '/api/a2a/pairings/accept', jsonBody(input)),
+    pairings: () => request(target, '/api/a2a/pairings'),
+    cancelPairing: (id) =>
+      request(target, `/api/a2a/pairings/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      }),
+    upgradePeer: (alias, confirmFingerprint, client) =>
+      request(
+        target,
+        `/api/a2a/peers/${encodeURIComponent(alias)}/upgrade`,
+        jsonBody({
+          confirmFingerprint,
+          ...(client === undefined ? {} : { client }),
+        })
+      ),
+    keys: () => request(target, '/api/a2a/keys'),
+    relayStatus: () => request(target, '/api/a2a/relay'),
+    setRelay: (settings) =>
+      request(target, '/api/a2a/relay', {
+        ...jsonBody(settings),
+        method: 'PUT',
+      }),
+    disableRelay: () => request(target, '/api/a2a/relay', { method: 'DELETE' }),
+    rotateKey: (compromised) =>
+      request(
+        target,
+        '/api/a2a/keys/rotate',
+        jsonBody(compromised ? { compromised: true } : {})
+      ),
+  };
+}
+
+// How long a team action waits for the daemon to come back with board sync on.
+const SHARING_RESTART_WAIT_MS = 90_000;
+
+/**
+ * Team start and join on a daemon with board sync off, or syncing somewhere
+ * other than the team: it turns sync on (or moves it), answers `restarting`,
+ * and comes back on the same port with the same tokens. This waits for sync
+ * to be on and sends the same request again, for as long as the daemon still
+ * answers `restarting`, so it stays one action for the person.
+ */
+async function afterSharingRestart<T>(
+  target: ApiTarget,
+  send: () => Promise<T>
+): Promise<T> {
+  let answer = await send();
+  const until = Date.now() + SHARING_RESTART_WAIT_MS;
+  while ((answer as { code?: unknown }).code === 'restarting') {
+    if (Date.now() >= until)
+      throw new CliError(
+        'Turned on team sync, but Dispatch did not come back within 90s. Check it is running, then try again.'
+      );
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    try {
+      const sync = await request<{ enabled?: boolean }>(
+        target,
+        '/api/board-sync'
+      );
+      if (sync.enabled === true) answer = await send();
+    } catch {
+      // Down while it restarts; ask again.
+    }
+  }
+  return answer;
 }

@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -30,6 +31,29 @@ describe('TaskStore.init', () => {
     expect(readFileSync(join(root, '.dispatch/config.yml'), 'utf8')).toContain(
       'autoCommit: true'
     );
+  });
+
+  it('leaves an existing config.yml byte-for-byte alone', () => {
+    const cfg = join(root, '.dispatch/config.yml');
+    mkdirSync(join(root, '.dispatch'), { recursive: true });
+    const custom = 'statuses: [Backlog, Todo, In Progress, Done]\n';
+    writeFileSync(cfg, custom);
+    TaskStore.init(root);
+    expect(readFileSync(cfg, 'utf8')).toBe(custom);
+  });
+
+  // A board with no config.yml keeps the statuses its tasks use rather than
+  // being handed defaults that match none of them.
+  it("writes a starter config carrying an existing board's custom statuses", () => {
+    const store = TaskStore.init(root);
+    store.create({ title: 'One', status: 'Todo' });
+    store.create({ title: 'Two', status: 'In Progress' });
+    rmSync(join(root, '.dispatch/config.yml'));
+    TaskStore.init(root);
+    const config = readFileSync(join(root, '.dispatch/config.yml'), 'utf8');
+    expect(config).toContain('"Todo"');
+    expect(config).toContain('"In Progress"');
+    expect(config).toContain('"ready"');
   });
 });
 
@@ -92,7 +116,58 @@ describe('taskFilePath id-prefix guard', () => {
   });
 });
 
+describe('file index', () => {
+  it("finds another process's added, renamed and deleted files", () => {
+    const store = TaskStore.init(root);
+    const kept = store.create({ title: 'Kept' });
+    const renamed = store.create({ title: 'Old name' });
+    const deleted = store.create({ title: 'Gone' });
+    expect(store.get(kept.meta.id)?.meta.title).toBe('Kept');
+
+    // Behind the store's back, the way a git checkout or a hand edit would.
+    const other = new TaskStore(root);
+    const added = other.create({ title: 'Added elsewhere' });
+    const oldPath = store.taskFilePath(renamed.meta.id)!;
+    writeFileSync(
+      join(store.tasksDir, `${renamed.meta.id}-new-name.md`),
+      readFileSync(oldPath, 'utf8')
+    );
+    rmSync(oldPath);
+    rmSync(store.taskFilePath(deleted.meta.id)!);
+
+    expect(store.get(added.meta.id)?.meta.title).toBe('Added elsewhere');
+    expect(store.taskFilePath(renamed.meta.id)).toBe(
+      join(store.tasksDir, `${renamed.meta.id}-new-name.md`)
+    );
+    expect(store.get(deleted.meta.id)).toBeNull();
+    expect(store.remove(deleted.meta.id)).toBe(false);
+  });
+
+  it('resolves a bare <id>.md file', () => {
+    const store = TaskStore.init(root);
+    const doc = store.create({ title: 'Bare' });
+    const path = store.taskFilePath(doc.meta.id)!;
+    writeFileSync(
+      join(store.tasksDir, `${doc.meta.id}.md`),
+      readFileSync(path, 'utf8')
+    );
+    rmSync(path);
+    expect(new TaskStore(root).get(doc.meta.id)?.meta.title).toBe('Bare');
+  });
+});
+
 describe('list', () => {
+  it('breaks a tie on created by id, in code-unit order', () => {
+    const store = TaskStore.init(root);
+    const now = '2026-07-13T01:00:00Z';
+    const ids = Array.from(
+      { length: 12 },
+      () => store.create({ title: 'Same instant' }, now).meta.id
+    );
+    const sorted = [...ids].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    expect(store.list().map((t) => t.meta.id)).toEqual(sorted);
+  });
+
   it('filters by status, kind, parent and sorts by created', () => {
     const store = TaskStore.init(root);
     const epic = store.create(

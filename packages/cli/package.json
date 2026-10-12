@@ -1,6 +1,6 @@
 {
   "name": "@dispatch/cli",
-  "version": "0.35.2",
+  "version": "0.44.1",
   "private": true,
   "license": "MIT",
   "bin": {
@@ -14,8 +14,9 @@
     "prepublishOnly": "moon run cli:prepublish"
   },
   "dependencies": {
-    "@dispatch/core": "workspace:*",
-    "@dispatch/mcp": "workspace:*",
+    "@dispatch-foo/a2a": "workspace:*",
+    "@dispatch-foo/core": "workspace:*",
+    "@dispatch-foo/mcp": "workspace:*",
     "commander": "catalog:"
   },
   "devDependencies": {

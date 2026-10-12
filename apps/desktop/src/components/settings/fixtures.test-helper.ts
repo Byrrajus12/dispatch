@@ -1,12 +1,14 @@
-import type { DispatchConfig } from '@dispatch/core/browser';
+import type { DispatchConfig } from '@dispatch-foo/core/browser';
 import {
   DEFAULT_CARTO,
   DEFAULT_FIX_LOOP,
   DEFAULT_LINEAR,
+  DEFAULT_MEMORY,
+  DEFAULT_MESSAGING,
   DEFAULT_MODELS,
   DEFAULT_NOTIFICATIONS,
   DEFAULT_REPO_DIGEST,
-} from '@dispatch/core/browser';
+} from '@dispatch-foo/core/browser';
 
 import type { DispatchProjectData } from '../../hooks/useDispatchProject';
 
@@ -36,6 +38,31 @@ export const testConfig: DispatchConfig = {
   carto: DEFAULT_CARTO,
   repoDigest: DEFAULT_REPO_DIGEST,
   notifications: DEFAULT_NOTIFICATIONS,
+  messaging: DEFAULT_MESSAGING,
+  memory: DEFAULT_MEMORY,
+};
+
+/** A Linear team's workflow mirrored into config: none of these names is a built-in,
+ *  so a surface still reading the built-in model gets every one of them wrong. */
+export const linearWorkflowConfig: DispatchConfig = {
+  ...testConfig,
+  statuses: ['Backlog', 'Todo', 'In Progress', 'QA', 'Done', 'Canceled'],
+  statusDefinitions: [
+    { name: 'Backlog', type: 'backlog', color: null },
+    { name: 'Todo', type: 'unstarted', color: null },
+    { name: 'In Progress', type: 'started', color: null },
+    { name: 'QA', type: 'started', color: null },
+    { name: 'Done', type: 'completed', color: null },
+    { name: 'Canceled', type: 'canceled', color: null },
+  ],
+  statusRoles: {
+    ready: 'Todo',
+    dispatched: 'In Progress',
+    review: 'QA',
+    landing: null,
+    landed: 'Done',
+    dropped: 'Canceled',
+  },
 };
 
 export const testProject = { path: '/tmp/demo', name: 'demo' };
@@ -61,15 +88,22 @@ export function dataWith(
     // passes `myTier`, the way it does before a connection exists.
     myTier: null,
     attachedWithoutAppToken: false,
+    takeover: null,
+    whoamiError: null,
+    retryWhoami: () => {},
     tasks: [],
     runs: [],
+    me: null,
+    ownerCredential: false,
+    // No messaging: Memory's lessons browser stays a one-line explanation.
+    messageAccess: { canDecide: false, canMessage: false, explanation: null },
     linearStatus: {
       enabled: false,
       connected,
       keySource,
       teamId: null,
       direction: 'both',
-      intervalSec: 300,
+      intervalSec: 30,
       statusMap: {},
       cursor: null,
       bootstrappedAt: null,
@@ -77,13 +111,19 @@ export function dataWith(
       lastError: null,
       lastSummary: null,
       syncing: false,
+      conflicts: { total: 0, recent: [] },
+      progress: null,
+      webhook: {
+        state: 'polling',
+        url: null,
+        lastDeliveryAt: null,
+        error: null,
+        pollSec: 30,
+      },
     },
     linearTeams: [],
     linearTeamsError: null,
     refetchLinearTeams: () => {},
-    linearStates: [],
-    linearStatesError: null,
-    refetchLinearStates: () => {},
     linearLinks: {},
     handleUpdateConfig: async () => {},
     handleConnectLinear: () =>

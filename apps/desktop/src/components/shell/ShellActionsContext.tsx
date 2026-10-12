@@ -1,3 +1,4 @@
+import type { TaskKind } from '@dispatch-foo/core/browser';
 import { createContext, useContext } from 'react';
 
 import type {
@@ -11,8 +12,10 @@ import type {
  * task creator. Every field is optional; the creator defaults the rest. */
 export interface CreateTaskPreset {
   status?: string;
+  /** The container (milestone, project, parent issue…) the new task goes under. */
   epic?: string;
-  milestone?: string;
+  /** What to create; any kind but a task skips the AI composer for the quick-add form. */
+  kind?: TaskKind;
 }
 
 /**
@@ -24,6 +27,8 @@ export interface CreateTaskPreset {
 export interface ShellActions {
   /** The full task page; `runId` pins Chat/Diff, else the task's latest run. */
   openTask: (taskId: string, tab?: TaskTab, runId?: string) => void;
+  /** The Threads view; `messageId` opens the thread holding that message. */
+  openThread: (messageId: string | null) => void;
   /** The task peek dialog over the current view. */
   peekTask: (taskId: string) => void;
   /** Opens the creator, pre-filled from `preset` (see `createPreset`). */
@@ -32,9 +37,6 @@ export interface ShellActions {
   createPreset: CreateTaskPreset | null;
   closeCreateTask: () => void;
   openPalette: () => void;
-  /** Hides or shows the rail (`[`). */
-  toggleSidebar: () => void;
-  sidebarHidden: boolean;
   /** The Overseer page; `prompt` pre-fills its composer. */
   openOverseer: (prompt?: string) => void;
   setProjectView: (view: ProjectView) => void;
@@ -61,4 +63,9 @@ export function useShellActions(): ShellActions {
     );
   }
   return actions;
+}
+
+/** The same verbs, or null outside the provider — for leaf components that also render alone. */
+export function useOptionalShellActions(): ShellActions | null {
+  return useContext(ShellActionsContext);
 }

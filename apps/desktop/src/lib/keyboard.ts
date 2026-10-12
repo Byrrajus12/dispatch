@@ -56,11 +56,16 @@ export type GlobalKeyCommand =
   | 'new-task'
   /** Open the keyboard-shortcuts reference (`?`). */
   | 'open-shortcuts'
-  /** The `g` chords: `g s` Settings, `g i` Inbox, `g t` Tasks, `g c` Control room, `g a`
-   * Overseer (Linear's "Agent"). */
+  /** The `g` chords: `g h` Home, `g s` Settings, `g i` Inbox, `g m` Threads (messages),
+   * `g t` Tasks, `g r` Projects (the roadmap), `g f` Live (work in flight), `g c` Control
+   * room, `g a` Overseer (Linear's "Agent"). */
+  | 'goto-home'
   | 'goto-settings'
   | 'goto-inbox'
+  | 'goto-threads'
   | 'goto-tasks'
+  | 'goto-projects'
+  | 'goto-live'
   | 'goto-control-room'
   | 'goto-overseer'
   /** Jump straight to the Nth entry in the sidebar's primary rail. */
@@ -68,11 +73,16 @@ export type GlobalKeyCommand =
 
 // The second key of each `g` chord.
 const G_CHORDS: Record<string, GlobalKeyCommand> = {
+  h: 'goto-home',
   s: 'goto-settings',
   i: 'goto-inbox',
+  m: 'goto-threads',
   t: 'goto-tasks',
+  r: 'goto-projects',
+  f: 'goto-live',
   c: 'goto-control-room',
   a: 'goto-overseer',
+  o: 'goto-overseer',
 };
 
 /** Whether this keystroke arms a chord prefix rather than resolving to a command on its
@@ -87,6 +97,20 @@ export function resolveChordPrefix(
   if (ctx.isTyping || ctx.modalOpen) return null;
   if (ctx.pendingPrefix !== null) return null;
   return input.key === 'g' ? 'g' : null;
+}
+
+/** The command an armed `g` chord's second key completes, or null. `useGlobalKeyboard`
+ * resolves it before any view sees the key, so a focused list's own `f` (filter), `s` or
+ * `a` (pickers) never eats `g f`, `g s` or `g a`. */
+export function resolveChordKey(
+  input: KeyInput,
+  ctx: GlobalKeyboardContext
+): GlobalKeyCommand | null {
+  if (ctx.pendingPrefix !== 'g') return null;
+  if (input.metaKey || input.ctrlKey || ctx.isTyping || ctx.modalOpen) {
+    return null;
+  }
+  return G_CHORDS[input.key] ?? null;
 }
 
 /** Maps one keydown to the app-root command it should trigger, or `null` if this keystroke
@@ -105,6 +129,8 @@ export function resolveGlobalKeyCommand(
   // and every editor already uses for this, so it needs no teaching.
   if (combo && input.key === '[') return 'nav-back';
   if (combo && input.key === ']') return 'nav-forward';
+  // ⌘, is Settings everywhere on macOS; a modifier chord, so it works while typing.
+  if (combo && input.key === ',') return 'goto-settings';
 
   // cmd+1..9 jumps to a rail entry. These work while typing on purpose: they
   // carry a modifier, so they cannot be confused with entering text, and being
@@ -141,7 +167,7 @@ export function resolveGlobalKeyCommand(
 
   // An armed `g` resolves the chord's second key, or nothing — the hook drops the prefix
   // either way, so a stray `g x` never leaks `x` into a later keystroke.
-  if (ctx.pendingPrefix === 'g') return G_CHORDS[input.key] ?? null;
+  if (ctx.pendingPrefix === 'g') return resolveChordKey(input, ctx);
 
   if (input.key === '[') return 'toggle-sidebar';
   if (input.key === 'c') return 'new-task';
@@ -335,20 +361,4 @@ export function resolveGitKeyCommand(
     default:
       return null;
   }
-}
-
-export type CardKeyAction = 'activate' | null;
-
-/** Decides what a keydown on a Board card's root element should do, given which key was
- * pressed and whether the keydown originated directly on the card (`isDirectTarget`, the
- * caller's `e.target === e.currentTarget`) rather than bubbling up from a nested interactive
- * child — a card's own inline "Dispatch →" button is exactly such a child: pressing
- * Enter/Space to activate *that* button still fires a keydown that bubbles through the
- * card's own `onKeyDown`, and without this guard also opened the card's peek panel. */
-export function resolveCardKeyAction(
-  key: string,
-  isDirectTarget: boolean
-): CardKeyAction {
-  if (!isDirectTarget) return null;
-  return key === 'Enter' || key === ' ' ? 'activate' : null;
 }

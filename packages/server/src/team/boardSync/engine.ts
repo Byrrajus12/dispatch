@@ -1,5 +1,5 @@
-import type { TaskDoc, TaskMeta } from '@dispatch/core';
-import { newTaskDoc } from '@dispatch/core';
+import type { TaskDoc, TaskMeta } from '@dispatch-foo/core';
+import { newTaskDoc } from '@dispatch-foo/core';
 
 // The merge half of board sync: what a change to a task looks like on the
 // wire, and how a replica folds someone else's changes into its own board.
@@ -176,6 +176,17 @@ const META_FIELDS = [
   'exercised',
   'derivedFrom',
   'attachments',
+  'estimate',
+  'dueDate',
+  'startDate',
+  'cycle',
+  'relatedTo',
+  'duplicateOf',
+  'initiatives',
+  'creator',
+  'color',
+  'icon',
+  'sortOrder',
 ] as const satisfies readonly (keyof TaskMeta)[];
 
 // Optional in TaskMeta: travels as null when absent, so clearing one (an
@@ -200,7 +211,7 @@ interface BodyParts {
 // The same split taskfile.ts uses: a section runs from its `## ` line to the
 // next. Content keeps its own surrounding newlines, so joining the parts back
 // gives the body byte for byte.
-function splitBody(body: string): BodyParts {
+export function splitBody(body: string): BodyParts {
   const parts = body.split(/^(## .+)$/m);
   const sections: BodyParts['sections'] = [];
   for (let i = 1; i < parts.length; i += 2) {
@@ -289,6 +300,8 @@ export interface ApplyResult {
   doc: TaskDoc | null;
   /** Set when the change could not be applied and a person needs to know. */
   problem?: string;
+  /** Stamped too far ahead of this machine's clock: not applied yet (FW-R21). */
+  held?: true;
 }
 
 // The base a task is rebuilt on when this replica has never held it: the
@@ -300,7 +313,7 @@ function blankMeta(id: string): TaskMeta {
   const epoch = new Date(0).toISOString();
   return newTaskDoc(
     id,
-    id.startsWith('e-') ? 'epic' : 'task',
+    id.startsWith('e-') ? 'milestone' : 'task',
     { title: '' },
     epoch
   ).meta;

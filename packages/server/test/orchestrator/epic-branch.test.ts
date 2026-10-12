@@ -1,4 +1,4 @@
-import { TaskStore } from '@dispatch/core';
+import { TaskStore } from '@dispatch-foo/core';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -343,9 +343,9 @@ describe('epic branches on the branches surface', () => {
     runGitSync(repo, ['add', '-A']);
     runGitSync(repo, ['commit', '-m', 'mainline work']);
 
-    const entry = h.orchestrator
-      .listBranches()
-      .find((e) => e.branch === branch);
+    const entry = (await h.orchestrator.listBranches()).find(
+      (e) => e.branch === branch
+    );
     expect(entry).toBeDefined();
     expect(entry?.status).toBe('epic');
     expect(entry?.baseBranch).toBe('main');
@@ -360,9 +360,9 @@ describe('epic branches on the branches surface', () => {
     const branch = epicBranchName(epicId);
     await dispatchWithWork(h, taskId, 'a.txt');
 
-    expect(() => h.orchestrator.deleteBranch(branch, { force: true })).toThrow(
-      /is the base of/
-    );
+    await expect(
+      h.orchestrator.deleteBranch(branch, { force: true })
+    ).rejects.toThrow(/is the base of/);
   });
 });
 

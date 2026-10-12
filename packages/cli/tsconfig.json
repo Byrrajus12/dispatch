@@ -5,8 +5,11 @@
     "outDir": "dist",
     "types": ["bun"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "include": ["src/**/*.ts", "test/**/*.ts", "package.json"],
   "references": [
+    {
+      "path": "../a2a/tsconfig.json"
+    },
     {
       "path": "../core/tsconfig.json"
     },

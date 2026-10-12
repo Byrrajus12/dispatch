@@ -1,3 +1,7 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { SqliteCommentStore } from './commentStore.js';
 import {
   attachDispatchDb,
   dispatchDbPath,
@@ -11,6 +15,8 @@ import {
 } from './sqliteRecords.js';
 import { SqliteTaskStore } from './sqliteTaskStore.js';
 import {
+  boardStatuses,
+  DISPATCH_DIR,
   ensureProjectConfig,
   ensureProjectGitignore,
   TaskStore,
@@ -37,6 +43,7 @@ export interface SqliteRecordStores {
   findings: SqliteFindingStore;
   ledger: SqliteLedgerStore;
   evidence: SqliteEvidenceStore;
+  comments: SqliteCommentStore;
 }
 
 export interface ProjectStores {
@@ -103,12 +110,16 @@ export function initProjectStores(options: OpenStoresOptions): ProjectStores {
     TaskStore.init(rootDir);
     return openProjectStores(options);
   }
-  ensureProjectConfig(rootDir);
   // Opening a database also applies the schema (every statement is CREATE ...
   // IF NOT EXISTS), so unlike the file backend there is no separate create
-  // step for the tables themselves — only for config.yml, above.
+  // step for the tables themselves — only for config.yml, below.
   const db = openDispatchDb(options.dbPath ?? dispatchDbPath(rootDir));
-  return sqliteStores(rootDir, db, options.generateTaskId);
+  const stores = sqliteStores(rootDir, db, options.generateTaskId);
+  // After the open, so a starter config keeps the statuses a restored
+  // database already uses.
+  const hasConfig = existsSync(join(rootDir, DISPATCH_DIR, 'config.yml'));
+  ensureProjectConfig(rootDir, hasConfig ? [] : boardStatuses(stores.tasks));
+  return stores;
 }
 
 // Wraps a handle (or the absence of one) in the four stores that share it.
@@ -135,6 +146,7 @@ function sqliteStores(
       findings: new SqliteFindingStore(db),
       ledger: new SqliteLedgerStore(db),
       evidence: new SqliteEvidenceStore(db),
+      comments: new SqliteCommentStore(db),
     },
     close: () => {
       if (closed) return;

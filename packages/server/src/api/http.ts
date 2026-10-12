@@ -2,7 +2,13 @@
 // family (see findings.ts) never needs to redefine JSON body parsing.
 
 export function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
+  return jsonTextResponse(JSON.stringify(body), status);
+}
+
+// jsonResponse for a body that is already JSON text, such as the cache's
+// pre-serialized task lists.
+export function jsonTextResponse(text: string, status = 200): Response {
+  return new Response(text, {
     status,
     headers: { 'content-type': 'application/json; charset=utf-8' },
   });
@@ -10,6 +16,20 @@ export function jsonResponse(body: unknown, status = 200): Response {
 
 export function errorResponse(status: number, message: string): Response {
   return jsonResponse({ error: message }, status);
+}
+
+/** A 409 for a coded conflict: its `code` when it has one, and its
+ *  operator hint only for a caller at the operator tier. */
+export function conflictResponse(
+  err: { message: string; code?: string; operatorHint?: string },
+  tier: 'request' | 'decide' | 'operator' | undefined
+): Response {
+  const hint = tier === 'operator' ? err.operatorHint : undefined;
+  const error = hint === undefined ? err.message : `${err.message}: ${hint}`;
+  return jsonResponse(
+    err.code === undefined ? { error } : { error, code: err.code },
+    409
+  );
 }
 
 function hasJsonContentType(req: Request): boolean {

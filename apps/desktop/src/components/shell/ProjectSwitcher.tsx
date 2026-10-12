@@ -2,6 +2,7 @@ import {
   ChevronDown,
   Cog,
   FolderGit2,
+  LifeBuoy,
   LogOut,
   Palette,
   Plus,
@@ -13,7 +14,9 @@ import { InitialsAvatar } from '@/ui/ai/initials-avatar';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuSub,
@@ -44,6 +47,8 @@ interface ProjectSwitcherProps {
   onOpenSettings: () => void;
   /** Dev-only; omitted in a production build. */
   onOpenGallery?: () => void;
+  /** Help: brings the first-task guide back for this project. */
+  onRestartGuide?: () => void;
   /** Set only for a teammate on a team-local daemon: who they are signed in
    *  as, and how to stop. Someone at their own machine has no session to end. */
   teamSession?: { handle: string; onSignOut: () => void };
@@ -54,6 +59,11 @@ interface ProjectSwitcherProps {
  * colour, the name, a tiny chevron. Its menu is where Settings lives now that it has left
  * the rail, alongside adding a project and switching to another.
  */
+/** A project path with the home folder written as `~`. */
+export function shortPath(path: string): string {
+  return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~');
+}
+
 export function ProjectSwitcher({
   projectName,
   projectPath,
@@ -65,6 +75,7 @@ export function ProjectSwitcher({
   onAddProject,
   onOpenSettings,
   onOpenGallery,
+  onRestartGuide,
   teamSession,
 }: ProjectSwitcherProps) {
   if (projectName === null) {
@@ -154,10 +165,29 @@ export function ProjectSwitcher({
             </DropdownMenuItem>
           </>
         )}
+        {onRestartGuide !== undefined && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>Help</DropdownMenuLabel>
+              <DropdownMenuItem onClick={onRestartGuide}>
+                <LifeBuoy />
+                Restart the guide
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+          </>
+        )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem disabled className="text-muted-foreground">
+        <DropdownMenuItem
+          disabled
+          className="text-muted-foreground"
+          title={projectPath}
+        >
           <FolderGit2 />
-          <span className="min-w-0 flex-1 truncate">{projectPath}</span>
+          {/* Trimmed from the start, so the project's own folder stays visible. */}
+          <span className="min-w-0 flex-1 truncate [direction:rtl]">
+            <span dir="ltr">{shortPath(projectPath)}</span>
+          </span>
         </DropdownMenuItem>
         {teamSession !== undefined && (
           <>

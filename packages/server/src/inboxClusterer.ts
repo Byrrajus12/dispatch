@@ -1,6 +1,6 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Options, Query } from '@anthropic-ai/claude-agent-sdk';
-import { loadConfig } from '@dispatch/core';
+import { agentEnv, loadConfig } from '@dispatch-foo/core';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -142,6 +142,7 @@ export class InboxClusterer {
     try {
       const options: Options = {
         cwd: this.rootDir,
+        env: agentEnv(),
         // Read per call, so a settings change applies with no daemon restart.
         model: loadConfig(this.rootDir).models.cluster,
         permissionMode: 'plan',

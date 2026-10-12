@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { spawnGitSync } from '../blockingGit.js';
+import type { CommandResult } from './pr.js';
+import { defaultCommandRunner } from './pr.js';
 
 interface DiffFile {
   path: string;
@@ -29,6 +31,30 @@ export interface WorktreeRef {
   branch?: string;
 }
 
+/**
+ * What `fastForwardToOrigin` did to the local base branch. `behind` means
+ * origin has commits local could not take as a fast-forward, with git's own
+ * reason. `skipped` means there was nothing to compare: no local branch or
+ * no remote-tracking ref.
+ */
+export type FollowResult =
+  | { outcome: 'updated' | 'current' | 'skipped' }
+  | { outcome: 'behind'; reason: string };
+
+// A follow step's git result as a FollowResult: 'updated' on success,
+// otherwise 'behind' with git's own words for why.
+function gitOutcome(result: {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+}): FollowResult {
+  if (result.ok) return { outcome: 'updated' };
+  const reason = [result.stderr.trim(), result.stdout.trim()]
+    .filter((s) => s.length > 0)
+    .join(' | ');
+  return { outcome: 'behind', reason };
+}
+
 interface GitResult {
   ok: boolean;
   exitCode: number;
@@ -50,15 +76,55 @@ function runGit(cwd: string, args: string[]): GitResult {
   };
 }
 
+// runGit off the event loop, for reads a request waits on while the daemon
+// keeps serving others (the Branches listing).
+function runGitAsync(cwd: string, args: string[]): Promise<CommandResult> {
+  return defaultCommandRunner(cwd, ['git', ...args]);
+}
+
+const ORIGIN_HEAD_ARGS = ['symbolic-ref', 'refs/remotes/origin/HEAD'];
+const CURRENT_BRANCH_ARGS = ['rev-parse', '--abbrev-ref', 'HEAD'];
+const STATUS_ARGS = ['status', '--porcelain'];
+
+// The branch origin/HEAD names, or null when the remote has none. M3: strip
+// only the fixed prefix, since a default branch like `release/v2` has a `/`.
+function originHeadBranch(result: CommandResult): string | null {
+  if (!result.ok) return null;
+  const ref = result.stdout.trim();
+  const prefix = 'refs/remotes/origin/';
+  return ref.startsWith(prefix) ? ref.slice(prefix.length) : null;
+}
+
+// A GitHub remote URL (scp-style, ssh:// or https://, with or without
+// `.git`) as the repository's browser URL; undefined for any other host.
+export function githubWebUrl(remote: string): string | undefined {
+  const match = remote.match(
+    /^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https:\/\/(?:[^@/]+@)?github\.com\/)([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/
+  );
+  return match === null
+    ? undefined
+    : `https://github.com/${match[1]}/${match[2]}`;
+}
+
+function currentBranchName(result: CommandResult): string {
+  if (!result.ok) {
+    throw new Error(
+      `unable to determine current branch: ${result.stderr.trim()}`
+    );
+  }
+  return result.stdout.trim();
+}
+
 /**
  * Owns every real git operation the orchestrator needs against the project's
  * main checkout and its dispatch worktrees: creating/removing worktrees,
  * checking the main checkout's cleanliness, squash-merging a run's branch
  * back in, and producing the unified diff a run's review surface shows.
  *
- * Every method shells out to a real `git` binary (via Bun.spawnSync) rather
- * than reimplementing git plumbing — the plan is explicit that tests must
- * assert real git effects (diff, merge, discard) against real temp repos.
+ * Every method shells out to a real `git` binary (via spawnGitSync, or
+ * Bun.spawn for the Branches listing's reads) rather than reimplementing git
+ * plumbing — the plan is explicit that tests must assert real git effects
+ * (diff, merge, discard) against real temp repos.
  */
 export class WorktreeManager {
   constructor(private readonly mainRepoDir: string) {}
@@ -68,29 +134,20 @@ export class WorktreeManager {
   // otherwise the current branch of the main checkout — the only option in
   // tests and in a freshly-initialized local repo with no remote.
   defaultBaseBranch(): string {
-    const originHead = runGit(this.mainRepoDir, [
-      'symbolic-ref',
-      'refs/remotes/origin/HEAD',
-    ]);
-    if (originHead.ok) {
-      const ref = originHead.stdout.trim();
-      // M3: strip only the fixed `refs/remotes/origin/` prefix — a
-      // `.split('/').pop()` here would truncate any default branch name
-      // that itself contains a `/` (e.g. `release/v2`) down to just `v2`.
-      const prefix = 'refs/remotes/origin/';
-      if (ref.startsWith(prefix)) return ref.slice(prefix.length);
-    }
-    const current = runGit(this.mainRepoDir, [
-      'rev-parse',
-      '--abbrev-ref',
-      'HEAD',
-    ]);
-    if (!current.ok) {
-      throw new Error(
-        `unable to determine current branch: ${current.stderr.trim()}`
-      );
-    }
-    return current.stdout.trim();
+    return (
+      originHeadBranch(runGit(this.mainRepoDir, ORIGIN_HEAD_ARGS)) ??
+      currentBranchName(runGit(this.mainRepoDir, CURRENT_BRANCH_ARGS))
+    );
+  }
+
+  // defaultBaseBranch without blocking the event loop.
+  async defaultBaseBranchAsync(): Promise<string> {
+    return (
+      originHeadBranch(await runGitAsync(this.mainRepoDir, ORIGIN_HEAD_ARGS)) ??
+      currentBranchName(
+        await runGitAsync(this.mainRepoDir, CURRENT_BRANCH_ARGS)
+      )
+    );
   }
 
   // Creates a worktree at `path` on a new branch `branch`, based on
@@ -174,8 +231,8 @@ export class WorktreeManager {
   //
   // The `%09` in the format is a literal tab — chosen as the field separator
   // because a git branch name can contain almost anything except a tab.
-  listBranches(prefix: string): BranchRef[] {
-    const result = runGit(this.mainRepoDir, [
+  async listBranches(prefix: string): Promise<BranchRef[]> {
+    const result = await runGitAsync(this.mainRepoDir, [
       'for-each-ref',
       '--format=%(refname:short)%09%(committerdate:iso-strict)',
       `refs/heads/${prefix}`,
@@ -200,8 +257,8 @@ export class WorktreeManager {
   // (`worktree <path>`, then `HEAD <sha>`, then either `branch <ref>` or
   // `detached`), which is parsed line-by-line here rather than by splitting on
   // blank lines so a trailing/missing separator can't drop the last record.
-  listWorktrees(): WorktreeRef[] {
-    const result = runGit(this.mainRepoDir, [
+  async listWorktrees(): Promise<WorktreeRef[]> {
+    const result = await runGitAsync(this.mainRepoDir, [
       'worktree',
       'list',
       '--porcelain',
@@ -266,11 +323,26 @@ export class WorktreeManager {
     return Number.isNaN(parsed) ? 0 : parsed;
   }
 
-  // How many commits `base` has that `branch` does not — how far the base has
-  // moved on since this branch diverged. The mirror of aheadCount, so it
-  // inherits the same tolerance: 0 when either ref is missing.
-  behindCount(branch: string, base: string): number {
-    return this.aheadCount(base, branch);
+  // aheadCount and its mirror (commits `base` has that `branch` lacks: how far
+  // the base moved on) in one walk. Null when either ref is missing.
+  async aheadBehind(
+    branch: string,
+    base: string
+  ): Promise<{ ahead: number; behind: number } | null> {
+    const result = await runGitAsync(this.mainRepoDir, [
+      'rev-list',
+      '--left-right',
+      '--count',
+      `${base}...${branch}`,
+    ]);
+    if (!result.ok) return null;
+    const [behind, ahead] = result.stdout
+      .trim()
+      .split(/\s+/)
+      .map((n) => Number.parseInt(n, 10));
+    if (behind === undefined || ahead === undefined) return null;
+    if (Number.isNaN(behind) || Number.isNaN(ahead)) return null;
+    return { ahead, behind };
   }
 
   // True when every commit on `branch` is already reachable from `base` —
@@ -346,14 +418,62 @@ export class WorktreeManager {
     return result.stdout.split('\n').filter((line) => line.trim() !== '');
   }
 
+  // The commit origin's copy of `base` points at; null when there is none.
+  originBaseTip(base: string): string | null {
+    const result = runGit(this.mainRepoDir, [
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      `refs/remotes/origin/${base}^{commit}`,
+    ]);
+    return result.ok ? result.stdout.trim() : null;
+  }
+
+  /**
+   * Which of `commits` are NOT ancestors of `tip`, in one `git rev-list`
+   * rather than a `merge-base --is-ancestor` each: it lists every commit the
+   * given ones reach that `tip` does not, which is short when the commits are
+   * mostly on it. Full SHAs only, since the listing names commits in full.
+   * A commit git no longer has (gc'd, rewritten) is not on `tip`. Null when
+   * git refuses.
+   */
+  commitsNotOn(commits: readonly string[], tip: string): Set<string> | null {
+    const listed = new Set<string>();
+    // Chunked so the argument list stays far below the OS limit.
+    for (let i = 0; i < commits.length; i += 2000) {
+      const chunk = commits.slice(i, i + 2000);
+      let result = runGit(this.mainRepoDir, ['rev-list', ...chunk, `^${tip}`]);
+      if (!result.ok) {
+        // One missing commit fails the whole walk: set the missing aside
+        // (`--no-walk` lists just the given commits git has) and walk the rest.
+        const present = runGit(this.mainRepoDir, [
+          'rev-list',
+          '--no-walk',
+          '--ignore-missing',
+          ...chunk,
+        ]);
+        if (!present.ok) return null;
+        const have = new Set(present.stdout.split('\n'));
+        for (const commit of chunk) if (!have.has(commit)) listed.add(commit);
+        const walk = chunk.filter((commit) => have.has(commit));
+        if (walk.length === 0) continue;
+        result = runGit(this.mainRepoDir, ['rev-list', ...walk, `^${tip}`]);
+        if (!result.ok) return null;
+      }
+      for (const line of result.stdout.split('\n')) listed.add(line);
+    }
+    return new Set(commits.filter((commit) => listed.has(commit)));
+  }
+
   // False when origin/<base> doesn't exist locally — unpushed is the safe answer.
-  isOnOriginBase(commit: string, base: string): boolean {
-    return runGit(this.mainRepoDir, [
+  async isOnOriginBase(commit: string, base: string): Promise<boolean> {
+    const result = await runGitAsync(this.mainRepoDir, [
       'merge-base',
       '--is-ancestor',
       commit,
       `refs/remotes/origin/${base}`,
-    ]).ok;
+    ]);
+    return result.ok;
   }
 
   // Whether a run's worktree has uncommitted work sitting in it. Runs in the
@@ -363,7 +483,14 @@ export class WorktreeManager {
   // lists refs whose directory may already be gone.
   isWorktreeDirty(path: string): boolean {
     if (!existsSync(path)) return false;
-    const status = runGit(path, ['status', '--porcelain']);
+    const status = runGit(path, STATUS_ARGS);
+    return status.ok && status.stdout.trim().length > 0;
+  }
+
+  // isWorktreeDirty without blocking the event loop.
+  async isWorktreeDirtyAsync(path: string): Promise<boolean> {
+    if (!existsSync(path)) return false;
+    const status = await runGitAsync(path, STATUS_ARGS);
     return status.ok && status.stdout.trim().length > 0;
   }
 
@@ -751,6 +878,222 @@ export class WorktreeManager {
     );
   }
 
+  /**
+   * squashMergeIntoRef's first two steps with no ref update: builds the squash
+   * commit of `sourceBranch` on top of `ontoCommit` and returns its sha,
+   * leaving every ref where it was. This is how a run lands on origin first.
+   * The commit is computed against origin's tip and then PUSHED, so the
+   * remote's own fast-forward check does the compare-and-swap that
+   * `update-ref` does for a local ref.
+   */
+  squashCommitOnto(
+    ontoCommit: string,
+    sourceBranch: string,
+    message: string
+  ): string {
+    return this.buildMergeCommit(
+      ontoCommit,
+      ontoCommit,
+      sourceBranch,
+      message,
+      'squash'
+    );
+  }
+
+  // The tree a commit records — used to tell a squash that changed nothing
+  // (same tree as its parent) from one worth pushing.
+  treeOf(commit: string): string {
+    return this.resolveCommit(`${commit}^{tree}`);
+  }
+
+  /**
+   * Cherry-picks one commit onto `ontoCommit` with plumbing and returns the
+   * new commit's sha, moving no ref and touching no checkout.
+   *
+   * This is how a squash that only ever reached the LOCAL base gets published:
+   * origin has usually moved on since, so the squash is replayed onto origin's
+   * tip and that is pushed. The three-way merge uses the commit's own parent as
+   * its base, so only that commit's change is carried, not whatever else the
+   * local base holds that origin lacks. A conflict throws, naming the files.
+   */
+  replayCommitOnto(ontoCommit: string, commit: string): string {
+    const mergeTree = runGit(this.mainRepoDir, [
+      'merge-tree',
+      '--write-tree',
+      '--name-only',
+      `--merge-base=${commit}^`,
+      ontoCommit,
+      commit,
+    ]);
+    const lines = mergeTree.stdout.split('\n');
+    if (mergeTree.exitCode === 1) {
+      const conflicted: string[] = [];
+      for (const line of lines.slice(1)) {
+        if (line.trim() === '') break;
+        conflicted.push(line.trim());
+      }
+      throw new Error(
+        `replaying ${commit.slice(0, 7)} onto origin has conflicts: ${conflicted.join(', ')}`
+      );
+    }
+    if (!mergeTree.ok) {
+      throw new Error(`git merge-tree failed: ${mergeTree.stderr.trim()}`);
+    }
+    const message = runGit(this.mainRepoDir, [
+      'log',
+      '-1',
+      '--format=%B',
+      commit,
+    ]);
+    const created = runGit(this.mainRepoDir, [
+      'commit-tree',
+      lines[0]?.trim() ?? '',
+      '-p',
+      ontoCommit,
+      '-m',
+      message.ok ? message.stdout.trim() : `replay ${commit}`,
+    ]);
+    if (!created.ok) {
+      throw new Error(`git commit-tree failed: ${created.stderr.trim()}`);
+    }
+    return created.stdout.trim();
+  }
+
+  /**
+   * The browser URL of origin's repository, for links to a landed commit.
+   * Only GitHub-shaped remotes (`git@github.com:o/r.git`,
+   * `https://github.com/o/r`) have one; anything else (a bare path, another
+   * host) is undefined, and surfaces show the sha without a link.
+   */
+  originWebUrl(): string | undefined {
+    const result = runGit(this.mainRepoDir, ['remote', 'get-url', 'origin']);
+    return result.ok ? githubWebUrl(result.stdout.trim()) : undefined;
+  }
+
+  /**
+   * The newest release tag (`v*`, by version order) and the commit it names,
+   * or null when the repo has none. "Did it ship?" is answered against this
+   * one tag: a landed commit it contains is released, anything newer is not.
+   */
+  latestReleaseTag(): { tag: string; commit: string } | null {
+    const tags = runGit(this.mainRepoDir, [
+      'tag',
+      '--list',
+      'v*',
+      '--sort=-v:refname',
+    ]);
+    const tag = tags.ok ? tags.stdout.split('\n')[0]?.trim() : undefined;
+    if (tag === undefined || tag === '') return null;
+    const commit = runGit(this.mainRepoDir, [
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      `refs/tags/${tag}^{commit}`,
+    ]);
+    return commit.ok ? { tag, commit: commit.stdout.trim() } : null;
+  }
+
+  /**
+   * Moves the local `base` branch up to `refs/remotes/origin/<base>`, but only
+   * as a fast-forward. This is how the local checkout FOLLOWS origin after
+   * a landing instead of leading it.
+   *
+   * - `base` checked out in the main checkout: `git merge --ff-only`. It
+   *   carries uncommitted edits along and refuses (touching nothing) when
+   *   one would be overwritten or local has commits origin lacks.
+   * - Otherwise: `git fetch . origin/<base>:<base>`. It refuses a
+   *   non-fast-forward and refuses a branch checked out in any other
+   *   worktree, so it never moves a ref under a live working tree.
+   *
+   * Never throws. A refusal leaves local behind origin, which the next
+   * landing retries. Local being behind is harmless. Local being AHEAD of
+   * origin is the split-brain this exists to prevent.
+   */
+  fastForwardToOrigin(base: string, currentBranch: string): FollowResult {
+    const remoteRef = `refs/remotes/origin/${base}`;
+    if (!this.hasBranch(base)) return { outcome: 'skipped' };
+    const local = runGit(this.mainRepoDir, ['rev-parse', `refs/heads/${base}`]);
+    const remote = runGit(this.mainRepoDir, ['rev-parse', remoteRef]);
+    if (!local.ok || !remote.ok) return { outcome: 'skipped' };
+    if (local.stdout.trim() === remote.stdout.trim()) {
+      return { outcome: 'current' };
+    }
+    if (currentBranch !== base) {
+      return gitOutcome(
+        runGit(this.mainRepoDir, [
+          'fetch',
+          '--quiet',
+          '.',
+          `${remoteRef}:refs/heads/${base}`,
+        ])
+      );
+    }
+    const settled = this.settleIdenticalEdits(remoteRef);
+    const result = gitOutcome(
+      runGit(this.mainRepoDir, ['merge', '--ff-only', '--quiet', remoteRef])
+    );
+    // The merge refused for some other reason: put the settled files back to
+    // the content they had (origin's, by construction) so nothing the user
+    // saw changes. Checkout writes the index too, so unstage after.
+    if (result.outcome !== 'updated' && settled.length > 0) {
+      runGit(this.mainRepoDir, ['checkout', remoteRef, '--', ...settled]);
+      runGit(this.mainRepoDir, ['reset', '--quiet', '--', ...settled]);
+    }
+    return result;
+  }
+
+  /**
+   * Clears the one kind of local edit that blocks a fast-forward without
+   * meaning anything: an uncommitted change whose content is ALREADY exactly
+   * what origin has for that path.
+   *
+   * This is the board's normal state. Dispatch writes a task file in the main
+   * checkout (a landing moves it to landed), the board syncer pushes that same
+   * file to trunk, and from then on `git merge --ff-only` refuses with "your
+   * local changes would be overwritten", even though the bytes are identical.
+   * Without this the checkout would stop following origin after the first
+   * board sync.
+   *
+   * All or nothing, and only when lossless. Every tracked path that both
+   * differs locally and changes upstream must be unstaged and byte-identical
+   * to origin's version. If any is not, nothing is touched and the merge
+   * refuses as it would have. Returns the paths it reset to HEAD.
+   */
+  private settleIdenticalEdits(remoteRef: string): string[] {
+    const listed = (args: string[]): string[] => {
+      const result = runGit(this.mainRepoDir, args);
+      if (!result.ok) return [];
+      return result.stdout.split('\n').filter((line) => line.trim() !== '');
+    };
+    const incoming = new Set(
+      listed(['diff', '--name-only', 'HEAD', remoteRef])
+    );
+    const blocking = listed(['diff', '--name-only', 'HEAD']).filter((path) =>
+      incoming.has(path)
+    );
+    if (blocking.length === 0) return [];
+    const staged = new Set(listed(['diff', '--cached', '--name-only']));
+    for (const path of blocking) {
+      if (staged.has(path)) return [];
+      const theirs = runGit(this.mainRepoDir, [
+        'rev-parse',
+        '--verify',
+        '--quiet',
+        `${remoteRef}:${path}`,
+      ]);
+      const ours = runGit(this.mainRepoDir, ['hash-object', '--', path]);
+      if (!theirs.ok || !ours.ok) return [];
+      if (theirs.stdout.trim() !== ours.stdout.trim()) return [];
+    }
+    const reset = runGit(this.mainRepoDir, [
+      'checkout',
+      'HEAD',
+      '--',
+      ...blocking,
+    ]);
+    return reset.ok ? blocking : [];
+  }
+
   private mergeIntoRefViaPlumbing(
     targetBranch: string,
     sourceBranch: string,
@@ -758,11 +1101,43 @@ export class WorktreeManager {
     mode: 'squash' | 'merge'
   ): string {
     const oldTip = this.resolveCommit(`refs/heads/${targetBranch}`);
+    const newSha = this.buildMergeCommit(
+      targetBranch,
+      oldTip,
+      sourceBranch,
+      message,
+      mode
+    );
+    const update = runGit(this.mainRepoDir, [
+      'update-ref',
+      `refs/heads/${targetBranch}`,
+      newSha,
+      oldTip,
+    ]);
+    if (!update.ok) {
+      throw new Error(
+        `${targetBranch} moved while merging — retry (${update.stderr.trim()})`
+      );
+    }
+    return newSha;
+  }
+
+  // Steps 1 and 2 of mergeIntoRefViaPlumbing: the in-memory three-way merge
+  // and the commit carrying its tree. `target` names the merge's first side
+  // in error messages and merge-tree. `oldTip` is that side's commit and the
+  // new commit's first parent.
+  private buildMergeCommit(
+    target: string,
+    oldTip: string,
+    sourceBranch: string,
+    message: string,
+    mode: 'squash' | 'merge'
+  ): string {
     const mergeTree = runGit(this.mainRepoDir, [
       'merge-tree',
       '--write-tree',
       '--name-only',
-      targetBranch,
+      oldTip,
       sourceBranch,
     ]);
     const lines = mergeTree.stdout.split('\n');
@@ -776,7 +1151,7 @@ export class WorktreeManager {
         conflicted.push(line.trim());
       }
       throw new Error(
-        `merge into ${targetBranch} has conflicts: ${conflicted.join(', ')}`
+        `merge into ${target} has conflicts: ${conflicted.join(', ')}`
       );
     }
     if (!mergeTree.ok) {
@@ -808,19 +1183,7 @@ export class WorktreeManager {
     if (!commit.ok) {
       throw new Error(`git commit-tree failed: ${commit.stderr.trim()}`);
     }
-    const newSha = commit.stdout.trim();
-    const update = runGit(this.mainRepoDir, [
-      'update-ref',
-      `refs/heads/${targetBranch}`,
-      newSha,
-      oldTip,
-    ]);
-    if (!update.ok) {
-      throw new Error(
-        `${targetBranch} moved while merging — retry (${update.stderr.trim()})`
-      );
-    }
-    return newSha;
+    return commit.stdout.trim();
   }
 
   // The merge base of `baseBranch` and `HEAD` in `worktreePath` — a base

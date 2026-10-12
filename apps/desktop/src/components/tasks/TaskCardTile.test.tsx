@@ -1,5 +1,5 @@
+import type { TaskDoc } from '@dispatch-foo/core/browser';
 import type { RunMeta } from '@dispatch/client';
-import type { TaskDoc } from '@dispatch/core/browser';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { expect, test } from 'bun:test';
 
@@ -49,6 +49,12 @@ function renderCard(
 function card(): HTMLElement {
   const el = document.querySelector<HTMLElement>('[data-slot=task-card]');
   if (el === null) throw new Error('no card');
+  return el;
+}
+
+function openButton(): HTMLElement {
+  const el = card().querySelector<HTMLElement>('[data-task-card-open]');
+  if (el === null) throw new Error('no open button');
   return el;
 }
 
@@ -113,7 +119,7 @@ test('the keyboard cursor is a neutral raised ring, never the accent', () => {
   expect(el.dataset['focused']).toBe('true');
   expect(el.className).toContain('data-[focused=true]:shadow-raised');
   expect(el.className).not.toContain('ring-ring');
-  expect(document.activeElement).toBe(el);
+  expect(document.activeElement).toBe(openButton());
 });
 
 test('attention and blocked read as pills on row 3', () => {
@@ -173,10 +179,15 @@ test('an archived card dims and says so', () => {
   expect(slot('pills').textContent).toContain('Archived');
 });
 
-test('Enter opens the card; a nested control keeps its own keys', () => {
+test('the title is the real button that opens the card; a nested control keeps its own keys', () => {
   let opened = 0;
   renderCard({ onClick: () => (opened += 1) });
-  fireEvent.keyDown(card(), { key: 'Enter' });
+  const open = openButton();
+  expect(open.tagName).toBe('BUTTON');
+  expect(open.textContent).toBe('Cache the search index in redis');
+  // No control nests inside it: the pickers sit beside it, above its stretched hit area.
+  expect(open.querySelector('button')).toBeNull();
+  fireEvent.click(open);
   expect(opened).toBe(1);
   fireEvent.keyDown(screen.getByRole('button', { name: 'Change status' }), {
     key: 'Enter',
@@ -198,7 +209,7 @@ test('clicking a label pill opens the labels picker over the catalogue, not the 
   const patches: unknown[] = [];
   renderCard({
     onClick: () => (opened += 1),
-    onEditTask: (patch) => patches.push(patch),
+    onEditTask: (id, patch) => patches.push([id, patch]),
     labelCatalogue: ['docs', 'ui'],
   });
   const trigger = screen.getByRole('button', { name: 'Change labels' });
@@ -229,7 +240,9 @@ test('clicking a label pill opens the labels picker over the catalogue, not the 
     fireEvent.pointerDown(option);
     fireEvent.click(option);
   });
-  expect(patches).toEqual([{ labels: ['ui', 'api', 'infra', 'docs'] }]);
+  expect(patches).toEqual([
+    ['t-1', { labels: ['ui', 'api', 'infra', 'docs'] }],
+  ]);
   expect(opened).toBe(0);
 });
 
@@ -237,4 +250,11 @@ test('a card without labels grows no picker', () => {
   renderCard({ labelCatalogue: ['ui'] }, task({ labels: [] }));
   expect(screen.queryByRole('button', { name: 'Change labels' })).toBeNull();
   expect(slot('pills').querySelector('[data-slot=label-pill]')).toBeNull();
+});
+
+test('a card whose run is in the merge queue shows a Landing pill on row 3', () => {
+  renderCard({ landing: 'rebasing' });
+  const badge = slot('pills').querySelector('[data-slot=landing-badge]');
+  expect(badge?.textContent).toBe('Landing');
+  expect(badge?.getAttribute('title')).toBe('Landing · rebasing');
 });

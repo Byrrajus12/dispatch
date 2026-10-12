@@ -1,6 +1,6 @@
 {
   "name": "@dispatch/desktop",
-  "version": "0.35.2",
+  "version": "0.44.1",
   "private": true,
   "license": "FSL-1.1-ALv2",
   "type": "module",
@@ -17,6 +17,7 @@
     "e2e:update": "playwright test --update-snapshots"
   },
   "dependencies": {
+    "@dispatch-foo/protocol": "workspace:*",
     "@dispatch/client": "workspace:*",
     "@dispatch/tokens": "workspace:*",
     "@dnd-kit/core": "catalog:",
@@ -26,6 +27,7 @@
     "@pierre/diffs": "catalog:",
     "@pierre/trees": "catalog:",
     "@tanstack/react-query": "catalog:",
+    "@tanstack/react-virtual": "catalog:",
     "@tauri-apps/api": "catalog:",
     "@tauri-apps/plugin-deep-link": "catalog:",
     "@tauri-apps/plugin-dialog": "catalog:",
@@ -40,7 +42,7 @@
     "sonner": "catalog:"
   },
   "devDependencies": {
-    "@dispatch/core": "workspace:*",
+    "@dispatch-foo/core": "workspace:*",
     "@happy-dom/global-registrator": "catalog:",
     "@playwright/test": "catalog:",
     "@tailwindcss/vite": "catalog:",

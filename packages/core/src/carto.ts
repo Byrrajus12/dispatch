@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import {
   copyFileSync,
   existsSync,
@@ -12,6 +12,9 @@ import {
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
+
+import { childEnv } from './childEnv.js';
+import { spawnSyncText } from './syncSpawn.js';
 
 /** The carto binary Dispatch found, and the version it reported. */
 export interface CartoBinary {
@@ -84,7 +87,9 @@ export function discoverCarto(
     };
   }
 
-  const probe = spawnSync(found, ['--version'], { encoding: 'utf8' });
+  const probe = spawnSyncText(found, ['--version'], {
+    env: childEnv(),
+  });
   if (probe.status !== 0) {
     return {
       ok: false,
@@ -161,9 +166,9 @@ export function checkCartoHealth(
   projectRoot: string,
   binary: CartoBinary
 ): CartoHealth {
-  const run = spawnSync(binary.path, ['doctor', '--json'], {
+  const run = spawnSyncText(binary.path, ['doctor', '--json'], {
     cwd: projectRoot,
-    encoding: 'utf8',
+    env: childEnv(),
   });
   if (run.error !== undefined) {
     return { ok: false, reason: 'unreadable', detail: run.error.message };
@@ -448,9 +453,9 @@ export function cartoInit(
   }
 
   const wiring = snapshotFiles(mcpWiringTargets(projectRoot, home));
-  const run = spawnSync(binary.path, ['init'], {
+  const run = spawnSyncText(binary.path, ['init'], {
     cwd: projectRoot,
-    encoding: 'utf8',
+    env: childEnv(),
   });
   restoreFiles(wiring);
 
@@ -509,9 +514,9 @@ export function cartoSync(
   projectRoot: string,
   binary: CartoBinary
 ): CartoRunResult {
-  const run = spawnSync(binary.path, ['sync'], {
+  const run = spawnSyncText(binary.path, ['sync'], {
     cwd: projectRoot,
-    encoding: 'utf8',
+    env: childEnv(),
   });
   if (run.status === 0) return { ok: true, detail: 'synced' };
   const stderr = (run.stderr ?? '').trim();
@@ -531,6 +536,7 @@ export function cartoSyncAsync(
       // and blocks the child forever once it writes enough of it.
       child = spawn(binary.path, ['sync'], {
         cwd: projectRoot,
+        env: childEnv(),
         stdio: ['ignore', 'ignore', 'pipe'],
       });
     } catch (err) {

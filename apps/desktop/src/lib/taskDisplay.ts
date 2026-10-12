@@ -3,8 +3,8 @@ import type {
   Assignee,
   Priority,
   TaskKind,
-} from '@dispatch/core/browser';
-import { parseActorRef } from '@dispatch/core/browser';
+} from '@dispatch-foo/core/browser';
+import { parseActorRef } from '@dispatch-foo/core/browser';
 
 // Mirrors the `tone` prop `Pill` accepts (see components/ui/Pill.tsx) —
 // duplicated here rather than imported since Pill doesn't export its prop
@@ -76,7 +76,12 @@ export function assigneeLabel(assignee: Assignee | null | undefined): string {
   return ref.kind === 'agent' ? 'Agent' : 'Human';
 }
 
-const KIND_LABEL: Record<TaskKind, string> = { task: 'Task', epic: 'Epic' };
+const KIND_LABEL: Record<TaskKind, string> = {
+  task: 'Task',
+  milestone: 'Milestone',
+  project: 'Project',
+  initiative: 'Initiative',
+};
 
 export function kindLabel(kind: TaskKind): string {
   return KIND_LABEL[kind];

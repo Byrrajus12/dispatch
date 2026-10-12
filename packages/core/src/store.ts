@@ -10,9 +10,11 @@ import {
 import { join } from 'node:path';
 
 import { ATTACHMENTS_DIR } from './attachments.js';
-import { generateTaskId, isTaskId } from './ids.js';
+import { generateTaskId, isTaskId, taskIdFromFilename } from './ids.js';
+import { canonicalKind } from './kinds.js';
+import type { TaskKindInput } from './kinds.js';
 import { slugify } from './slug.js';
-import { canonicalStatus } from './status.js';
+import { CANONICAL_STATUSES, canonicalStatus } from './status.js';
 import type { TaskStoreBackend } from './storeBackend.js';
 import {
   appendActivity,
@@ -28,11 +30,13 @@ import type {
   Assignee,
   Priority,
   TaskAttachment,
+  TaskCycle,
   TaskDoc,
   TaskKind,
   TaskMeta,
   TaskRisk,
 } from './types.js';
+import { defaultTaskFields } from './types.js';
 
 export const DISPATCH_DIR = '.dispatch';
 
@@ -52,7 +56,7 @@ autoCommit: true
 
 export interface CreateInput {
   title: string;
-  kind?: TaskKind;
+  kind?: TaskKindInput;
   status?: string;
   description?: string;
   parent?: string | null;
@@ -67,9 +71,28 @@ export interface CreateInput {
   writes?: string[];
   risk?: TaskRisk;
   model?: string | null;
+  // The Acceptance Criteria section's text (`- item` lines), like UpdatePatch's.
+  acceptanceCriteria?: string;
   // What this task was synthesized from (see TaskMeta.derivedFrom). Set only
   // by the code that synthesizes one; a person creating a task never passes it.
   derivedFrom?: string;
+  // Linear-parity fields (see TaskMeta); null/[] clear them.
+  estimate?: number | null;
+  dueDate?: string | null;
+  startDate?: string | null;
+  cycle?: TaskCycle | null;
+  relatedTo?: string[];
+  duplicateOf?: string | null;
+  initiatives?: string[];
+  color?: string | null;
+  icon?: string | null;
+  sortOrder?: number | null;
+  /** Who is creating it, as an actor ref. */
+  creator?: Assignee | null;
+  /** The id in an external tracker (`linear:<uuid>`), linked from the start. */
+  external?: string | null;
+  /** When it was really created, for an import; defaults to `now`. */
+  created?: string;
 }
 
 export interface UpdatePatch {
@@ -90,6 +113,22 @@ export interface UpdatePatch {
   model?: string | null;
   // The id of this task in an external tracker (`linear:<uuid>`), or null to unlink it.
   external?: string | null;
+  // A kind change (e.g. promoting a task to a project); the id keeps its prefix.
+  kind?: TaskKind;
+  // Linear-parity fields (see TaskMeta); null/[] clear them.
+  estimate?: number | null;
+  dueDate?: string | null;
+  startDate?: string | null;
+  cycle?: TaskCycle | null;
+  relatedTo?: string[];
+  duplicateOf?: string | null;
+  initiatives?: string[];
+  color?: string | null;
+  icon?: string | null;
+  sortOrder?: number | null;
+  /** Who created it; a tracker sync backfills it from the remote record. */
+  creator?: Assignee | null;
+
   // null clears archivedAt (unarchive); a string sets it; undefined leaves it untouched.
   archivedAt?: string | null;
   // Set once a verify run passes. Never cleared by a patch — a later failing
@@ -115,7 +154,7 @@ export interface UpdatePatch {
 
 export interface ListFilter {
   status?: string;
-  kind?: TaskKind;
+  kind?: TaskKindInput;
   parent?: string;
 }
 
@@ -185,9 +224,9 @@ export function newTaskDoc(
     labels: input.labels ?? [],
     priority: input.priority ?? 'none',
     assignee: input.assignee ?? 'none',
-    created: now,
+    created: input.created ?? now,
     updated: now,
-    external: null,
+    external: input.external ?? null,
     selfReview: input.selfReview ?? false,
     ...(input.fixLoop === false ? { fixLoop: false } : {}),
     writes: input.writes ?? [],
@@ -197,12 +236,35 @@ export function newTaskDoc(
     ...(input.derivedFrom === undefined
       ? {}
       : { derivedFrom: input.derivedFrom }),
+    ...defaultTaskFields(),
+    ...(input.estimate === undefined ? {} : { estimate: input.estimate }),
+    ...(input.dueDate === undefined ? {} : { dueDate: input.dueDate }),
+    ...(input.startDate === undefined ? {} : { startDate: input.startDate }),
+    ...(input.cycle === undefined ? {} : { cycle: input.cycle }),
+    ...(input.relatedTo === undefined ? {} : { relatedTo: input.relatedTo }),
+    ...(input.duplicateOf === undefined
+      ? {}
+      : { duplicateOf: input.duplicateOf }),
+    ...(input.initiatives === undefined
+      ? {}
+      : { initiatives: input.initiatives }),
+    ...(input.creator === undefined ? {} : { creator: input.creator }),
+    ...(input.color === undefined ? {} : { color: input.color }),
+    ...(input.icon === undefined ? {} : { icon: input.icon }),
+    ...(input.sortOrder === undefined ? {} : { sortOrder: input.sortOrder }),
   };
   // The initial description is caller-supplied, so it's escaped the same
   // way setSection escapes a later edit to the same section.
   const description = escapeHeadingLines(input.description ?? '');
   const body = `\n## Description\n\n${description}\n\n## Acceptance Criteria\n\n## Activity\n`;
-  return { meta, body };
+  const criteria = input.acceptanceCriteria?.trim() ?? '';
+  return {
+    meta,
+    body:
+      criteria === ''
+        ? body
+        : setSection(body, 'Acceptance Criteria', criteria),
+  };
 }
 
 /**
@@ -242,6 +304,7 @@ export function applyUpdatePatch(
   // Write boundary for the status alias layer: an API caller (or old UI)
   // speaking a pre-rename name lands in canonical form.
   meta.status = canonicalStatus(meta.status);
+  meta.kind = canonicalKind(meta.kind) as TaskKind;
   // archivedAt is string|undefined on TaskMeta, so null (clear) is handled
   // separately rather than spread in like the other fields.
   if (archivedAt === null) delete meta.archivedAt;
@@ -264,14 +327,35 @@ export function applyUpdatePatch(
   return { meta, body };
 }
 
-// Writes the starter `.dispatch/config.yml` if the project has none. Config
-// stays a plain committable file whichever backend holds the tasks, so both
-// initializers call this rather than each spelling out the default.
-export function ensureProjectConfig(rootDir: string): void {
+// The starter config.yml. A board that already uses statuses outside the
+// built-ins keeps them, after the built-ins the machinery writes; their types
+// and roles are left for the team to set rather than guessed.
+function starterConfig(inUse: readonly string[]): string {
+  const builtIn = CANONICAL_STATUSES as readonly string[];
+  const custom = [...new Set(inUse.map(canonicalStatus))].filter(
+    (name) => !builtIn.includes(name)
+  );
+  if (custom.length === 0) return DEFAULT_CONFIG;
+  const names = [...builtIn, ...custom].map((name) => JSON.stringify(name));
+  return `statuses: [${names.join(', ')}]\nautoCommit: true\n`;
+}
+
+/** The statuses a project's existing tasks use, for its starter config. */
+export function boardStatuses(store: TaskStorePort): string[] {
+  return store.listSafe().docs.map((doc) => doc.meta.status);
+}
+
+// Writes the starter `.dispatch/config.yml` if the project has none; an
+// existing one is never touched. Config stays a plain committable file
+// whichever backend holds the tasks, so both initializers call this.
+export function ensureProjectConfig(
+  rootDir: string,
+  statuses: readonly string[] = []
+): void {
   const dir = join(rootDir, DISPATCH_DIR);
   mkdirSync(dir, { recursive: true });
   const cfg = join(dir, 'config.yml');
-  if (!existsSync(cfg)) writeFileSync(cfg, DEFAULT_CONFIG);
+  if (!existsSync(cfg)) writeFileSync(cfg, starterConfig(statuses));
 }
 
 // What `.dispatch/.gitignore` excludes, per backend.
@@ -386,8 +470,20 @@ export function ensureProjectGitignore(
   appendFileSync(path, `${additions.join('\n')}\n`);
 }
 
+// Code-unit order: what SQLite's BINARY collation gives the database backend,
+// without the ICU collation localeCompare pays on every call.
+function compareCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 export class TaskStore implements TaskStorePort {
   readonly tasksDir: string;
+  // Task id → filename, so a lookup is a map hit rather than a directory
+  // scan (a create scanned once per probe, making an import O(n²)). Built on
+  // first use, refreshed by every list, kept in step with this store's own
+  // writes. Another process's edits are caught at lookup: a miss rescans, as
+  // does a hit whose file has gone.
+  private fileIndex: Map<string, string> | null = null;
 
   constructor(readonly rootDir: string) {
     this.tasksDir = join(rootDir, DISPATCH_DIR, 'tasks');
@@ -395,8 +491,9 @@ export class TaskStore implements TaskStorePort {
 
   static init(rootDir: string): TaskStore {
     const store = new TaskStore(rootDir);
+    const statuses = store.isInitialized() ? boardStatuses(store) : [];
     mkdirSync(store.tasksDir, { recursive: true });
-    ensureProjectConfig(rootDir);
+    ensureProjectConfig(rootDir, statuses);
     return store;
   }
 
@@ -405,18 +502,40 @@ export class TaskStore implements TaskStorePort {
   }
 
   create(input: CreateInput, now: string = new Date().toISOString()): TaskDoc {
-    const kind = input.kind ?? 'task';
+    const kind = canonicalKind(input.kind ?? 'task') as TaskKind;
     let id = generateTaskId(kind, input.title, now);
-    for (let i = 0; i < 5 && this.taskFilePath(id); i++) {
+    for (let attempt = 1; this.idTaken(id); attempt++) {
+      if (attempt > 5) throw new Error(`id collision persisted: ${id}`);
       id = generateTaskId(kind, input.title, now);
     }
-    if (this.taskFilePath(id)) throw new Error(`id collision persisted: ${id}`);
     const doc = newTaskDoc(id, kind, input, now);
-    writeFileSync(
-      join(this.tasksDir, `${id}-${slugify(input.title)}.md`),
-      serializeTaskFile(doc)
-    );
+    const filename = `${id}-${slugify(input.title)}.md`;
+    writeFileSync(join(this.tasksDir, filename), serializeTaskFile(doc));
+    this.fileIndex?.set(id, filename);
     return doc;
+  }
+
+  // create()'s collision probe. A fresh id is a miss by design, so a miss is
+  // trusted rather than rescanned; a file another process added this instant
+  // under the same random id is the one case it can miss.
+  private idTaken(id: string): boolean {
+    if (!this.isInitialized()) return false;
+    return (this.fileIndex ?? this.scan()).has(id);
+  }
+
+  // Lists the tasks directory and rebuilds the id index from what it holds.
+  private scan(
+    names: string[] = readdirSync(this.tasksDir)
+  ): Map<string, string> {
+    const index = new Map<string, string>();
+    for (const name of names) {
+      if (!name.endsWith('.md')) continue;
+      const id = taskIdFromFilename(name.slice(0, -'.md'.length));
+      // The first file per id wins, as the scan this replaces did.
+      if (id !== null && !index.has(id)) index.set(id, name);
+    }
+    this.fileIndex = index;
+    return index;
   }
 
   get(id: string): TaskDoc | null {
@@ -427,7 +546,9 @@ export class TaskStore implements TaskStorePort {
 
   list(filter: ListFilter = {}): TaskDoc[] {
     if (!this.isInitialized()) return [];
-    const docs = readdirSync(this.tasksDir)
+    const names = readdirSync(this.tasksDir);
+    this.scan(names);
+    const docs = names
       .filter((f) => f.endsWith('.md'))
       .map((f) =>
         parseTaskFile(readFileSync(join(this.tasksDir, f), 'utf8'), f)
@@ -441,9 +562,9 @@ export class TaskStore implements TaskStorePort {
     if (!this.isInitialized()) return { docs: [], errors: [] };
     const docs: TaskDoc[] = [];
     const errors: ListSafeError[] = [];
-    for (const f of readdirSync(this.tasksDir).filter((f) =>
-      f.endsWith('.md')
-    )) {
+    const names = readdirSync(this.tasksDir);
+    this.scan(names);
+    for (const f of names.filter((f) => f.endsWith('.md'))) {
       try {
         docs.push(
           parseTaskFile(readFileSync(join(this.tasksDir, f), 'utf8'), f)
@@ -467,14 +588,18 @@ export class TaskStore implements TaskStorePort {
           : true
       )
       .filter((d) =>
-        filter.kind !== undefined ? d.meta.kind === filter.kind : true
+        filter.kind !== undefined
+          ? d.meta.kind === canonicalKind(filter.kind)
+          : true
       )
       .filter((d) =>
         filter.parent !== undefined ? d.meta.parent === filter.parent : true
       )
       .sort((a, b) => {
-        const byCreated = a.meta.created.localeCompare(b.meta.created);
-        return byCreated !== 0 ? byCreated : a.meta.id.localeCompare(b.meta.id);
+        const byCreated = compareCodeUnits(a.meta.created, b.meta.created);
+        return byCreated !== 0
+          ? byCreated
+          : compareCodeUnits(a.meta.id, b.meta.id);
       });
   }
 
@@ -514,6 +639,7 @@ export class TaskStore implements TaskStorePort {
     const file = this.taskFilePath(id);
     if (file === null) return false;
     rmSync(file, { force: true });
+    this.fileIndex?.delete(id);
     rmSync(attachmentsDir(this.rootDir, id), { recursive: true, force: true });
     return true;
   }
@@ -521,9 +647,12 @@ export class TaskStore implements TaskStorePort {
   taskFilePath(id: string): string | null {
     if (!isTaskId(id)) return null;
     if (!this.isInitialized()) return null;
-    const hit = readdirSync(this.tasksDir).find(
-      (f) => f === `${id}.md` || f.startsWith(`${id}-`)
-    );
-    return hit ? join(this.tasksDir, hit) : null;
+    const known = this.fileIndex?.get(id);
+    if (known !== undefined) {
+      const path = join(this.tasksDir, known);
+      if (existsSync(path)) return path;
+    }
+    const name = this.scan().get(id);
+    return name === undefined ? null : join(this.tasksDir, name);
   }
 }

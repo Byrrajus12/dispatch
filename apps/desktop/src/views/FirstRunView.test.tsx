@@ -1,5 +1,11 @@
 import type { DraftRecord } from '@dispatch/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import { expect, mock, test } from 'bun:test';
 
 import { FirstRunView } from './FirstRunView';
@@ -99,4 +105,141 @@ test('offers a way past the prompt to the ordinary board', () => {
   // Someone who opened the app to look around must not be stuck behind a
   // textarea.
   expect(onBrowseBoard).toHaveBeenCalled();
+});
+
+test('Two views can set the prompt aside for the agent', () => {
+  const onTalkToAgent = mock(() => {});
+  render(
+    <FirstRunView
+      projectName="dispatch"
+      onStartDraft={() => Promise.resolve(draft)}
+      onBrowseBoard={() => {}}
+      onTalkToAgent={onTalkToAgent}
+    />
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Talk to the agent' }));
+  expect(onTalkToAgent).toHaveBeenCalledTimes(1);
+});
+
+test('Classic offers no agent escape', () => {
+  setup();
+  expect(
+    screen.queryByRole('button', { name: 'Talk to the agent' })
+  ).toBeNull();
+});
+
+test('an agent that cannot draft gets the two-field form, which creates the task', async () => {
+  const onCreateTask = mock(() => Promise.resolve());
+  render(
+    <FirstRunView
+      projectName="dispatch"
+      planner={false}
+      onCreateTask={onCreateTask}
+      onStartDraft={() => Promise.resolve(draft)}
+      onBrowseBoard={() => {}}
+    />
+  );
+  expect(screen.queryByText('Draft task')).toBeNull();
+  fireEvent.change(screen.getByLabelText('What should change?'), {
+    target: { value: '  Add a dark mode toggle  ' },
+  });
+  fireEvent.change(screen.getByLabelText("How will you know it's done?"), {
+    target: { value: 'The theme switches' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Create task' }));
+  await waitFor(() =>
+    expect(onCreateTask).toHaveBeenCalledWith({
+      what: 'Add a dark mode toggle',
+      done: 'The theme switches',
+    })
+  );
+});
+
+test('a double click on Create task creates one task', async () => {
+  let finish = () => {};
+  const onCreateTask = mock(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      })
+  );
+  render(
+    <FirstRunView
+      projectName="dispatch"
+      planner={false}
+      onCreateTask={onCreateTask}
+      onStartDraft={() => Promise.resolve(draft)}
+      onBrowseBoard={() => {}}
+    />
+  );
+  fireEvent.change(screen.getByLabelText('What should change?'), {
+    target: { value: 'Add a dark mode toggle' },
+  });
+  const create = screen.getByRole('button', { name: 'Create task' });
+  // Both clicks land before React re-renders the button as disabled.
+  act(() => {
+    create.click();
+    create.click();
+  });
+  expect(onCreateTask).toHaveBeenCalledTimes(1);
+  await act(() => {
+    finish();
+    return Promise.resolve();
+  });
+  await waitFor(() =>
+    expect(screen.getByLabelText('What should change?')).toHaveProperty(
+      'value',
+      ''
+    )
+  );
+});
+
+test('the form needs a change before it can create anything', () => {
+  render(
+    <FirstRunView
+      projectName="dispatch"
+      planner={false}
+      onCreateTask={() => Promise.resolve()}
+      onStartDraft={() => Promise.resolve(draft)}
+      onBrowseBoard={() => {}}
+    />
+  );
+  expect(
+    screen.getByRole<HTMLButtonElement>('button', { name: 'Create task' })
+      .disabled
+  ).toBe(true);
+});
+
+test('a draft that failed after the box emptied shows why', () => {
+  const onRetry = mock(() => Promise.resolve());
+  render(
+    <FirstRunView
+      projectName="dispatch"
+      onStartDraft={() => Promise.resolve(draft)}
+      onBrowseBoard={() => {}}
+      failure={{ error: 'Not logged in', providerId: 'claude', onRetry }}
+    />
+  );
+  expect(
+    screen.getByText('Claude Code needs you to sign in again.')
+  ).toBeTruthy();
+  // A sign-in cause links to Setup (inside the shell); outside it, no Try again.
+  expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+});
+
+test('a draft that failed for another reason can be retried', async () => {
+  const onRetry = mock(() => Promise.resolve());
+  render(
+    <FirstRunView
+      projectName="dispatch"
+      onStartDraft={() => Promise.resolve(draft)}
+      onBrowseBoard={() => {}}
+      failure={{
+        error: 'planner produced no task for this description',
+        onRetry,
+      }}
+    />
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+  await waitFor(() => expect(onRetry).toHaveBeenCalledTimes(1));
 });

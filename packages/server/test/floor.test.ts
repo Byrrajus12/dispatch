@@ -1,4 +1,4 @@
-import type { FloorCheck } from '@dispatch/core';
+import type { FloorCheck } from '@dispatch-foo/core';
 import { describe, expect, it } from 'bun:test';
 
 import {
@@ -54,7 +54,7 @@ describe('floorCheckForCommand', () => {
       'yarn npm publish',
       'bun publish',
       'npx lerna publish',
-      'npm unpublish @dispatch/core@1.0.0',
+      'npm unpublish @dispatch-foo/core@1.0.0',
       'cargo publish',
       'git push --tags',
       'git push origin --follow-tags',
@@ -347,6 +347,15 @@ describe('floorCheckForCommand, rewritten for linear time', () => {
 });
 
 describe('floorCheckForToolInput', () => {
+  it.each([
+    ['g""h release create v1', 'publish'],
+    ["git push --'force' origin main", 'force-push'],
+    ['np\\m publish', 'publish'],
+    ['gh release \\\ncreate v1', 'publish'],
+  ])('sees through the quoting in %p', (command, check) => {
+    expect(floorCheckForToolInput({ command }) as string | null).toBe(check);
+  });
+
   it('reads the command of any shell-shaped tool input', () => {
     expect(floorCheckForToolInput({ command: 'npm publish' })).toBe('publish');
     expect(floorCheckForToolInput({ command: 'ls' })).toBeNull();

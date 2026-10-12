@@ -3,16 +3,19 @@ import {
   isDone,
   loadConfig,
   type TaskStorePort,
-} from '@dispatch/core';
+} from '@dispatch-foo/core';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 import type { TaskCache } from '../cache.js';
 import type { EventBus } from '../events.js';
+import { statusModelFor } from '../statuses.js';
 import { JjManager } from './jj.js';
 import type { Orchestrator } from './orchestrator.js';
+import { OriginLander } from './originLanding.js';
 import { mergeQueuePath, runsDir } from './paths.js';
 import { type CommandRunner, defaultCommandRunner } from './pr.js';
 import type { CommandResult, RepoPr } from './pr.js';
+import { withProtoShims } from './protoShims.js';
 import { trimWorktree } from './trim.js';
 import type { RunMeta } from './types.js';
 import {
@@ -59,8 +62,10 @@ export function truncateReason(text: string): string {
 export type MergeQueueEntryState =
   | 'queued'
   | 'waiting-blockers'
-  // Held because the MAIN CHECKOUT isn't mergeable-into right now — dirty
-  // tree, staged index, or the wrong branch out. A display state like
+  // Held because the environment can't take the merge right now: for a
+  // local merge, the MAIN CHECKOUT (dirty tree, staged index, or the wrong
+  // branch out); for an origin landing, origin being unreachable. A display
+  // state like
   // 'waiting-blockers': the entry stays in line, carries the reason, and is
   // retried on the next pump rather than being failed out to history.
   | 'blocked-environment'
@@ -149,6 +154,14 @@ export interface MergeQueueEntry {
   output?: string;
   /** Set only once an entry lands in `merged`/`failed`. */
   finishedAt?: string;
+  /**
+   * Where a `merged` entry's work went. 'origin' means it is on the remote's
+   * base branch already (pushed as part of the merge itself). 'local' means it
+   * was merged into the main checkout, which a drain-push carries to origin
+   * when there is one. 'pr' means GitHub merged its PR. Absent on entries
+   * written before this field existed.
+   */
+  landedOn?: 'origin' | 'local' | 'pr';
 }
 
 export interface MergeQueueSnapshot {
@@ -182,6 +195,10 @@ export interface MergeQueueContext {
   // no poll has ever run, i.e. always holds on an absent PR — the safer
   // default for a caller that wires `prState` but not this.
   cacheReady?: () => boolean;
+  // Lands origin-first merges. Production passes the one built around the
+  // OriginWriter the board syncer shares, so the two never race each other's
+  // pushes. Absent ⇒ the queue builds its own on its command runner.
+  lander?: OriginLander;
 }
 
 // Test-only override for the blocked-retry delay (see armBlockedRetry) —
@@ -247,6 +264,7 @@ export class MergeQueue {
   // safe to touch. See restackStaleRuns().
   private readonly pendingStaleRuns: string[] = [];
   private readonly jj: JjManager;
+  private readonly lander: OriginLander;
   // Count of entries that reached `merged` since the last drain-push attempt,
   // plus the base branch the most recent of them merged into — captured at
   // increment time so a push after the counter resets (see pushOnDrain) still
@@ -283,6 +301,13 @@ export class MergeQueue {
     this.blockedRetryDelayMs =
       opts?.blockedRetryDelayMs ?? DEFAULT_BLOCKED_RETRY_DELAY_MS;
     this.jj = ctx.jj ?? new JjManager(ctx.rootDir, run);
+    this.lander =
+      ctx.lander ??
+      new OriginLander({
+        rootDir: ctx.rootDir,
+        orchestrator: ctx.orchestrator,
+        run,
+      });
     // Everything queued holds its worktree. Without this a review of a sibling
     // run removes the directory the queue is about to rebase in, and the only
     // symptom is an ENOENT that names git rather than the missing checkout.
@@ -482,7 +507,7 @@ export class MergeQueue {
   // atomic, so a crash mid-write can leave truncated/garbage JSON on disk,
   // and dispatchd must still start cleanly in that case (mirrors
   // Orchestrator.diff()'s snapshot-read convention and readRegistry() in
-  // @dispatch/core).
+  // @dispatch-foo/core).
   private loadPersistedFile(): MergeQueueSnapshot {
     const path = mergeQueuePath(this.ctx.rootDir);
     if (!existsSync(path)) return { entries: [], history: [] };
@@ -660,11 +685,19 @@ export class MergeQueue {
     try {
       const task = this.ctx.store.get(taskId);
       if (task === null) return;
-      const from = to === 'landing' ? 'review' : 'landing';
+      // Roles, not names: a project with no landing status (a Linear
+      // mirror) never moves a task on queue entry or exit.
+      const { roles } = statusModelFor(this.ctx.rootDir);
+      if (roles.landing === null) return;
+      const target = to === 'landing' ? roles.landing : roles.review;
+      const from = to === 'landing' ? roles.review : roles.landing;
       if (task.meta.status !== from) return;
-      this.ctx.store.update(taskId, { status: to, appendActivity: activity });
-      this.ctx.cache.rebuild(this.ctx.store);
-      this.ctx.events.broadcast({ type: 'task.changed' });
+      this.ctx.store.update(taskId, {
+        status: target,
+        appendActivity: activity,
+      });
+      this.ctx.cache.refresh(this.ctx.store, [taskId]);
+      this.ctx.events.broadcast({ type: 'task.changed', ids: [taskId] });
     } catch {
       // A status write must never take the queue down with it.
     }
@@ -702,10 +735,11 @@ export class MergeQueue {
     const order = stack !== null ? stack.order : [taskId];
 
     const runs = this.ctx.orchestrator.list();
+    const statuses = statusModelFor(this.ctx.rootDir);
     const enqueued: MergeQueueEntry[] = [];
     for (const id of order) {
       const task = byId.get(id);
-      if (task !== undefined && isDone(task)) continue;
+      if (task !== undefined && isDone(task, statuses)) continue;
       const meta = runs.find((r) => r.taskId === id);
       if (meta === undefined) continue;
       if (!this.isEnqueueable(meta)) continue;
@@ -739,10 +773,11 @@ export class MergeQueue {
     // Same guard enqueueStack applies: skip only a CONFIRMED done/cancelled
     // task; an unresolved id falls through as eligible, same as there.
     const byId = new Map(tasks.map((t) => [t.meta.id, t]));
+    const statuses = statusModelFor(this.ctx.rootDir);
     const eligible = this.ctx.orchestrator.list().filter((m) => {
       if (!this.isEnqueueable(m)) return false;
       const task = byId.get(m.taskId);
-      return task === undefined || !isDone(task);
+      return task === undefined || !isDone(task, statuses);
     });
     // list() is most-recent-first, so the first eligible run seen per taskId
     // is that task's latest — same convention enqueueStack relies on.
@@ -928,6 +963,7 @@ export class MergeQueue {
         .query({ includeArchived: true })
         .map((task) => [task.meta.id, task])
     );
+    const statuses = statusModelFor(this.ctx.rootDir);
     // Looked up once per pass, same rationale as the task map above: a
     // per-entry registry scan would be O(entries * runs) every pump tick.
     const runsById = new Map(
@@ -940,7 +976,7 @@ export class MergeQueue {
       const blockedBy = task?.meta.blockedBy ?? [];
       const unmet = blockedBy.some((id) => {
         const blocker = byId.get(id);
-        return blocker !== undefined && !isDone(blocker);
+        return blocker !== undefined && !isDone(blocker, statuses);
       });
       // Two independent reasons this isn't a plain `unmet ? … : 'queued'`.
       //
@@ -1060,13 +1096,20 @@ export class MergeQueue {
       }
       await this.rebase(entry, meta);
       await this.verify(entry, meta);
-      await this.merge(entry, meta);
+      const landedOn = await this.merge(entry, meta);
+      entry.landedOn = landedOn;
       // merge() reviews the run, which fires onRunReviewed and queues this
       // run's dependents for restacking. Draining here — before the entry is
       // filed as merged — means an observer that sees `merged` is looking at
       // a stack that has already been brought back onto the new base.
       await this.drainRestacks();
-      this.finish(entry, 'merged', meta.baseBranch);
+      // Only a LOCAL merge owes origin a drain-push. An origin landing is
+      // already there, and a PR merge happened on GitHub.
+      this.finish(
+        entry,
+        'merged',
+        landedOn === 'local' ? meta.baseBranch : undefined
+      );
       return 'done';
     } catch (err) {
       // Capped here as well as in commandErrorText: not every throw on this
@@ -1130,6 +1173,12 @@ export class MergeQueue {
       );
     }
 
+    // A run that will land on origin is rebased onto origin's tip, exactly
+    // like a PR run: that is what verify() must test and what the landing
+    // builds on. The local base branch can be stale or ahead, and neither
+    // matters once origin is the target.
+    const ontoOrigin =
+      meta.prUrl !== undefined || this.ctx.orchestrator.landsOnOrigin(meta);
     const liveDescendants = await this.hasLiveDescendants(meta.branch);
     if (!liveDescendants && (await this.jj.isColocated())) {
       // The jj rebase runs in the project root and moves `refs/heads/<branch>`
@@ -1145,21 +1194,10 @@ export class MergeQueue {
       // tolerates them (measured), so failing this entry over one would make
       // the jj path refuse merges the git path completes. The check itself now
       // lives at the top of this method, since the plain-git path needs it too.
-      if (meta.prUrl !== undefined) {
-        const fetch = await this.run(cwd, [
-          'git',
-          'fetch',
-          'origin',
-          meta.baseBranch,
-        ]);
-        if (!fetch.ok) {
-          throw new Error(`git fetch failed: ${commandErrorText(fetch)}`);
-        }
-      }
-      const jjTarget =
-        meta.prUrl !== undefined
-          ? `origin/${meta.baseBranch}`
-          : meta.baseBranch;
+      if (ontoOrigin) await this.fetchForRebase(cwd, meta.baseBranch);
+      const jjTarget = ontoOrigin
+        ? `origin/${meta.baseBranch}`
+        : meta.baseBranch;
       await this.jj.restack(meta.branch, await this.jjRevision(jjTarget));
       this.ctx.orchestrator.resyncRunWorktree(meta.id);
       return;
@@ -1173,25 +1211,31 @@ export class MergeQueue {
       );
     }
 
-    if (meta.prUrl !== undefined) {
-      const fetch = await this.run(cwd, [
-        'git',
-        'fetch',
-        'origin',
-        meta.baseBranch,
-      ]);
-      if (!fetch.ok) {
-        throw new Error(`git fetch failed: ${commandErrorText(fetch)}`);
-      }
-    }
+    if (ontoOrigin) await this.fetchForRebase(cwd, meta.baseBranch);
 
-    const target =
-      meta.prUrl !== undefined ? `origin/${meta.baseBranch}` : meta.baseBranch;
+    const target = ontoOrigin ? `origin/${meta.baseBranch}` : meta.baseBranch;
     const rebase = await this.run(cwd, ['git', 'rebase', target]);
     if (!rebase.ok) {
       await this.run(cwd, ['git', 'rebase', '--abort']);
       throw new Error(`git rebase failed: ${commandErrorText(rebase)}`);
     }
+  }
+
+  // The fetch in front of a rebase onto `origin/<base>`. Unreachable origin
+  // is an environment hold, not a failure: an offline laptop must not file
+  // every queued entry to failed history. Other fetch failures still fail.
+  private async fetchForRebase(cwd: string, base: string): Promise<void> {
+    const fetch = await this.run(cwd, ['git', 'fetch', 'origin', base]);
+    if (fetch.ok) return;
+    const text = commandErrorText(fetch);
+    if (
+      /could not resolve host|unable to access|could not read from remote|network is unreachable|timed out/i.test(
+        text
+      )
+    ) {
+      throw new MergeEnvironmentError(`origin is unreachable: ${text}`);
+    }
+    throw new Error(`git fetch failed: ${text}`);
   }
 
   // Runs the project's `verifyCommand` (config.yml), if any, in the run's
@@ -1257,7 +1301,7 @@ export class MergeQueue {
     const record = entry.steps?.[index];
     const result = await this.run(
       meta.worktreePath,
-      ['bash', '-lc', step.command],
+      ['bash', '-lc', withProtoShims(meta.worktreePath, step.command)],
       {
         timeoutMs: timeoutSec * 1000,
         // Each chunk goes out as its own event and is appended to a bounded tail
@@ -1291,14 +1335,20 @@ export class MergeQueue {
     if (record !== undefined) record.status = 'passed';
   }
 
-  // The terminal step: a local run goes through the orchestrator's own
-  // squash-merge review path (whatever it throws — a dirty main checkout,
-  // a real conflict — propagates up to process()'s catch, failing the entry
-  // cleanly); a PR run force-pushes the just-rebased branch, squash-merges
-  // the PR via `gh`, and records the merge on the run via
-  // markRunMergedViaPr (mirroring what PrManager's own poller does once it
-  // sees a PR merged).
-  private async merge(entry: MergeQueueEntry, meta: RunMeta): Promise<void> {
+  // The terminal step, three ways, returning where the work went:
+  // - A PR run force-pushes the just-rebased branch, squash-merges the PR via
+  //   `gh`, and records the merge via markRunMergedViaPr (mirroring what
+  //   PrManager's own poller does once it sees a PR merged).
+  // - A run whose base lives on origin lands there first (OriginLander), and
+  //   the main checkout follows. Its state can't block or race the landing.
+  // - Anything else (no remote) goes through the orchestrator's own local
+  //   squash-merge review path, unchanged.
+  // Whatever any of them throws (a dirty main checkout, a real conflict, an
+  // unreachable origin) propagates up to process()'s catch.
+  private async merge(
+    entry: MergeQueueEntry,
+    meta: RunMeta
+  ): Promise<'origin' | 'local' | 'pr'> {
     // Re-checked because a finding can be adjudicated while the entry waits,
     // and the PR path below never reaches review()'s own gate.
     const blocked = this.ctx.orchestrator.blockedFindingReason(meta.taskId);
@@ -1328,11 +1378,40 @@ export class MergeQueue {
         throw new Error(`gh pr merge failed: ${commandErrorText(merge)}`);
       }
       this.ctx.orchestrator.markRunMergedViaPr(meta.id);
-    } else {
-      // The queue's own automatic merge — nobody clicked Merge for this run,
-      // the queue decided it was ready.
-      this.ctx.orchestrator.review(meta.id, 'merge', { actor: 'none' });
+      return 'pr';
     }
+    // The queue's own automatic merge — nobody clicked Merge for this run,
+    // the queue decided it was ready.
+    if (this.ctx.orchestrator.landsOnOrigin(meta)) {
+      await this.lander.land(meta.id, { actor: 'none' });
+      return 'origin';
+    }
+    this.ctx.orchestrator.review(meta.id, 'merge', { actor: 'none' });
+    return 'local';
+  }
+
+  /**
+   * Merges one run outside the queue's pipeline: the Merge button. On a
+   * project whose base lives on origin this lands on origin through the same
+   * lander (and so the same OriginWriter) the queue uses. Otherwise it is the
+   * local review() merge, as before. Returns the reviewed run.
+   */
+  async mergeNow(runId: string): Promise<RunMeta> {
+    const meta = this.ctx.orchestrator.getRun(runId)?.meta;
+    if (meta !== undefined && this.ctx.orchestrator.landsOnOrigin(meta)) {
+      return (await this.lander.land(runId)).run;
+    }
+    return this.ctx.orchestrator.review(runId, 'merge');
+  }
+
+  /**
+   * The retry for a run merged into the local base that never reached origin
+   * ("Merged locally — not on GitHub yet"): replays its squash onto origin
+   * through the same lander and OriginWriter a landing uses. See
+   * OriginLander.publish.
+   */
+  async publish(runId: string): Promise<RunMeta> {
+    return (await this.lander.publish(runId)).run;
   }
 
   // Works through both restack backlogs — blockers that just merged, and runs
@@ -1690,8 +1769,12 @@ export class MergeQueue {
       // Replaying onto it would drop the blocker's files from the dependent
       // entirely. Fetch and target `origin/<base>`, exactly as rebase() below
       // already does for a PR run's own rebase.
+      // An origin-first landing is the same story: the blocker's squash is on
+      // origin, and the local base only has it if the follow fast-forward got
+      // through.
       const target =
-        parent.reviewAction === 'pr'
+        parent.reviewAction === 'pr' ||
+        this.ctx.orchestrator.landsOnOrigin(parent)
           ? `origin/${await this.fetchBase(newBase)}`
           : newBase;
       if (viaJj) {
@@ -1769,8 +1852,9 @@ export class MergeQueue {
   // Removes `entry` from the live queue, stamps it terminal, and files it
   // into history (most-recent-first, capped at HISTORY_LIMIT) — the one
   // place both `merged` and `failed` outcomes converge. `mergedBaseBranch` is
-  // supplied only for a 'merged' outcome, and is what feeds pushOnDrain's
-  // eventual `git push origin <base>` once the queue empties out.
+  // supplied only for a LOCAL 'merged' outcome, and is what feeds
+  // pushOnDrain's eventual `git push origin <base>` once the queue empties
+  // out. An origin landing passes none: there is nothing left to push.
   /**
    * Reclaims a just-finished run's reinstallable dependency directories, keeping
    * its checkout so the run stays reviewable (see trimWorktree).

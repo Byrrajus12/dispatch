@@ -1,7 +1,10 @@
+import type { ConfigPatch } from '@dispatch-foo/core/browser';
 import type { LucideIcon } from 'lucide-react';
 import {
   Bell,
   Bot,
+  BotMessageSquare,
+  Brain,
   Cpu,
   FileDiff,
   FolderSearch,
@@ -9,6 +12,7 @@ import {
   KeyRound,
   LockIcon,
   MonitorPlay,
+  Network,
   Plug,
   RefreshCw,
   SearchIcon,
@@ -16,6 +20,7 @@ import {
   Settings2,
   ShieldCheck,
   Users,
+  Wrench,
   XIcon,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
@@ -27,10 +32,12 @@ import {
   useState,
 } from 'react';
 
+import { A2ASection } from '../components/settings/A2ASection';
 import {
   accessFor,
   SettingsAccessProvider,
 } from '../components/settings/access';
+import { AgentRosterSection } from '../components/settings/AgentRosterSection';
 import { AgentsSection } from '../components/settings/AgentsSection';
 import { BoardSyncGroup } from '../components/settings/BoardSyncGroup';
 import { ChecksSection } from '../components/settings/ChecksSection';
@@ -45,6 +52,7 @@ import { DiffsSection } from '../components/settings/DiffsSection';
 import { GeneralSection } from '../components/settings/GeneralSection';
 import { IntegrationsSection } from '../components/settings/IntegrationsSection';
 import { LicenseSection } from '../components/settings/LicenseSection';
+import { MemorySection } from '../components/settings/MemorySection';
 import { NotificationsSection } from '../components/settings/NotificationsSection';
 import { PolicySection } from '../components/settings/PolicySection';
 import { PreviewsSection } from '../components/settings/PreviewsSection';
@@ -54,12 +62,16 @@ import {
   SearchScopeProvider,
   SettingsSearchProvider,
 } from '../components/settings/search';
+import { TakeOverDaemon } from '../components/settings/TakeOverDaemon';
 import { TeamSection } from '../components/settings/TeamSection';
+import { AgentStep } from '../components/setup/AgentStep';
+import { CliCommandStep } from '../components/setup/CliCommandStep';
+import { GitStep } from '../components/setup/GitStep';
 import type { DispatchProjectData } from '../hooks/useDispatchProject';
 import type { SettingsPage } from '../lib/appNav';
 import { isInsufficientTier } from '../lib/daemonAuth';
 import { cn } from '@/lib/utils';
-import { PageHeader } from '@/ui/ai/page-header';
+import { PageHeader, PageHeaderEmbeddedContext } from '@/ui/ai/page-header';
 import {
   SIDEBAR_ROW_ACTIVE_CLASS,
   SIDEBAR_ROW_CLASS,
@@ -78,7 +90,22 @@ interface SettingsViewProps {
   onOpenTask?: (taskId: string) => void;
   /** The page to open on — `navState.settingsPage`, which the rail's Connect Linear and
    *  the strip's gear set to Integrations. A new value while mounted switches the page. */
-  initialPage?: SettingsPage;
+  initialPage?: SettingsPage | HostedSettingsPage['id'];
+  /** Whole views shown as extra pages (Two views folds Sessions and All agents in here). */
+  hostedPages?: readonly HostedSettingsPage[];
+  /** Replaces the header's crumb-only row, e.g. with the panel's close button. */
+  headerActions?: ReactNode;
+  /** Shown after a page's own groups (Two views puts memory's Recent under Memory). */
+  pageExtras?: Partial<Record<SettingsPage, ReactNode>>;
+}
+
+/** A page that is a whole view: full width, its own state, left out of search. */
+export interface HostedSettingsPage {
+  id: 'usage' | 'runs' | 'developer';
+  label: string;
+  icon: LucideIcon;
+  intro: string;
+  render: () => ReactNode;
 }
 
 type SaveState =
@@ -128,18 +155,47 @@ const SETTINGS_GROUPS: { label: string; pages: PageSpec[] }[] = [
     label: 'Project',
     pages: [
       {
+        id: 'setup',
+        label: 'Setup',
+        icon: Wrench,
+        intro: 'Git and your AI agents: install, sign in, or switch.',
+        savesConfig: false,
+        render: (ctx) => (
+          <>
+            <GitStep onReady={() => {}} />
+            {ctx.data.client !== null && (
+              <AgentStep
+                client={ctx.data.client}
+                port={ctx.data.port}
+                onSetDefault={(executor) => {
+                  const patch: ConfigPatch = { executor };
+                  return ctx.save(patch);
+                }}
+                onContinue={() => {}}
+                continueLabel="Save"
+              />
+            )}
+            <CliCommandStep />
+          </>
+        ),
+      },
+      {
         id: 'general',
         label: 'General',
         icon: Settings2,
         intro: "The board's columns and where pull-request checkouts go.",
         savesConfig: true,
-        render: withConfig((ctx) => (
-          <GeneralSection
-            config={ctx.config}
-            onSave={ctx.save}
-            canOperate={ctx.canOperate}
-          />
-        )),
+        render: (ctx) => (
+          <>
+            {ctx.config !== null && (
+              <GeneralSection
+                config={ctx.config}
+                onSave={ctx.save}
+                canOperate={ctx.canOperate}
+              />
+            )}
+          </>
+        ),
       },
       {
         id: 'agents',
@@ -154,6 +210,8 @@ const SETTINGS_GROUPS: { label: string; pages: PageSpec[] }[] = [
             executors={ctx.data.executors}
             onSave={ctx.save}
             canOperate={ctx.canOperate}
+            client={ctx.data.client}
+            port={ctx.data.port}
           />
         )),
       },
@@ -192,6 +250,22 @@ const SETTINGS_GROUPS: { label: string; pages: PageSpec[] }[] = [
         )),
       },
       {
+        id: 'memory',
+        label: 'Memory',
+        icon: Brain,
+        intro:
+          'What runs remember between tasks, where it came from, and how much of it each prompt carries.',
+        savesConfig: true,
+        // The store's health renders without config, so a closed store still says why.
+        render: (ctx) => (
+          <MemorySection
+            data={ctx.data}
+            config={ctx.config}
+            onSave={ctx.save}
+          />
+        ),
+      },
+      {
         id: 'previews',
         label: 'Previews',
         icon: MonitorPlay,
@@ -228,7 +302,8 @@ const SETTINGS_GROUPS: { label: string; pages: PageSpec[] }[] = [
         id: 'team',
         label: 'Members',
         icon: Users,
-        intro: "Who can work on this project's board.",
+        intro:
+          'Your team: start one, invite a teammate, or join with a link someone sent you.',
         savesConfig: false,
         render: (ctx) => <TeamSection data={ctx.data} />,
       },
@@ -237,7 +312,7 @@ const SETTINGS_GROUPS: { label: string; pages: PageSpec[] }[] = [
         label: 'Board sync',
         icon: RefreshCw,
         intro:
-          "Keep one board in step with teammates' copies of Dispatch through git.",
+          "Keep this board in step with your teammates' copies of Dispatch, through the team relay or a git branch.",
         savesConfig: true,
         // Sharing works only on a database-backed board; a board kept as
         // files reaches teammates by committing them instead. Until the
@@ -265,6 +340,19 @@ const SETTINGS_GROUPS: { label: string; pages: PageSpec[] }[] = [
         }),
       },
       {
+        id: 'license',
+        label: 'License',
+        icon: KeyRound,
+        intro: 'Your plan and how many seats are in use.',
+        savesConfig: false,
+        render: (ctx) => <LicenseSection data={ctx.data} />,
+      },
+    ],
+  },
+  {
+    label: 'Connections',
+    pages: [
+      {
         id: 'integrations',
         label: 'Linear',
         icon: Plug,
@@ -284,12 +372,22 @@ const SETTINGS_GROUPS: { label: string; pages: PageSpec[] }[] = [
         ),
       },
       {
-        id: 'license',
-        label: 'License',
-        icon: KeyRound,
-        intro: 'Your plan and how many seats are in use.',
+        id: 'connected-agents',
+        label: 'Connected agents',
+        icon: BotMessageSquare,
+        intro:
+          'Agent tools such as Claude Code or Codex that connected through Dispatch’s MCP server and asked to message this project, and whether they may.',
         savesConfig: false,
-        render: (ctx) => <LicenseSection data={ctx.data} />,
+        render: (ctx) => <AgentRosterSection data={ctx.data} />,
+      },
+      {
+        id: 'a2a',
+        label: 'A2A',
+        icon: Network,
+        intro:
+          "Agents outside your team, on other platforms or other people's Dispatch, over the open A2A protocol. Teammates don't need this: their agents already reach yours through the team.",
+        savesConfig: false,
+        render: (ctx) => <A2ASection data={ctx.data} />,
       },
     ],
   },
@@ -355,9 +453,14 @@ export function SettingsView({
   data,
   onOpenTask,
   initialPage,
+  hostedPages = [],
+  headerActions,
+  pageExtras,
 }: SettingsViewProps) {
   const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle' });
-  const [page, setPage] = useState<SettingsPage>(initialPage ?? 'general');
+  const [page, setPage] = useState<SettingsPage | HostedSettingsPage['id']>(
+    initialPage ?? 'general'
+  );
   const [query, setQuery] = useState('');
   const resultsRef = useRef<HTMLDivElement>(null);
   const [noMatches, setNoMatches] = useState(false);
@@ -372,18 +475,32 @@ export function SettingsView({
 
   // Rows hide themselves, so whether anything matched is only known after
   // render: read it from the DOM rather than keeping a second index of rows.
+  // Checked as each query renders, then watched, because a section can add or
+  // drop rows on its own later (data that loads after the keystroke).
   useLayoutEffect(() => {
-    if (!searching) {
+    const results = resultsRef.current;
+    if (!searching || results === null) {
       setNoMatches(false);
-      return;
+      return undefined;
     }
-    setNoMatches(
-      resultsRef.current?.querySelector('[data-settings-row]') === null
-    );
-  });
+    const check = () =>
+      setNoMatches(results.querySelector('[data-settings-row]') === null);
+    check();
+    const observer = new MutationObserver(check);
+    observer.observe(results, {
+      childList: true,
+      subtree: true,
+      attributeFilter: ['data-settings-row'],
+    });
+    return () => observer.disconnect();
+  }, [searching, query]);
 
   // What this viewer may change, handed to every group and row below.
-  const access = accessFor(data.myTier, data.attachedWithoutAppToken);
+  const access = accessFor(
+    data.myTier,
+    data.attachedWithoutAppToken,
+    data.takeover?.background === true
+  );
 
   // The one save path every config-backed section's onSave goes through, so
   // one indicator covers those pages instead of each section reporting on its
@@ -429,6 +546,7 @@ export function SettingsView({
     );
   }
 
+  const hosted = hostedPages.find((entry) => entry.id === page);
   const spec = ALL_PAGES.find((entry) => entry.id === page) ?? ALL_PAGES[0];
   const ctx: PageContext = {
     data,
@@ -462,7 +580,7 @@ export function SettingsView({
   return (
     <SettingsAccessProvider access={access}>
       <div className="flex h-full min-h-0 flex-col">
-        <PageHeader crumb={['Settings']} />
+        <PageHeader crumb={['Settings']} actions={headerActions} />
         <div className="grid min-h-0 flex-1 grid-cols-[208px_minmax(0,1fr)]">
           <nav
             aria-label="Settings"
@@ -495,7 +613,12 @@ export function SettingsView({
                 </button>
               )}
             </div>
-            {SETTINGS_GROUPS.map((group) => (
+            {[
+              ...SETTINGS_GROUPS,
+              ...(hostedPages.length === 0
+                ? []
+                : [{ label: 'Activity', pages: hostedPages }]),
+            ].map((group) => (
               <div key={group.label}>
                 <div className="text-muted-foreground flex h-7 items-center px-2 text-[12px] font-medium">
                   {group.label}
@@ -533,82 +656,112 @@ export function SettingsView({
             ))}
           </nav>
 
-          <div className="min-h-0 overflow-y-auto px-6 py-5">
-            <div className="mx-auto flex w-full max-w-[600px] flex-col gap-6 pb-10">
-              {searching ? (
-                <>
-                  <div className="flex items-baseline justify-between gap-3">
-                    <h1 className="text-foreground text-[20px] leading-7 font-semibold tracking-[-0.12px]">
-                      Results for &ldquo;{query.trim()}&rdquo;
-                    </h1>
-                    {saveLine}
-                  </div>
-                  <SettingsSearchProvider query={query}>
-                    <div ref={resultsRef} className="flex flex-col gap-8">
-                      {ALL_PAGES.map((entry) => (
-                        <SearchScopeProvider key={entry.id} text={entry.label}>
-                          <section
-                            aria-label={entry.label}
-                            className="flex flex-col gap-4 [&:not(:has([data-settings-row]))]:hidden"
-                          >
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setQuery('');
-                                setPage(entry.id);
-                              }}
-                              className="text-muted-foreground hover:text-foreground flex items-center gap-1.5 self-start text-[12px] font-medium"
-                            >
-                              <entry.icon aria-hidden className="size-3.5" />
-                              {entry.label}
-                            </button>
-                            {entry.render(ctx)}
-                          </section>
-                        </SearchScopeProvider>
-                      ))}
-                    </div>
-                  </SettingsSearchProvider>
-                  {noMatches && (
-                    <EmptyState
-                      icon={SearchIcon}
-                      heading="No settings match"
-                      description="Try a different word, like “budget”, “model” or “webhook”."
-                    />
-                  )}
-                </>
-              ) : (
-                <>
-                  <div className="flex flex-col gap-1">
-                    <div className="flex items-baseline justify-between gap-3">
-                      <h1 className="text-foreground text-[24px] leading-8 font-semibold tracking-[-0.16px]">
-                        {spec.label}
-                      </h1>
-                      {spec.savesConfig && saveLine}
-                    </div>
-                    <p className="font-book text-muted-foreground text-[13px]">
-                      {spec.intro}
-                    </p>
-                  </div>
-                  {/* No tier yet means no connection yet, not a refusal. */}
-                  {spec.savesConfig &&
-                    data.myTier !== null &&
-                    !access.canDecide && (
-                      <p
-                        role="note"
-                        className="bg-surface-secondary text-muted-foreground rounded-control font-book flex items-start gap-2 px-3 py-2 text-[12px]"
-                      >
-                        <LockIcon
-                          aria-hidden
-                          className="mt-px size-3.5 shrink-0"
-                        />
-                        {access.decideReason}
-                      </p>
-                    )}
-                  {spec.render(ctx)}
-                </>
-              )}
+          {hosted !== undefined && !searching ? (
+            // Titled like every other page; the hosted view keeps only its tabs row.
+            <div className="flex min-h-0 flex-col overflow-hidden">
+              <div className="flex flex-col gap-1 px-6 pt-5 pb-3">
+                <h1 className="text-foreground text-[24px] leading-8 font-semibold tracking-[-0.16px]">
+                  {hosted.label}
+                </h1>
+                <p className="font-book text-muted-foreground text-[13px]">
+                  {hosted.intro}
+                </p>
+              </div>
+              <PageHeaderEmbeddedContext.Provider value>
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                  {hosted.render()}
+                </div>
+              </PageHeaderEmbeddedContext.Provider>
             </div>
-          </div>
+          ) : (
+            <div className="min-h-0 overflow-y-auto px-6 py-5">
+              <div className="mx-auto flex w-full max-w-[600px] flex-col gap-6 pb-10">
+                {searching ? (
+                  <>
+                    <div className="flex items-baseline justify-between gap-3">
+                      <h1 className="text-foreground text-[20px] leading-7 font-semibold tracking-[-0.12px]">
+                        Results for &ldquo;{query.trim()}&rdquo;
+                      </h1>
+                      {saveLine}
+                    </div>
+                    <SettingsSearchProvider query={query}>
+                      <div ref={resultsRef} className="flex flex-col gap-8">
+                        {ALL_PAGES.map((entry) => (
+                          <SearchScopeProvider
+                            key={entry.id}
+                            text={entry.label}
+                          >
+                            <section
+                              aria-label={entry.label}
+                              className="flex flex-col gap-4 [&:not(:has([data-settings-row]))]:hidden"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setQuery('');
+                                  setPage(entry.id);
+                                }}
+                                className="text-muted-foreground hover:text-foreground flex items-center gap-1.5 self-start text-[12px] font-medium"
+                              >
+                                <entry.icon aria-hidden className="size-3.5" />
+                                {entry.label}
+                              </button>
+                              {entry.render(ctx)}
+                            </section>
+                          </SearchScopeProvider>
+                        ))}
+                      </div>
+                    </SettingsSearchProvider>
+                    {noMatches && (
+                      <EmptyState
+                        icon={SearchIcon}
+                        heading="No settings match"
+                        description="Try a different word, like “budget”, “model” or “webhook”."
+                      />
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-baseline justify-between gap-3">
+                        <h1 className="text-foreground text-[24px] leading-8 font-semibold tracking-[-0.16px]">
+                          {spec.label}
+                        </h1>
+                        {spec.savesConfig && saveLine}
+                      </div>
+                      <p className="font-book text-muted-foreground text-[13px]">
+                        {spec.intro}
+                      </p>
+                    </div>
+                    {/* No tier yet means no connection yet, not a refusal. */}
+                    {spec.savesConfig &&
+                      data.myTier !== null &&
+                      !access.canDecide && (
+                        <div className="bg-surface-secondary text-muted-foreground rounded-control font-book flex flex-col gap-2 px-3 py-2 text-[12px]">
+                          <p role="note" className="flex items-start gap-2">
+                            <LockIcon
+                              aria-hidden
+                              className="mt-px size-3.5 shrink-0"
+                            />
+                            {access.decideReason}
+                          </p>
+                          {data.takeover !== null && (
+                            <div className="pl-[22px]">
+                              <TakeOverDaemon
+                                takeover={data.takeover}
+                                onRestart={data.handleRestartDaemon}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    {spec.render(ctx)}
+                    {pageExtras?.[spec.id]}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </SettingsAccessProvider>

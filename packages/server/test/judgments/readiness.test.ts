@@ -1,4 +1,5 @@
-import type { TaskDoc } from '@dispatch/core';
+import type { TaskDoc } from '@dispatch-foo/core';
+import { defaultTaskFields } from '@dispatch-foo/core';
 import { describe, expect, test } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -39,6 +40,7 @@ function task(
       writes,
       external: null,
       exercised: false,
+      ...defaultTaskFields(),
       created: '2026-09-01T00:00:00.000Z',
       updated: '2026-09-01T00:00:00.000Z',
     },

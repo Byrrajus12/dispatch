@@ -1,5 +1,24 @@
 export const CORE_VERSION = '0.24.0';
 export * from './status.js';
+export * from './kinds.js';
+export * from './containerRef.js';
+export * from './comments.js';
+export * from './people.js';
+export * from './labels.js';
+export {
+  formatMilestoneMigrationReport,
+  migrateLegacyMilestones,
+} from './milestoneMigration.js';
+export type {
+  MilestoneMigrationOptions,
+  MilestoneMigrationReport,
+  MilestoneProject,
+} from './milestoneMigration.js';
+export {
+  FileCommentStore,
+  generateCommentId,
+  SqliteCommentStore,
+} from './commentStore.js';
 export * from './types.js';
 export {
   ATTACHMENT_MAX_BYTES,
@@ -8,16 +27,24 @@ export {
   sanitizeAttachmentName,
 } from './attachments.js';
 export * from './subagents.js';
+export { runStepFromEntry } from './runStep.js';
+export type { RunStep, RunStepEntry } from './runStep.js';
 export * from './preview.js';
 export { absoluteGitLocation } from './gitLocation.js';
+export {
+  DISPATCH_MCP_TOOLS,
+  DISPATCH_MESSAGING_TOOLS,
+} from './dispatchMcpTools.js';
 export {
   generateDraftId,
   generateFindingId,
   generateLedgerId,
   generateRunId,
+  generateSyncedRunId,
   generateSyncedTaskId,
   generateTaskId,
   isTaskId,
+  SYNCED_RUN_ID_HEX,
   SYNCED_TASK_ID_HEX,
   TASK_ID_PATTERN,
   taskIdFromFilename,
@@ -64,7 +91,12 @@ export {
   untrustedBlock,
   untrustedFenced,
   untrustedInline,
+  untrustedVerbatim,
 } from './untrusted.js';
+export * from './docs.js';
+export { DEFAULT_DOCS, parseDocsConfig, readDocsConfig } from './docsConfig.js';
+export type { DocsConfig, DocsConfigWarning } from './docsConfig.js';
+export { memoryReadView } from './memoryRead.js';
 export {
   parseTaskFile,
   serializeTaskFile,
@@ -74,6 +106,7 @@ export {
   getSection,
   removeSection,
   setSection,
+  splitSections,
 } from './taskfile.js';
 export type { Amendment } from './taskfile.js';
 export {
@@ -92,6 +125,9 @@ export {
   DISPATCH_DB_VERSION,
   dispatchDbPath,
   openDispatchDb,
+  openSqliteDb,
+  queryAll,
+  queryOne,
   sqliteDriver,
   SqliteRowError,
 } from './sqliteDb.js';
@@ -134,11 +170,17 @@ export {
   retireLegacySources,
 } from './retire.js';
 export type { RetiredSource, RetireOptions, RetireReport } from './retire.js';
-export { materializeReceipts, restoreReceipts } from './receipts.js';
+export {
+  materializeReceipts,
+  MEMORY_RECEIPT_FILE_BYTES,
+  receiptSteps,
+  restoreReceipts,
+} from './receipts.js';
 export type {
   ReceiptsExport,
   ReceiptsProblem,
   ReceiptsRestore,
+  ReceiptsScope,
   ReceiptsTally,
 } from './receipts.js';
 export { scanFindingsJsonl, scanLedgerJsonl } from './jsonlRecords.js';
@@ -161,8 +203,10 @@ export {
   PRIORITY_ORDER,
   findDependencyCycles,
   computeStack,
+  fanoutWaitingOn,
+  releasesFanoutDependents,
 } from './graph.js';
-export type { TaskStack } from './graph.js';
+export type { FanoutBlocker, TaskStack } from './graph.js';
 export {
   AGE_HORIZON_DAYS,
   DEFAULT_QUEUE_WEIGHTS,
@@ -185,9 +229,13 @@ export {
   loadConfig,
   updateConfig,
   ConfigError,
+  A2A_SKILLS,
+  DEFAULT_A2A,
   DEFAULT_FIX_LOOP,
   DEFAULT_MODELS,
   DEFAULT_LINEAR,
+  DEFAULT_MEMORY,
+  DEFAULT_MESSAGING,
   DEFAULT_NOTIFICATIONS,
   DEFAULT_EXECUTOR_NAME,
   DEFAULT_RECEIPTS,
@@ -207,7 +255,11 @@ export {
   MODEL_ROLES,
   DEFAULT_PREVIEW,
   NOTIFICATION_KINDS,
+  notificationKindForMessage,
+  parseMemoryConfig,
   previewSettings,
+  readMemoryConfig,
+  syncPlace,
   syncSettings,
   projectPolicy,
   queueWeights,
@@ -242,6 +294,8 @@ export type {
   PolicyRungDef,
 } from './policy.js';
 export type {
+  A2AConfig,
+  A2ASkill,
   CartoConfig,
   CartoMode,
   ConfigPatch,
@@ -255,6 +309,9 @@ export type {
   ExecutorPricing,
   FixLoopConfig,
   LinearConfig,
+  MemoryConfig,
+  MemoryConfigWarning,
+  MessagingConfig,
   ModelConfig,
   NotificationKind,
   NotificationsConfig,
@@ -271,41 +328,76 @@ export type {
 } from './config.js';
 export {
   clearCredential,
+  clearPeerCredential,
   clearProjectCredential,
   credentialsPath,
+  CredentialsUnreadableError,
+  credentialsUnreadable,
+  ensureA2ALinkKeys,
+  promoteA2ASigningKey,
+  readA2AKeyStatement,
+  readA2ALinkKeys,
+  readA2ANextSigningKey,
+  readA2ASigningKey,
   readCredentials,
+  readPeerCredential,
+  replaceA2ASigningKeys,
   resolveLinearApiKey,
   resolveTypesafeApiKey,
+  writeA2ANextSigningKey,
+  writeA2ASigningKey,
   writeCredential,
+  writePeerCredential,
   writeProjectCredential,
 } from './credentials.js';
 export type {
   CredentialName,
   CredentialSource,
+  A2ALinkKeys,
   CredentialsFile,
+  LinkKeysRead,
+  NextSigningKey,
+  PeerCredential,
   ProjectCredentials,
+  SigningKeyRead,
 } from './credentials.js';
+export * from './linearContainers.js';
+export * from './linearFields.js';
+export * from './linearLabels.js';
+export * from './linearMerge.js';
+export * from './linearPeople.js';
+export * from './linearStatuses.js';
 export {
   DEFAULT_STATUS_MAP,
   externalId,
-  issueFromTask,
   LINEAR_EXTERNAL_PREFIX,
+  linearExternal,
   parseExternal,
+  parseLinearExternal,
   priorityFromLinear,
   priorityToLinear,
   resolveConflict,
   resolveWorkflowState,
-  statusFromState,
-  taskCreateFromIssue,
-  taskPatchFromIssue,
 } from './linearMap.js';
 export type {
-  IssueMapContext,
+  LinearAttachment,
+  LinearEntity,
+  LinearRef,
+  LinearComment,
+  LinearInitiative,
+  LinearInitiativeInput,
   LinearIssue,
   LinearIssueInput,
   LinearLabel,
+  LinearMilestoneInput,
+  LinearProject,
+  LinearProjectInput,
+  LinearProjectMilestone,
+  LinearProjectStatus,
+  LinearRelation,
+  LinearTruncatedField,
+  LinearUser,
   LinearWorkflowState,
-  TaskMapContext,
 } from './linearMap.js';
 export { normalizeProjectPath } from './projectPath.js';
 export {
@@ -315,13 +407,16 @@ export {
 } from './registry.js';
 export type { RegisteredProject } from './registry.js';
 export {
+  describeDroppedEntry,
   handleFromEmail,
+  MAX_HANDLE_BYTES,
   parseTeam,
+  parseTeamReport,
   serializeTeam,
   TeamParseError,
   upsertMember,
 } from './team.js';
-export type { TeamMember } from './team.js';
+export type { DroppedEntry, TeamMember } from './team.js';
 export { ActorContext } from './actorContext.js';
 export type { GitReader } from './actorContext.js';
 export {
@@ -335,3 +430,35 @@ export {
   TEAM_GITATTRIBUTES_LINE,
   writeGitAttributes,
 } from './mergeDriverSetup.js';
+export { childEnv } from './childEnv.js';
+export type {
+  SyncSpawner,
+  SyncSpawnOptions,
+  SyncSpawnResult,
+} from './syncSpawn.js';
+export { setSyncSpawner, spawnSyncText } from './syncSpawn.js';
+export {
+  PROVIDERS,
+  providerById,
+  providerForBinary,
+  resolveInstallFix,
+} from './setup/providers.js';
+export type {
+  AuthState,
+  InstallMethod,
+  ProbeResult,
+  ProviderSpec,
+  ProviderState,
+  SetupFix,
+  SetupReport,
+  SetupStatus,
+  SetupStep,
+  SetupStepId,
+} from './setup/types.js';
+export { CODEX_SIGNED_OUT_MESSAGE, explainFailure } from './setup/failures.js';
+export type { FailureExplanation } from './setup/failures.js';
+export { whichOnPath, widenPath, widenedPath } from './setup/path.js';
+export type { PathIo } from './setup/path.js';
+export { agentEnv, readAgentKeys, writeAgentKey } from './setup/agentEnv.js';
+export { defaultSetupCheckDeps, runSetupCheck } from './setup/check.js';
+export type { SetupCheckDeps, SetupCheckInput } from './setup/check.js';

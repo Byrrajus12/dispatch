@@ -19,6 +19,7 @@ import { GitRightPane } from '../components/git/GitRightPane';
 import { StashesPanel } from '../components/git/StashesPanel';
 import { StatusPanel } from '../components/git/StatusPanel';
 import { DaemonUnavailable } from '../components/shell/DaemonUnavailable';
+import { TasksBackButton } from '../components/tasks/TasksPageHeader';
 import type { DispatchProjectData } from '../hooks/useDispatchProject';
 import { useGit } from '../hooks/useGit';
 import { isTypingTarget } from '../hooks/useGlobalKeyboard';
@@ -90,6 +91,8 @@ interface BranchesViewProps {
   /** Navigates to `ImpactView` with the selected file preselected — the
    *  Git file pane's "open in Impact" action. */
   onOpenImpact: (subject: ImpactSubjectRef) => void;
+  /** Starts the header with "‹ tasks", back to the Tasks list. */
+  onBack?: () => void;
 }
 
 const PANEL_LABEL: Record<GitPanelId, string> = {
@@ -123,6 +126,7 @@ export function BranchesView({
   projectName,
   onOpenRun,
   onOpenImpact,
+  onBack,
 }: BranchesViewProps) {
   const [panelState, setPanelState] = useState(INITIAL_GIT_PANEL_SELECTION);
   const [branchFilter, setBranchFilter] = useState<GitFilter>('all');
@@ -579,6 +583,7 @@ export function BranchesView({
       onKeyDown={onRootKeyDown}
     >
       <PageHeader
+        leading={onBack && <TasksBackButton onBack={onBack} />}
         crumb={crumb}
         actions={
           <>
@@ -1100,7 +1105,6 @@ function NewBranchDialog({
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="branch-name"
-            autoFocus
           />
         </DialogBody>
         <DialogFooter>

@@ -1,14 +1,72 @@
 import type { Options, Query } from '@anthropic-ai/claude-agent-sdk';
-import { mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { TaskStore } from '@dispatch-foo/core';
+import type {
+  Amendment,
+  CreateInput,
+  TaskDoc,
+  UpdatePatch,
+} from '@dispatch-foo/core';
+import {
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
+import type { TaskCache } from '../../src/cache.js';
+import type { OverseerToolContext } from '../../src/orchestrator/overseerTools.js';
 import type {
   Executor,
   ExecutorEvents,
   ExecutorRun,
   ExecutorStartOptions,
 } from '../../src/orchestrator/types.js';
+
+/**
+ * A TaskStore for a test's own writes, which reach the cache the way edits
+ * made outside the daemon do in production: the file watcher re-reads each
+ * task it sees change. The daemon refreshes the cache for its own writes, so
+ * without this a task a test wrote straight to disk would never be seen.
+ */
+export class WatchedTaskStore extends TaskStore {
+  constructor(
+    rootDir: string,
+    private readonly cache: TaskCache
+  ) {
+    super(rootDir);
+  }
+
+  override create(input: CreateInput, now?: string): TaskDoc {
+    const doc = super.create(input, now);
+    this.cache.refresh(this, [doc.meta.id]);
+    return doc;
+  }
+
+  override update(id: string, patch: UpdatePatch, now?: string): TaskDoc {
+    const doc = super.update(id, patch, now);
+    this.cache.refresh(this, [id]);
+    return doc;
+  }
+
+  override amend(
+    id: string,
+    input: Omit<Amendment, 'date'>,
+    now?: string
+  ): TaskDoc {
+    const doc = super.amend(id, input, now);
+    this.cache.refresh(this, [id]);
+    return doc;
+  }
+
+  override remove(id: string): boolean {
+    const removed = super.remove(id);
+    this.cache.refresh(this, [id]);
+    return removed;
+  }
+}
 
 /**
  * An executor that starts, reports a session id, and then never finishes —
@@ -21,15 +79,38 @@ import type {
  */
 export class StallingExecutor implements Executor {
   readonly started: ExecutorStartOptions[] = [];
+  // Every notify() call any started run received, in order.
+  readonly notified: string[] = [];
+  // Every send() call any started run received, in order.
+  readonly sent: string[] = [];
+
+  // Each start's run token, read from its token file at start (the file is
+  // removed when the run ends).
+  readonly runTokens: (string | undefined)[] = [];
+
+  // The most recent start's run token, for tests that call the API as that run.
+  get lastRunToken(): string | undefined {
+    return this.runTokens.at(-1);
+  }
 
   start(opts: ExecutorStartOptions, events: ExecutorEvents): ExecutorRun {
     this.started.push(opts);
+    this.runTokens.push(
+      opts.runTokenFile === undefined
+        ? undefined
+        : readFileSync(opts.runTokenFile, 'utf8')
+    );
     events.onSession?.(`session-${this.started.length}`);
     return {
       interrupt: () => Promise.resolve(),
       requestStop: () => {},
-      send: () => {},
+      send: (message: string) => {
+        this.sent.push(message);
+      },
       approve: () => {},
+      notify: (text: string) => {
+        this.notified.push(text);
+      },
     };
   }
 }
@@ -203,4 +284,33 @@ export function withRunEndControls(messages: object): Query {
     stopTask: () => Promise.resolve(),
     applyFlagSettings: () => Promise.resolve(),
   }) as unknown as Query;
+}
+
+// OverseerToolContext['messaging'] for a registry built before any Messaging
+// exists; a test that needs the bus binds the real one after openMessaging.
+export function lateBoundOverseerMessaging(): {
+  port: OverseerToolContext['messaging'];
+  bind(real: OverseerToolContext['messaging']): void;
+} {
+  let real: OverseerToolContext['messaging'] | null = null;
+  const bound = () => {
+    if (real === null) throw new Error('overseer messaging used before bind()');
+    return real;
+  };
+  return {
+    port: {
+      answerRunApproval: (runId, requestId, answer, actor) =>
+        bound().answerRunApproval(runId, requestId, answer, actor),
+      sendAsHuman: (to, text, actor, data) =>
+        bound().sendAsHuman(to, text, actor, data),
+      readAs: (reader, query, limit) => {
+        const readAs = bound().readAs;
+        if (readAs === undefined) throw new Error('readAs is not bound');
+        return readAs(reader, query, limit);
+      },
+    },
+    bind: (next) => {
+      real = next;
+    },
+  };
 }

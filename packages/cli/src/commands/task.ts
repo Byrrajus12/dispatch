@@ -1,15 +1,19 @@
 import {
+  ACCEPTED_KINDS,
   ActorContext,
   ASSIGNEES,
   canonicalStatus,
-  KINDS,
+  childEnv,
+  DISPATCH_DIR,
   loadConfig,
   PRIORITIES,
   readProjectBackend,
   readyTasks,
+  resolveMilestoneRef,
   serializeTaskFile,
+  statusModelOf,
   TaskStore,
-} from '@dispatch/core';
+} from '@dispatch-foo/core';
 import type {
   CreateInput,
   GitReader,
@@ -18,10 +22,11 @@ import type {
   TaskDoc,
   TaskKind,
   UpdatePatch,
-} from '@dispatch/core';
+} from '@dispatch-foo/core';
 import type { Command } from 'commander';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import type { TaskApiClient } from '../apiClient.js';
 import { createTaskApiClient } from '../apiClient.js';
@@ -41,7 +46,11 @@ function canonicalStatusOpt(value: string | undefined): string | undefined {
 // repo would.
 function makeGitReader(cwd: string): GitReader {
   return (args) => {
-    const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    const result = spawnSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      env: childEnv(),
+    });
     return result.status === 0 ? result.stdout.trim() : null;
   };
 }
@@ -77,6 +86,10 @@ export function requireStore(ctx: CliContext): TaskStore {
  * the tracked `.dispatch/config.yml`, while the backend marker and the task
  * board live at the root the daemon serves. The raw cwd is still accepted
  * so a plain project directory behaves exactly as before.
+ *
+ * A committed `.dispatch/config.yml` counts too: a teammate's fresh clone of
+ * a database-backed project has the config but no board yet, and dispatchd
+ * creates the database itself when it boots there.
  */
 export function requireInitialized(ctx: CliContext): void {
   const root = projectRoot(ctx.cwd);
@@ -86,7 +99,11 @@ export function requireInitialized(ctx: CliContext): void {
 }
 
 function isInitialized(rootDir: string): boolean {
-  return new TaskStore(rootDir).isInitialized() || databaseBacked(rootDir);
+  return (
+    new TaskStore(rootDir).isInitialized() ||
+    databaseBacked(rootDir) ||
+    existsSync(join(rootDir, DISPATCH_DIR, 'config.yml'))
+  );
 }
 
 /**
@@ -98,7 +115,7 @@ function isInitialized(rootDir: string): boolean {
  * markdown, with no way to say otherwise. Existence is not ownership.
  *
  * The marker is written when a project moves to the database — by the daemon
- * at boot, or by `dispatch migrate`. `@dispatch/core`'s storage.ts owns the
+ * at boot, or by `dispatch migrate`. `@dispatch-foo/core`'s storage.ts owns the
  * format; a mangled marker reads there as null, which degrades this project to
  * its pre-marker behaviour rather than failing every task command.
  */
@@ -130,7 +147,7 @@ async function resolveTaskRoute(ctx: CliContext): Promise<TaskRoute> {
   // `findRunningDaemon` throws rather than returning one. For a task command
   // that is not fatal — it just means there is no daemon we can present a
   // credential to, so fall through to the same handling as no daemon at all.
-  // Commands that genuinely require dispatchd (scope decide, orchestrate)
+  // Commands that genuinely require dispatchd (approve, message, scope, orchestrate)
   // keep the explicit error, which is the right answer for them.
   // projectRoot(), not the raw cwd — see its doc comment: inside a run's
   // worktree the daemon, the marker and the real board all live at the
@@ -166,6 +183,23 @@ function validate<T extends string>(
   return value as T;
 }
 
+// `--milestone` names a project or milestone to file under. Through the
+// daemon the name goes along and dispatchd resolves it; here the local
+// store answers the same way (core's resolveMilestoneRef).
+function localMilestoneParent(
+  store: TaskStore,
+  name: string,
+  childKind: string,
+  parent: string | null
+): string {
+  const resolved = resolveMilestoneRef(store.list(), name, {
+    childKind,
+    parent,
+  });
+  if (!resolved.ok) throw new CliError(resolved.error);
+  return resolved.id;
+}
+
 function taskRow(t: TaskDoc): string[] {
   return [t.meta.id, t.meta.status, t.meta.priority, t.meta.kind, t.meta.title];
 }
@@ -178,9 +212,13 @@ export function registerTaskCommands(program: Command, ctx: CliContext): void {
   task
     .command('create')
     .argument('<title>')
-    .option('--kind <kind>', 'task|epic', 'task')
+    .option('--kind <kind>', 'task|milestone|project|initiative', 'task')
     .option('--description <text>')
     .option('--parent <id>')
+    .option(
+      '--milestone <name>',
+      'file under the project or milestone with this title (or id)'
+    )
     .option('--priority <priority>', 'urgent|high|medium|low|none', 'none')
     .option('--status <status>')
     .option('--label <label...>')
@@ -196,7 +234,11 @@ export function registerTaskCommands(program: Command, ctx: CliContext): void {
         const config = loadConfig(ctx.cwd);
         const input: CreateInput = {
           title,
-          kind: validate(opts.kind as string, KINDS, 'kind') as TaskKind,
+          kind: validate(
+            opts.kind as string,
+            ACCEPTED_KINDS,
+            'kind'
+          ) as TaskKind,
           status: validate(
             canonicalStatusOpt(opts.status as string | undefined),
             config.statuses,
@@ -212,10 +254,27 @@ export function registerTaskCommands(program: Command, ctx: CliContext): void {
           labels: (opts.label as string[] | undefined) ?? [],
           blockedBy: (opts.blockedBy as string[] | undefined) ?? [],
         };
-        const doc =
-          route.via === 'daemon'
-            ? await route.api.createTask(input)
-            : route.store.create(input);
+        const milestone = opts.milestone as string | undefined;
+        let doc: TaskDoc;
+        if (route.via === 'daemon') {
+          doc = await route.api.createTask(
+            milestone === undefined ? input : { ...input, milestone }
+          );
+        } else {
+          doc = route.store.create(
+            milestone === undefined
+              ? input
+              : {
+                  ...input,
+                  parent: localMilestoneParent(
+                    route.store,
+                    milestone,
+                    input.kind ?? 'task',
+                    input.parent ?? null
+                  ),
+                }
+          );
+        }
         ctx.log(
           opts.json === true
             ? JSON.stringify(doc, null, 2)
@@ -239,7 +298,7 @@ export function registerTaskCommands(program: Command, ctx: CliContext): void {
           config.statuses,
           'status'
         ),
-        kind: validate(opts.kind as string | undefined, KINDS, 'kind'),
+        kind: validate(opts.kind as string | undefined, ACCEPTED_KINDS, 'kind'),
         parent: opts.parent as string | undefined,
       };
       const docs =
@@ -325,6 +384,10 @@ export function registerTaskCommands(program: Command, ctx: CliContext): void {
     .option('--priority <priority>')
     .option('--assignee <assignee>', 'agent|human|none')
     .option('--parent <id>')
+    .option(
+      '--milestone <name>',
+      'move under the project or milestone with this title (or id)'
+    )
     .option('--add-label <label...>')
     .option('--add-blocked-by <id...>')
     .action(
@@ -357,7 +420,11 @@ export function registerTaskCommands(program: Command, ctx: CliContext): void {
             ASSIGNEES,
             'assignee'
           ),
-          parent: (opts.parent as string | undefined) ?? doc.meta.parent,
+          // With --milestone the parent comes from it (and must agree with
+          // an explicit --parent), so the current one is not resent.
+          parent:
+            (opts.parent as string | undefined) ??
+            (opts.milestone === undefined ? doc.meta.parent : undefined),
           labels:
             opts.addLabel !== undefined
               ? [...doc.meta.labels, ...(opts.addLabel as string[])]
@@ -367,8 +434,23 @@ export function registerTaskCommands(program: Command, ctx: CliContext): void {
               ? [...doc.meta.blockedBy, ...(opts.addBlockedBy as string[])]
               : undefined,
         };
-        if (route.via === 'daemon') await route.api.updateTask(id, patch);
-        else route.store.update(id, patch);
+        const milestone = opts.milestone as string | undefined;
+        if (route.via === 'daemon') {
+          await route.api.updateTask(
+            id,
+            milestone === undefined ? patch : { ...patch, milestone }
+          );
+        } else {
+          if (milestone !== undefined) {
+            patch.parent = localMilestoneParent(
+              route.store,
+              milestone,
+              doc.meta.kind,
+              patch.parent ?? null
+            );
+          }
+          route.store.update(id, patch);
+        }
         ctx.log(`updated ${id}`);
       }
     );
@@ -386,7 +468,10 @@ export function registerTaskCommands(program: Command, ctx: CliContext): void {
             // tasks from its own results, but needs them present to resolve
             // blockers. Filtering them out here made archiving an unfinished
             // blocker spring everything it was blocking.
-            readyTasks(route.store.list());
+            readyTasks(
+              route.store.list(),
+              statusModelOf(loadConfig(route.store.rootDir))
+            );
       if (opts.json === true) {
         ctx.log(JSON.stringify(ready, null, 2));
         return;

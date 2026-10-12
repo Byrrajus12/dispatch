@@ -38,7 +38,12 @@ pub fn get_session_detail(
 ) -> Result<Option<SessionDetail>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     queries::get_session_detail(&conn, &session_id)
-        .map(|opt| opt.map(|(session, files_changed)| SessionDetail { session, files_changed }))
+        .map(|opt| {
+            opt.map(|(session, files_changed)| SessionDetail {
+                session,
+                files_changed,
+            })
+        })
         .map_err(|e| e.to_string())
 }
 
@@ -51,19 +56,56 @@ pub fn get_session_detail(
 pub fn open_in_editor(path: String) -> Result<(), String> {
     if let Ok(editor) = std::env::var("EDITOR") {
         if !editor.trim().is_empty() {
-            return Command::new(&editor)
+            return tool_command(&editor)
                 .arg(&path)
                 .spawn()
                 .map(|_| ())
-                .map_err(|e| format!("failed to launch $EDITOR ({editor}): {e}"));
+                .map_err(|e| {
+                    format!(
+                        "failed to launch $EDITOR ({editor}): {e}{}",
+                        searched_path_hint(&e)
+                    )
+                });
         }
     }
 
-    Command::new("code")
+    tool_command("code")
         .arg(&path)
         .spawn()
         .map(|_| ())
-        .map_err(|e| format!("failed to launch editor: $EDITOR is not set and `code` failed to start: {e}"))
+        .map_err(|e| {
+            format!(
+                "failed to launch editor: $EDITOR is not set and `code` failed to start: {e}{}",
+                searched_path_hint(&e)
+            )
+        })
+}
+
+/// Builds a `Command` for an external CLI tool (`gh`, `code`, `$EDITOR`) whose
+/// `PATH` includes the standard tool-install directories (`/opt/homebrew/bin`,
+/// `/usr/local/bin`, ...). A macOS app launched from Finder/Spotlight inherits a
+/// minimal `PATH` that omits them, so a Homebrew-installed tool, or VS Code's
+/// `code` shim in `/usr/local/bin`, would otherwise be reported as missing. On
+/// Unix, `Command` resolves the program against the child's `PATH` when it is
+/// set, so this fixes both the lookup and any tools the child shells out to.
+fn tool_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut cmd = Command::new(program);
+    cmd.env("PATH", sidecar::enriched_child_path());
+    cmd
+}
+
+/// When a spawn failed because the program wasn't found, returns a suffix naming
+/// the `PATH` that was searched, so a "not installed" report shows at a glance
+/// which directories were checked. Empty for any other error kind.
+fn searched_path_hint(e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        format!(
+            " (searched PATH: {})",
+            sidecar::enriched_child_path().to_string_lossy()
+        )
+    } else {
+        String::new()
+    }
 }
 
 /// Caps how many diff lines `get_file_diff_for_session_file` will ever serialize over IPC —
@@ -103,7 +145,8 @@ pub fn get_file_diff_for_session_file(
     file_path: String,
 ) -> Result<Option<FileDiff>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let Some(span) = queries::file_diff_span(&conn, &session_id, &file_path).map_err(|e| e.to_string())?
+    let Some(span) =
+        queries::file_diff_span(&conn, &session_id, &file_path).map_err(|e| e.to_string())?
     else {
         return Ok(None);
     };
@@ -204,8 +247,7 @@ pub fn dashboard_stats(db: State<'_, Db>) -> Result<DashboardStats, String> {
 
     let agent_usage = queries::agent_usage(&conn).map_err(|e| e.to_string())?;
     let model_usage = queries::model_usage(&conn).map_err(|e| e.to_string())?;
-    let active_session =
-        queries::most_recent_active_session(&conn).map_err(|e| e.to_string())?;
+    let active_session = queries::most_recent_active_session(&conn).map_err(|e| e.to_string())?;
 
     let today = Utc::now().date_naive();
     let window_start = today - Duration::days(HEATMAP_DAYS - 1);
@@ -303,7 +345,10 @@ pub fn export_report(db: State<'_, Db>, range_days: i64) -> Result<String, Strin
         .ok_or_else(|| "could not resolve a directory to save the report into".to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
-    let filename = format!("dispatch-report-{}.md", Utc::now().format("%Y-%m-%d-%H%M%S"));
+    let filename = format!(
+        "dispatch-report-{}.md",
+        Utc::now().format("%Y-%m-%d-%H%M%S")
+    );
     let path = dir.join(filename);
     std::fs::write(&path, render_report_markdown(&report)).map_err(|e| e.to_string())?;
 
@@ -312,11 +357,20 @@ pub fn export_report(db: State<'_, Db>, range_days: i64) -> Result<String, Strin
 
 fn render_report_markdown(report: &ReportData) -> String {
     let mut out = String::new();
-    out.push_str(&format!("# Dispatch spend report — last {} days\n\n", report.range_days));
-    out.push_str(&format!("Generated {}\n\n", Utc::now().format("%Y-%m-%d %H:%M UTC")));
+    out.push_str(&format!(
+        "# Dispatch spend report — last {} days\n\n",
+        report.range_days
+    ));
+    out.push_str(&format!(
+        "Generated {}\n\n",
+        Utc::now().format("%Y-%m-%d %H:%M UTC")
+    ));
 
     out.push_str("## Totals\n\n");
-    out.push_str(&format!("- Total spend: ${:.2}\n", report.totals.total_cost_usd));
+    out.push_str(&format!(
+        "- Total spend: ${:.2}\n",
+        report.totals.total_cost_usd
+    ));
     out.push_str(&format!("- Sessions: {}\n", report.totals.session_count));
     let avg = if report.totals.session_count > 0 {
         report.totals.total_cost_usd / report.totals.session_count as f64
@@ -407,8 +461,11 @@ pub fn export_transcript(db: State<'_, Db>, session_id: String) -> Result<String
         Utc::now().format("%Y-%m-%d-%H%M%S")
     );
     let path = dir.join(filename);
-    std::fs::write(&path, format!("{}{transcript}", render_transcript_header(&session)))
-        .map_err(|e| e.to_string())?;
+    std::fs::write(
+        &path,
+        format!("{}{transcript}", render_transcript_header(&session)),
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(path.to_string_lossy().to_string())
 }
@@ -458,9 +515,9 @@ pub async fn ensure_dispatchd(
 }
 
 /// Replaces the dispatchd serving `root` with one this app spawns itself, so it
-/// can read the app token off stdout and regain decide tier. Only reachable
-/// from the UI's explicit restart affordance, which gates it on no run being
-/// in flight — the daemon hosts running agents, so this ends them.
+/// can read the app token off stdout and regain decide tier. Refuses while that
+/// daemon has anything in flight (`sidecar::stop_for_takeover`), and keeps its
+/// port when it can.
 #[tauri::command]
 pub async fn restart_dispatchd(
     app: tauri::AppHandle,
@@ -491,9 +548,7 @@ fn bundled_resource_path(name: &str, windows: bool) -> String {
 /// entry through `bun` from this checkout (`CARGO_MANIFEST_DIR`); a packaged
 /// release runs the two standalone binaries bundled under the app's Resource
 /// dir, so the shipped app depends on neither `bun` nor the checkout.
-fn resolve_daemon_launch(
-    app: &tauri::AppHandle,
-) -> Result<sidecar::DaemonLaunch, String> {
+fn resolve_daemon_launch(app: &tauri::AppHandle) -> Result<sidecar::DaemonLaunch, String> {
     #[cfg(debug_assertions)]
     {
         let _ = app;
@@ -674,16 +729,10 @@ pub struct GithubRepo {
     pub description: String,
 }
 
-/// Builds a `gh` invocation whose `PATH` includes the standard tool-install
-/// directories (`/opt/homebrew/bin`, `/usr/local/bin`, ...). A macOS app launched
-/// from Finder/Spotlight inherits a minimal `PATH` that omits them, so a
-/// Homebrew-installed `gh` would otherwise be reported as missing. On Unix,
-/// `Command` resolves the program against the child's `PATH` when it is set,
-/// so this fixes both the lookup and any tools `gh` itself shells out to.
+/// Builds a `gh` invocation that can find a Homebrew-installed `gh` from a
+/// Finder launch (see `tool_command`).
 fn gh_command() -> Command {
-    let mut cmd = Command::new("gh");
-    cmd.env("PATH", sidecar::enriched_child_path());
-    cmd
+    tool_command("gh")
 }
 
 /// Verifies the GitHub CLI is installed and authenticated, turning both failure
@@ -696,7 +745,10 @@ fn ensure_gh_authenticated() -> Result<(), String> {
         .arg("status")
         .output()
         .map_err(|e| {
-            format!("GitHub CLI (`gh`) is not installed or not on PATH: {e} — https://cli.github.com")
+            format!(
+                "GitHub CLI (`gh`) is not installed or not on PATH: {e}{} — https://cli.github.com",
+                searched_path_hint(&e)
+            )
         })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -726,7 +778,12 @@ pub async fn list_github_repos() -> Result<Vec<GithubRepo>, String> {
                 "100",
             ])
             .output()
-            .map_err(|e| format!("failed to run `gh repo list`: {e}"))?;
+            .map_err(|e| {
+                format!(
+                    "failed to run `gh repo list`: {e}{}",
+                    searched_path_hint(&e)
+                )
+            })?;
         if !output.status.success() {
             return Err(format!(
                 "`gh repo list` failed: {}",
@@ -769,7 +826,12 @@ pub async fn clone_github_repo(
             .arg(&name_with_owner)
             .arg(&target)
             .output()
-            .map_err(|e| format!("failed to run `gh repo clone`: {e} — is `gh` installed?"))?;
+            .map_err(|e| {
+                format!(
+                    "failed to run `gh repo clone`: {e}{} — is `gh` installed?",
+                    searched_path_hint(&e)
+                )
+            })?;
         if !output.status.success() {
             return Err(format!(
                 "`gh repo clone` failed: {}",
@@ -802,6 +864,35 @@ mod tests {
         let parts: Vec<&str> = path.split(':').collect();
         assert!(parts.contains(&"/opt/homebrew/bin"), "PATH was {path}");
         assert!(parts.contains(&"/usr/local/bin"), "PATH was {path}");
+    }
+
+    /// The editor fallback goes through the same PATH enrichment as `gh`:
+    /// VS Code installs its `code` shim in `/usr/local/bin`, which a
+    /// Finder-launched app can't see otherwise.
+    #[test]
+    fn tool_command_carries_homebrew_dirs_on_path() {
+        let cmd = tool_command("code");
+        assert_eq!(cmd.get_program(), "code");
+        let path = cmd
+            .get_envs()
+            .find(|(k, _)| *k == "PATH")
+            .and_then(|(_, v)| v)
+            .expect("tool_command must set PATH")
+            .to_string_lossy()
+            .to_string();
+        let parts: Vec<&str> = path.split(':').collect();
+        assert!(parts.contains(&"/usr/local/bin"), "PATH was {path}");
+    }
+
+    #[test]
+    fn searched_path_hint_only_for_not_found() {
+        let not_found = std::io::Error::from(std::io::ErrorKind::NotFound);
+        let hint = searched_path_hint(&not_found);
+        assert!(hint.starts_with(" (searched PATH: "), "hint was {hint}");
+        assert!(hint.contains("/opt/homebrew/bin"), "hint was {hint}");
+
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert_eq!(searched_path_hint(&denied), "");
     }
 
     #[test]
@@ -848,7 +939,11 @@ mod tests {
         let result = resolve_project_root(&[], None, Path::new(env!("CARGO_MANIFEST_DIR")))
             .unwrap()
             .expect("dev walk-up should resolve when CARGO_MANIFEST_DIR is a real checkout");
-        let cwd = std::env::current_dir().unwrap().to_str().unwrap().to_string();
+        let cwd = std::env::current_dir()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
         assert_ne!(result, cwd);
     }
 
@@ -883,7 +978,11 @@ mod tests {
 
     #[test]
     fn resolve_project_root_rejects_a_relative_or_missing_root_arg() {
-        let relative = vec!["app".to_string(), "--root".to_string(), "rel/path".to_string()];
+        let relative = vec![
+            "app".to_string(),
+            "--root".to_string(),
+            "rel/path".to_string(),
+        ];
         assert!(
             resolve_project_root(&relative, None, Path::new(env!("CARGO_MANIFEST_DIR"))).is_err()
         );
@@ -921,8 +1020,8 @@ mod tests {
         std::fs::write(&file, b"not a directory").unwrap();
         let file_str = file.to_str().unwrap().to_string();
         let args = vec!["app".to_string(), "--root".to_string(), file_str.clone()];
-        let file_err = resolve_project_root(&args, None, Path::new(env!("CARGO_MANIFEST_DIR")))
-            .unwrap_err();
+        let file_err =
+            resolve_project_root(&args, None, Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap_err();
         assert!(file_err.contains("is not a directory"));
         assert!(!file_err.contains("does not exist"));
 
@@ -984,7 +1083,10 @@ mod tests {
         let result = dense_daily_activity(start, end, &counts);
 
         assert_eq!(
-            result.iter().map(|d| (d.date.as_str(), d.count)).collect::<Vec<_>>(),
+            result
+                .iter()
+                .map(|d| (d.date.as_str(), d.count))
+                .collect::<Vec<_>>(),
             vec![("2026-01-01", 0), ("2026-01-02", 5), ("2026-01-03", 0)],
         );
     }

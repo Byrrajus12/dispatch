@@ -3,13 +3,15 @@
 // `label`, `sublabel?`, `kind`, `run`); the extra `section`/`icon`/`shortcut` fields are for
 // the grouped Linear-style menu that replaces the flat list.
 
+import type { DocHit } from '@dispatch/client';
 import type { ReactNode } from 'react';
 
-import type { GlobalView, ProjectView } from './appNav';
+import { type GlobalView, HOST_VIEWS, type ProjectView } from './appNav';
 import type { PaletteItem } from './paletteMatch';
 
 export type PaletteSection =
   | 'tasks'
+  | 'docs'
   | 'navigation'
   | 'actions'
   | 'inbox'
@@ -25,8 +27,8 @@ export interface PaletteEntry extends PaletteItem {
   run: () => void;
 }
 
-/** One rail destination, in ⌘N order. */
-export interface PaletteView {
+/** A page the palette can open. */
+interface PaletteView {
   id: ProjectView;
   label: string;
 }
@@ -34,17 +36,15 @@ export interface PaletteView {
 export interface PaletteEntriesContext {
   /** Whether a project is active — the task and project-view rows need one. */
   hasProject: boolean;
-  /** The rail's project views in rail order; the index is the ⌘N shortcut. */
-  views: PaletteView[];
   tasks: { meta: { id: string; title: string } }[];
   /** Tasks with every dependency landed — the ones a "Dispatch …" row makes sense for. */
   readyIds: ReadonlySet<string>;
-  /** `import.meta.env.DEV` — the Gallery row exists only in a dev build. */
-  dev: boolean;
   /** The project's saved views — one `Open view …` row each under `Views`. */
   savedViews?: { id: string; name: string }[];
   /** The task page or peek showing right now, which earns a `Copy link` row. */
   currentTaskId?: string | null;
+  /** A teammate below the operator tier: Terminals and Design are left out. */
+  hideHostViews?: boolean;
   actions: {
     openCreateTask: () => void;
     openQuickAddTask: () => void;
@@ -53,19 +53,24 @@ export interface PaletteEntriesContext {
     peekTask: (taskId: string) => void;
     dispatchTask: (taskId: string) => void;
     openQuickCapture: () => void;
-    toggleSidebar: () => void;
     openShortcuts: () => void;
     openSavedView?: (id: string) => void;
     /** Copies the task's `dispatch://` link. */
     copyTaskLink?: (taskId: string) => void;
+    /** Brings the first-task guide back for the active project. */
+    restartGuide?: () => void;
   };
 }
 
-const GLOBAL_VIEWS: { id: GlobalView; label: string; shortcut?: string }[] = [
-  { id: 'all-agents', label: 'All agents' },
-  { id: 'sessions', label: 'Sessions' },
-  { id: 'overseer', label: 'Assistant', shortcut: 'G A' },
-  { id: 'settings', label: 'Settings', shortcut: 'G S' },
+// The pages under Tasks with no other way in from the top bar.
+const TASKS_PAGES: PaletteView[] = [
+  { id: 'plans', label: 'Plans' },
+  { id: 'brain-dump', label: 'Notes' },
+  { id: 'branches', label: 'Git' },
+  { id: 'files', label: 'Files' },
+  { id: 'terminals', label: 'Terminals' },
+  { id: 'design', label: 'Design' },
+  { id: 'impact', label: 'Impact' },
 ];
 
 /** The rows the command menu offers right now: actions (a `Copy link` when a task is up),
@@ -126,56 +131,62 @@ export function buildPaletteEntries(
       });
     }
   }
+  entries.push({
+    id: 'action-shortcuts',
+    label: 'Keyboard shortcuts',
+    kind: 'action',
+    section: 'actions',
+    shortcut: '?',
+    run: actions.openShortcuts,
+  });
+  const { restartGuide } = actions;
+  if (ctx.hasProject && restartGuide !== undefined) {
+    entries.push({
+      id: 'action-restart-guide',
+      label: 'Restart the first-task guide',
+      kind: 'help',
+      section: 'actions',
+      run: restartGuide,
+    });
+  }
+
   entries.push(
     {
-      id: 'action-toggle-sidebar',
-      label: 'Toggle sidebar',
-      kind: 'action',
-      section: 'actions',
-      shortcut: '[',
-      run: actions.toggleSidebar,
+      id: 'go-overseer',
+      label: 'Go to Overseer',
+      kind: 'go to',
+      section: 'navigation',
+      shortcut: '⌘1',
+      run: () => actions.setGlobalView('overseer'),
     },
     {
-      id: 'action-shortcuts',
-      label: 'Keyboard shortcuts',
-      kind: 'action',
-      section: 'actions',
-      shortcut: '?',
-      run: actions.openShortcuts,
+      id: 'go-board',
+      label: 'Go to Tasks',
+      kind: 'go to',
+      section: 'navigation',
+      shortcut: '⌘2',
+      run: () => actions.setProjectView('board'),
+    },
+    {
+      id: 'go-settings',
+      label: 'Go to Settings',
+      kind: 'go to',
+      section: 'navigation',
+      shortcut: '⌘,',
+      run: () => actions.setGlobalView('settings'),
     }
   );
-
   if (ctx.hasProject) {
-    ctx.views.forEach((view, index) => {
+    for (const page of TASKS_PAGES) {
+      if (ctx.hideHostViews === true && HOST_VIEWS.has(page.id)) continue;
       entries.push({
-        id: `go-${view.id}`,
-        label: `Go to ${view.label}`,
+        id: `go-${page.id}`,
+        label: `Open ${page.label}`,
         kind: 'go to',
         section: 'navigation',
-        shortcut: index < 9 ? `⌘${index + 1}` : undefined,
-        run: () => actions.setProjectView(view.id),
+        run: () => actions.setProjectView(page.id),
       });
-    });
-  }
-  for (const view of GLOBAL_VIEWS) {
-    entries.push({
-      id: `go-${view.id}`,
-      label: `Go to ${view.label}`,
-      kind: 'go to',
-      section: 'navigation',
-      shortcut: view.shortcut,
-      run: () => actions.setGlobalView(view.id),
-    });
-  }
-  // Dev-only primitive review surface — never registered in a production build.
-  if (ctx.dev) {
-    entries.push({
-      id: 'go-gallery',
-      label: 'Go to Gallery',
-      kind: 'go to',
-      section: 'navigation',
-      run: () => actions.setGlobalView('gallery'),
-    });
+    }
   }
 
   if (ctx.hasProject) {
@@ -214,4 +225,59 @@ export function buildPaletteEntries(
   }
 
   return entries;
+}
+
+/** One Docs row per search hit, in the daemon's rank order: a section hit opens
+ * the doc scrolled to it, a hit before the first heading opens the doc's top. */
+export function docHitEntries(
+  hits: readonly DocHit[],
+  openDoc: (docId: string, anchor: string | null) => void
+): PaletteEntry[] {
+  return hits.map((hit) => ({
+    id: `doc:${hit.doc}#${hit.anchor}`,
+    label: hit.heading === '' ? hit.title : `${hit.title} › ${hit.heading}`,
+    sublabel: hit.handle,
+    kind: 'doc',
+    section: 'docs',
+    run: () => openDoc(hit.doc, hit.anchor === '' ? null : hit.anchor),
+  }));
+}
+
+/** The rows for talking to someone or opening a room; homes are never listed elsewhere. */
+export function addressEntries(input: {
+  people: readonly { ref: string; name: string }[];
+  rooms: readonly string[];
+  peers: readonly { alias: string; status: string }[];
+  me: string | null;
+  open: (address: string) => void;
+}): PaletteEntry[] {
+  const people = input.people
+    .filter((p) => p.ref !== input.me)
+    .map((p) => ({
+      id: `message-${p.ref}`,
+      label: `Message ${p.name}`,
+      kind: 'message',
+      section: 'navigation' as const,
+      run: () => input.open(p.ref),
+    }));
+  const peers = input.peers
+    .filter((p) => p.status === 'active')
+    .map((p) => ({
+      id: `message-a2a:${p.alias}`,
+      label: `Message ${p.alias} (outside)`,
+      kind: 'message',
+      section: 'navigation' as const,
+      run: () => input.open(`a2a:${p.alias}`),
+    }));
+  // Milestone rooms open from their milestone, not by name.
+  const rooms = input.rooms
+    .filter((name) => !name.startsWith('epic/'))
+    .map((name) => ({
+      id: `room-${name}`,
+      label: `Open #${name}`,
+      kind: 'room',
+      section: 'navigation' as const,
+      run: () => input.open(`channel:${name}`),
+    }));
+  return [...people, ...peers, ...rooms];
 }

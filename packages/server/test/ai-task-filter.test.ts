@@ -1,5 +1,5 @@
 import type { Query } from '@anthropic-ai/claude-agent-sdk';
-import type { TaskDoc } from '@dispatch/core';
+import type { TaskDoc } from '@dispatch-foo/core';
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -286,7 +286,7 @@ function routeContext(port: AiTaskFilterPort = new FakeAiTaskFilter()) {
     'statuses:\n  - ready\n  - doing\n  - landed\n'
   );
   const docs = [
-    doc({ id: 'e-1', title: 'Payments epic', kind: 'epic' }),
+    doc({ id: 'e-1', title: 'Payments epic', kind: 'milestone' }),
     doc({ id: 't-2', labels: ['ui'], milestone: 'v1', parent: 'e-1' }),
   ];
   return {

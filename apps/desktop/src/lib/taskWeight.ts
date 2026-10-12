@@ -1,5 +1,5 @@
-import type { TaskDoc } from '@dispatch/core/browser';
-import { isDoneStatus } from '@dispatch/core/browser';
+import type { StatusModel, TaskListItem } from '@dispatch-foo/core/browser';
+import { isDoneStatus } from '@dispatch-foo/core/browser';
 
 /**
  * The client-side v0 of the planning queue's weighted scoring (epic e-ba8bf1): a task's
@@ -44,17 +44,18 @@ const AGE_MAX_POINTS = 3;
 const MS_PER_DAY = 86_400_000;
 
 /**
- * Scores every task in one pass. Terminal tasks (landed/dropped) score 0 — they're out of
- * the queue — and don't count as "blocked" for anyone's unblocking value.
+ * Scores every task in one pass. Terminal tasks (completed or canceled under `model`) score
+ * 0 — they're out of the queue — and don't count as "blocked" for anyone's unblocking value.
  */
 export function computeTaskWeights(
-  tasks: TaskDoc[],
-  now: Date
+  tasks: TaskListItem[],
+  now: Date,
+  model: StatusModel
 ): Map<string, TaskWeight> {
   // Open dependents per blocker id: only a non-terminal dependent is really waiting.
   const openDependents = new Map<string, number>();
   for (const doc of tasks) {
-    if (isDoneStatus(doc.meta.status)) continue;
+    if (isDoneStatus(doc.meta.status, model)) continue;
     for (const blockerId of doc.meta.blockedBy) {
       openDependents.set(blockerId, (openDependents.get(blockerId) ?? 0) + 1);
     }
@@ -62,7 +63,7 @@ export function computeTaskWeights(
 
   const weights = new Map<string, TaskWeight>();
   for (const doc of tasks) {
-    if (isDoneStatus(doc.meta.status)) {
+    if (isDoneStatus(doc.meta.status, model)) {
       weights.set(doc.meta.id, {
         score: 0,
         factors: { urgency: 0, unblocks: 0, age: 0 },

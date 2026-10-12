@@ -1,6 +1,6 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { Options, Query } from '@anthropic-ai/claude-agent-sdk';
-import { loadConfig } from '@dispatch/core';
+import { agentEnv, loadConfig } from '@dispatch-foo/core';
 
 import { openClaudeQuery } from './orchestrator/claudeCli.js';
 
@@ -157,6 +157,7 @@ export class ClaudeAiTaskFilter implements AiTaskFilterPort {
     try {
       const options: Options = {
         cwd: this.rootDir,
+        env: agentEnv(),
         // Read per call, so a settings change applies with no daemon restart. The
         // summarize model is the cheap one-shot slot; a filter needs nothing more.
         model: loadConfig(this.rootDir).models.summarize,
@@ -327,7 +328,7 @@ export function sanitizeAiFilter(
  * round-trip — request, chips, persistence — without a model call.
  */
 export class FakeAiTaskFilter implements AiTaskFilterPort {
-  async toFilters(
+  toFilters(
     sentence: string,
     vocab: AiFilterVocabulary
   ): Promise<AiTaskFilterResult> {
@@ -356,6 +357,6 @@ export class FakeAiTaskFilter implements AiTaskFilterPort {
     if (labels.length > 0) {
       clauses.push({ facet: 'labels', op: 'includes', values: labels });
     }
-    return { clauses, join: has('or') ? 'or' : 'and' };
+    return Promise.resolve({ clauses, join: has('or') ? 'or' : 'and' });
   }
 }

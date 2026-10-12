@@ -1,4 +1,4 @@
-import type { TaskDoc } from '@dispatch/core/browser';
+import type { TaskListItem } from '@dispatch-foo/core/browser';
 
 import { TASKS_VIEW_TABS, type TasksViewMode } from './tasksViewMode';
 
@@ -70,7 +70,6 @@ export interface TasksDisplayPrefs {
   dateField: TaskDateField;
 }
 
-export const TASK_FILTERS_STORAGE_KEY = 'dispatch:tasks-filters-v1';
 export const TASKS_DISPLAY_STORAGE_KEY = 'dispatch:tasks-display-v1';
 /** Stamped into every serialised display model. Payloads without it (or below it) were
  * written before board lanes moved to `subGrouping` and go through that migration once. */
@@ -290,7 +289,7 @@ export function hasActiveFilters(filters: TaskFilters): boolean {
 /** Whether one task passes the chip filters. Empty filter arrays pass everything; active
  * statuses/priorities each union within their group and intersect across groups. */
 export function matchesTaskFilters(
-  doc: TaskDoc,
+  doc: TaskListItem,
   filters: TaskFilters
 ): boolean {
   if (

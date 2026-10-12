@@ -24,8 +24,9 @@ interface ShortcutGroup {
 }
 
 // The left column: the shell. The right column: a focused list row. Mirrors
-// `lib/keyboard.ts` — a key listed here that the resolver doesn't know is a bug in one of
-// the two.
+// `lib/keyboard.ts` and `twoViewsKeyAction` (lib/twoViews.ts) — a key listed here
+// that the resolver doesn't know is a bug in one of the two. `g h` and `g c` are
+// unlisted aliases of `g o`, as `g a` is.
 const SHELL_GROUPS: ShortcutGroup[] = [
   {
     heading: 'Shell',
@@ -33,7 +34,6 @@ const SHELL_GROUPS: ShortcutGroup[] = [
       { label: 'Command menu', keys: ['⌘K'] },
       { label: 'New task', keys: ['C'] },
       { label: 'Drop a thought', keys: ['⌘D'] },
-      { label: 'Toggle sidebar', keys: ['['] },
       { label: 'Keyboard shortcuts', keys: ['?'] },
       { label: 'Close / back out', keys: ['Esc'] },
     ],
@@ -41,12 +41,15 @@ const SHELL_GROUPS: ShortcutGroup[] = [
   {
     heading: 'Go to',
     rows: [
-      { label: 'Inbox', keys: ['G', 'I'], chord: true },
+      { label: 'Overseer', keys: ['G', 'O'], chord: true },
       { label: 'Tasks', keys: ['G', 'T'], chord: true },
-      { label: 'Overview', keys: ['G', 'C'], chord: true },
-      { label: 'Assistant', keys: ['G', 'A'], chord: true },
+      { label: 'Needs you', keys: ['G', 'I'], chord: true },
+      { label: 'Moving', keys: ['G', 'F'], chord: true },
+      { label: 'Review', keys: ['G', 'R'], chord: true },
+      { label: 'Threads', keys: ['G', 'M'], chord: true },
       { label: 'Settings', keys: ['G', 'S'], chord: true },
-      { label: 'Nth rail entry', keys: ['⌘1'] },
+      { label: 'Overseer / Tasks', keys: ['⌘1', '⌘2'] },
+      { label: 'Presets, in chip order', keys: ['⌘3–9'] },
       { label: 'Back / forward', keys: ['⌘[', '⌘]'] },
     ],
   },
@@ -70,6 +73,14 @@ const LIST_GROUPS: ShortcutGroup[] = [
       { label: 'Clear selection', keys: ['Esc'] },
       { label: 'Filter', keys: ['F'] },
       { label: 'Display', keys: ['⇧V'] },
+    ],
+  },
+  {
+    heading: 'Live',
+    rows: [
+      { label: 'Next / previous node', keys: ['J', 'K'] },
+      { label: 'Next / previous band', keys: ['⇧J', '⇧K'] },
+      { label: 'Across columns', keys: ['H', 'L'] },
     ],
   },
   {

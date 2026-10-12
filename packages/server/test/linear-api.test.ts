@@ -1,16 +1,12 @@
 import {
+  ensureA2ALinkKeys,
   normalizeProjectPath,
   readCredentials,
   TaskStore,
   writeCredential,
   writeProjectCredential,
-} from '@dispatch/core';
-import type {
-  LinearIssue,
-  LinearIssueInput,
-  LinearLabel,
-  LinearWorkflowState,
-} from '@dispatch/core';
+} from '@dispatch-foo/core';
+import type { LinearWorkflowState } from '@dispatch-foo/core';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -18,15 +14,8 @@ import { join } from 'node:path';
 
 import type { ServerHandle } from '../src/index.js';
 import { startServer } from '../src/index.js';
-import type {
-  LinearClient,
-  LinearIssuePage,
-  LinearIssueRef,
-  LinearResult,
-  LinearTeam,
-  LinearViewer,
-} from '../src/linear/client.js';
 import { json } from './json.js';
+import { FakeLinearClient } from './linearFake.js';
 import { rawFetch, useTestAuth } from './testAuth.js';
 
 const STATES: LinearWorkflowState[] = [
@@ -34,67 +23,11 @@ const STATES: LinearWorkflowState[] = [
   { id: 's-done', name: 'Done', type: 'completed' },
 ];
 
-// Serves fixed metadata and records writes; the API tests never open a socket to
-// Linear, and never mutate anything but this object.
-class StubLinearClient implements LinearClient {
-  created: LinearIssueInput[] = [];
-
-  viewer(): Promise<LinearResult<LinearViewer>> {
-    return Promise.resolve({
-      ok: true,
-      data: { id: 'u-1', name: 'Test', email: 'test@example.com' },
-    });
-  }
-
-  teams(): Promise<LinearResult<LinearTeam[]>> {
-    return Promise.resolve({
-      ok: true,
-      data: [{ id: 'team-1', key: 'HYD', name: 'Hydrogen' }],
-    });
-  }
-
-  workflowStates(): Promise<LinearResult<LinearWorkflowState[]>> {
-    return Promise.resolve({ ok: true, data: STATES });
-  }
-
-  labels(): Promise<LinearResult<LinearLabel[]>> {
-    return Promise.resolve({ ok: true, data: [] });
-  }
-
-  issuesUpdatedSince(): Promise<LinearResult<LinearIssuePage>> {
-    return Promise.resolve({
-      ok: true,
-      data: { issues: [], truncated: false },
-    });
-  }
-
-  issueLinks(): Promise<LinearResult<LinearIssueRef[]>> {
-    return Promise.resolve({ ok: true, data: [] });
-  }
-
-  createIssue(input: LinearIssueInput): Promise<LinearResult<LinearIssue>> {
-    this.created.push(input);
-    return Promise.resolve({
-      ok: false,
-      kind: 'graphql',
-      error: 'not exercised',
-    });
-  }
-
-  updateIssue(): Promise<LinearResult<LinearIssue>> {
-    return Promise.resolve({
-      ok: false,
-      kind: 'graphql',
-      error: 'not exercised',
-    });
-  }
-}
-
 let root: string;
 let fakeHome: string;
 let handle: ServerHandle;
 let baseUrl: string;
-let stub: StubLinearClient;
+let stub: FakeLinearClient;
 const originalHome = process.env.DISPATCH_HOME;
 const originalKey = process.env.LINEAR_API_KEY;
 
@@ -104,7 +37,9 @@ beforeEach(async () => {
   delete process.env.LINEAR_API_KEY;
   root = mkdtempSync(join(tmpdir(), 'dispatch-linear-api-'));
   TaskStore.init(root);
-  stub = new StubLinearClient();
+  // Serves fixed metadata; the API tests never open a socket to Linear.
+  stub = new FakeLinearClient();
+  stub.states = STATES;
   handle = await startServer({
     rootDir: root,
     port: 0,
@@ -130,7 +65,7 @@ describe('GET /api/linear/status', () => {
     expect(body.enabled).toBe(false);
     expect(body.teamId).toBeNull();
     expect(body.direction).toBe('both');
-    expect(body.intervalSec).toBe(300);
+    expect(body.intervalSec).toBe(30);
     expect(body.statusMap.landed).toBe('Done');
     expect(body.keySource).toBeNull();
     expect(body.lastSyncAt).toBeNull();
@@ -294,10 +229,28 @@ describe('POST /api/linear/disconnect', () => {
     await fetch(`${baseUrl}/api/linear/disconnect`, { method: 'POST' });
 
     expect(
-      readCredentials().projects?.[normalizeProjectPath(root)]
+      readCredentials().projects?.[normalizeProjectPath(root)]?.linear
     ).toBeUndefined();
     const status = await json(await fetch(`${baseUrl}/api/linear/status`));
     expect(status.keySource).toBeNull();
+  });
+
+  it('clears only the Linear key, never the A2A keys beside it', async () => {
+    await ensureA2ALinkKeys(root, () => ({
+      signPriv: 'sign-private',
+      signPub: 'sign-public',
+      sealPriv: 'seal-private',
+      sealPub: 'seal-public',
+    }));
+    writeProjectCredential(root, 'linear', { apiKey: 'lin_api_project_key' });
+    const before =
+      readCredentials().projects?.[normalizeProjectPath(root)]?.a2a;
+    expect(before?.linkKeys).toBeDefined();
+    await fetch(`${baseUrl}/api/linear/disconnect`, { method: 'POST' });
+
+    const after = readCredentials().projects?.[normalizeProjectPath(root)];
+    expect(after?.linear).toBeUndefined();
+    expect(after?.a2a).toEqual(before);
   });
 
   it('leaves a machine-wide key intact and reports it as the fallback', async () => {
@@ -308,5 +261,40 @@ describe('POST /api/linear/disconnect', () => {
     const status = await json(await fetch(`${baseUrl}/api/linear/status`));
     expect(status.keySource).toBe('global');
     expect(status.connected).toBe(true);
+  });
+});
+
+describe('POST /api/docs/:ref/share-linear', () => {
+  it("creates a Linear document under the doc's task's issue for the owner, and refuses a doc with no synced task", async () => {
+    const tasks = TaskStore.init(root);
+    const task = tasks.create({ title: 'Linked' });
+    tasks.update(task.meta.id, { external: 'linear:iss-1' });
+    const post = (path: string, body: unknown) =>
+      fetch(`${baseUrl}/api${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    const made = await post('/docs', {
+      title: 'Design',
+      body: 'x\n',
+      links: [{ target: `task:${task.meta.id}`, rel: 'spec' }],
+    });
+    expect(made.status).toBe(201);
+    expect((await post('/docs', { title: 'Loose', body: 'l\n' })).status).toBe(
+      201
+    );
+    const loose = await post('/docs/loose/share-linear', {});
+    expect(loose.status).toBe(400);
+    expect(stub.documentCreates).toEqual([]);
+
+    const res = await post('/docs/design/share-linear', {});
+    expect(res.status).toBe(201);
+    const { documentId } = await json(res);
+    expect(stub.documentCreates).toEqual([
+      { title: 'Design', content: 'x\n', issueId: 'iss-1' },
+    ]);
+    const doc = await json(await fetch(`${baseUrl}/api/docs/design`));
+    expect(doc.doc.origin).toBe(`linear:${documentId}`);
   });
 });

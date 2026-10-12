@@ -125,8 +125,11 @@ jobs:
       # Workspace package dist/ output must exist before the desktop build:
       # the sidecar `bun build --compile` step resolves @dispatch/* imports
       # through each package.json's `exports`, which point at dist/*.
+      # apps/desktop/scripts/build-sidecars.test.ts checks this list.
       - name: Build workspace packages
-        run: moon run core:build client:build cli:build mcp:build
+        run: >-
+          moon run core:build client:build cli:build mcp:build protocol:build
+          memory:build federation:build a2a:build
 
       # The signing certificate must be importable BEFORE the build: the
       # sidecar build script codesigns during tauri's beforeBuildCommand,
@@ -202,6 +205,17 @@ jobs:
           done
           for f in *.app.tar.gz; do
             mv "$f" "Dispatch_${{ matrix.updater_platform }}.app.tar.gz"
+          done
+
+      # Version-free copies let the site link releases/latest/download/Dispatch_<arch>.dmg
+      # to the newest build; the versioned DMGs stay for the Homebrew cask.
+      - name: Add version-free DMG names
+        if: runner.os == 'macOS'
+        working-directory: apps/desktop/src-tauri/target/release/bundle/dmg
+        run: |
+          set -euo pipefail
+          for f in Dispatch_*_*.dmg; do
+            cp "$f" "Dispatch_${f##*_}"
           done
 
       - name: Upload bundles to the release

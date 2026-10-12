@@ -1,15 +1,18 @@
 import {
   ConfigError,
+  defaultSetupCheckDeps,
   findDependencyCycles,
+  isValidParentKind,
   loadConfig,
   parseTaskFile,
-} from '@dispatch/core';
-import type { DispatchConfig, TaskDoc } from '@dispatch/core';
+  runSetupCheck,
+} from '@dispatch-foo/core';
+import type { DispatchConfig, TaskDoc } from '@dispatch-foo/core';
 import {
   checkCartoHealth,
   discoverCarto,
   redirectCartoOutput,
-} from '@dispatch/core/carto';
+} from '@dispatch-foo/core/carto';
 import type { Command } from 'commander';
 import { type Dirent, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -22,6 +25,7 @@ import {
 } from '../mergeDriver.js';
 import { projectRoot } from '../projectRoot.js';
 import { findRunningDaemon } from './daemon.js';
+import { formatSetupReport } from './setupReport.js';
 import { databaseBacked, requireStore } from './task.js';
 
 interface Issue {
@@ -90,7 +94,34 @@ export function registerDoctorCommand(program: Command, ctx: CliContext): void {
     .command('doctor')
     .description('Validate task files and references')
     .option('--json')
-    .action(async (opts: { json?: boolean }) => {
+    .option('--setup', 'Check git and your AI agent instead of task data')
+    .action(async (opts: { json?: boolean; setup?: boolean }) => {
+      if (opts.setup === true) {
+        let rootDir: string | undefined;
+        const candidate = projectRoot(ctx.cwd);
+        rootDir = existsSync(join(candidate, '.dispatch'))
+          ? candidate
+          : undefined;
+        const report = await runSetupCheck(
+          { ...(rootDir === undefined ? {} : { rootDir }) },
+          defaultSetupCheckDeps()
+        );
+        if (opts.json === true) {
+          ctx.log(JSON.stringify(report, null, 2));
+        } else {
+          for (const line of formatSetupReport(report)) {
+            ctx.log(line);
+          }
+        }
+        if (
+          report.steps.some(
+            (s) => s.status === 'missing' || s.status === 'needs-action'
+          )
+        ) {
+          throw new CliError('setup is incomplete');
+        }
+        return;
+      }
       // Where this project's tasks come from. Only the PARSE checks are
       // file-specific — malformed frontmatter, two files claiming one id —
       // and a database genuinely cannot express those. Every check after
@@ -203,14 +234,17 @@ export function registerDoctorCommand(program: Command, ctx: CliContext): void {
       for (const { file, doc } of parsed) {
         if (doc.meta.parent && !ids.has(doc.meta.parent)) {
           issues.push({ file, problem: `dangling parent: ${doc.meta.parent}` });
-        } else if (
-          doc.meta.parent &&
-          docsById.get(doc.meta.parent)?.meta.kind !== 'epic'
-        ) {
-          issues.push({
-            file,
-            problem: `parent is not an epic: ${doc.meta.parent}`,
-          });
+        } else if (doc.meta.parent) {
+          const parentKind = docsById.get(doc.meta.parent)?.meta.kind;
+          if (
+            parentKind !== undefined &&
+            !isValidParentKind(doc.meta.kind, parentKind)
+          ) {
+            issues.push({
+              file,
+              problem: `a ${parentKind} cannot parent a ${doc.meta.kind}: ${doc.meta.parent}`,
+            });
+          }
         }
         for (const dep of doc.meta.blockedBy) {
           if (dep === doc.meta.id) {
@@ -354,6 +388,11 @@ export function registerDoctorCommand(program: Command, ctx: CliContext): void {
         );
       } else {
         for (const i of issues) ctx.log(`${i.file}: ${i.problem}`);
+      }
+      if (opts.json !== true) {
+        ctx.log(
+          "Tip: run 'dispatch doctor --setup' to check git and your AI agent."
+        );
       }
       if (issues.length > 0) {
         throw new CliError(

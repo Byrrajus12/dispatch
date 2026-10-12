@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { expect, test } from 'bun:test';
 
 import type { PaletteEntry } from '../../lib/paletteEntries';
@@ -9,13 +9,12 @@ import { ShellActionsProvider } from './ShellActionsContext';
 function shellActions(overrides: Partial<ShellActions> = {}): ShellActions {
   return {
     openTask: () => {},
+    openThread: () => {},
     peekTask: () => {},
     openCreateTask: () => {},
     createPreset: null,
     closeCreateTask: () => {},
     openPalette: () => {},
-    toggleSidebar: () => {},
-    sidebarHidden: false,
     openOverseer: () => {},
     setProjectView: () => {},
     setGlobalView: () => {},
@@ -75,14 +74,21 @@ function mount({
   actions = shellActions(),
   ran = [],
   onClose = () => {},
+  searchDocs,
 }: {
   actions?: ShellActions;
   ran?: string[];
   onClose?: () => void;
+  searchDocs?: (query: string) => Promise<PaletteEntry[]>;
 } = {}) {
   return render(
     <ShellActionsProvider value={actions}>
-      <CommandPalette isOpen entries={entries(ran)} onClose={onClose} />
+      <CommandPalette
+        isOpen
+        entries={entries(ran)}
+        onClose={onClose}
+        searchDocs={searchDocs}
+      />
     </ShellActionsProvider>
   );
 }
@@ -135,13 +141,23 @@ test('rows carry an icon, a sans task id, and keycaps — never the kind text', 
   expect(keycaps).toEqual(['⌘1', 'G', 'S', 'C']);
 });
 
-test('the input shows the Ask Overseer Tab hint and is described by it', () => {
+test('the input shows the Ask your agent Tab hint and is described by it', () => {
   mount();
   const hint = document.querySelector('[data-slot="command-input-hint"]');
-  expect(hint?.textContent).toContain('Ask the Assistant');
+  expect(hint?.textContent).toContain('Ask your agent');
   expect(hint?.querySelector('[data-slot="kbd"]')?.textContent).toBe('Tab');
   expect(hint?.id).not.toBe('');
   expect(input().getAttribute('aria-describedby')).toBe(hint?.id);
+});
+
+test('the Tab hint and the empty state name your agent', () => {
+  mount();
+  const hint = document.querySelector('[data-slot="command-input-hint"]');
+  expect(hint?.textContent).toContain('Ask your agent');
+  expect(hint?.textContent).not.toContain('Assistant');
+  fireEvent.change(input(), { target: { value: 'zzz-no-match' } });
+  const empty = document.querySelector('[data-slot="empty-state"]');
+  expect(empty?.textContent).toContain('press Tab to ask your agent.');
 });
 
 test('the first row is the 40px active row', () => {
@@ -273,4 +289,59 @@ test('shows the empty state when nothing matches', () => {
   const slot = document.querySelector('[data-slot="command-empty"]');
   expect(slot?.className).toContain('p-0');
   expect(slot?.className).not.toContain('py-8');
+});
+
+test('a query also searches docs, listing the hits under Docs after the local rows', async () => {
+  const asked: string[] = [];
+  const ran: string[] = [];
+  mount({
+    ran,
+    searchDocs: (query) => {
+      asked.push(query);
+      return Promise.resolve([
+        {
+          id: 'doc:doc-1#columns',
+          label: 'Board spec › Columns',
+          sublabel: 'board',
+          kind: 'doc',
+          section: 'docs',
+          run: () => ran.push('doc-1#columns'),
+        },
+      ]);
+    },
+  });
+  expect(headings()).toEqual(['Tasks', 'Navigation', 'Actions']);
+  fireEvent.change(input(), { target: { value: 'kanban' } });
+  await waitFor(() => expect(headings()).toEqual(['Tasks', 'Docs']));
+  expect(asked).toEqual(['kanban']);
+  const row = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-slot="command-item"]')
+  ).find((r) => r.textContent?.includes('Board spec › Columns'));
+  if (row === undefined) throw new Error('doc row not rendered');
+  fireEvent.click(row);
+  expect(ran).toEqual(['doc-1#columns']);
+});
+
+test('doc rows for an earlier query go as soon as the query changes', async () => {
+  const ran: string[] = [];
+  mount({
+    ran,
+    searchDocs: (query) =>
+      Promise.resolve([
+        {
+          id: `doc:doc-1#${query}`,
+          label: `Board spec › ${query}`,
+          kind: 'doc',
+          section: 'docs',
+          run: () => ran.push(query),
+        },
+      ]),
+  });
+  fireEvent.change(input(), { target: { value: 'kanban' } });
+  await screen.findByText('Board spec › kanban');
+  fireEvent.change(input(), { target: { value: 'swimlane' } });
+  expect(headings()).toEqual([]);
+  fireEvent.keyDown(input(), { key: 'Enter' });
+  expect(ran).toEqual([]);
+  expect(await screen.findByText('Board spec › swimlane')).toBeDefined();
 });

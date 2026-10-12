@@ -1,9 +1,10 @@
-import { statusLabel } from '@dispatch/core/browser';
+import { statusLabel } from '@dispatch-foo/core/browser';
 import { Waypoints } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useMemo } from 'react';
 
 import {
+  type DagDirection,
   type DagEdge,
   dagLayout,
   type DagNode,
@@ -93,29 +94,93 @@ function GraphNodeCard({
 function EdgePath({
   edge,
   nodesById,
+  horizontal,
+  label,
+  hint,
+  tone,
 }: {
   edge: DagEdge;
   nodesById: Map<string, DagNode>;
+  horizontal: boolean;
+  label?: string;
+  hint?: string;
+  tone: EdgeTone;
 }) {
   const from = nodesById.get(edge.from);
   const to = nodesById.get(edge.to);
   if (from === undefined || to === undefined) return null;
 
-  const fromX = from.x + from.width / 2;
-  const fromY = from.y + from.height;
-  const toX = to.x + to.width / 2;
-  const toY = to.y;
+  // Left to right runs side to side, except into a wrapped band, which drops below.
+  const sideways = horizontal && to.x > from.x;
+  const fromX = sideways ? from.x + from.width : from.x + from.width / 2;
+  const fromY = sideways ? from.y + from.height / 2 : from.y + from.height;
+  const toX = sideways ? to.x : to.x + to.width / 2;
+  const toY = sideways ? to.y + to.height / 2 : to.y;
+  const midX = (fromX + toX) / 2;
   const midY = (fromY + toY) / 2;
+  const d = sideways
+    ? `M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`
+    : `M ${fromX} ${fromY} C ${fromX} ${midY}, ${toX} ${midY}, ${toX} ${toY}`;
 
+  const attention = tone === 'attention';
+  // A pill wide enough for the label at 11px tabular figures.
+  const pillWidth = label === undefined ? 0 : label.length * 7 + 12;
   return (
-    <path
-      d={`M ${fromX} ${fromY} C ${fromX} ${midY}, ${toX} ${midY}, ${toX} ${toY}`}
-      className="fill-none stroke-[var(--border-strong)]"
-      strokeWidth={1.5}
-      markerEnd="url(#dep-graph-arrow)"
-    />
+    <g data-slot="graph-edge">
+      <path
+        d={d}
+        className={cn(
+          'fill-none',
+          attention
+            ? 'stroke-(--state-waiting-fg)'
+            : 'stroke-[var(--border-strong)]'
+        )}
+        strokeWidth={1.5}
+        markerEnd={
+          attention
+            ? 'url(#dep-graph-arrow-attention)'
+            : 'url(#dep-graph-arrow)'
+        }
+      />
+      {label !== undefined && (
+        <g className="pointer-events-auto">
+          {hint !== undefined && <title>{hint}</title>}
+          <rect
+            data-slot="graph-edge-label"
+            x={midX - pillWidth / 2}
+            y={midY - 9}
+            width={pillWidth}
+            height={18}
+            rx={9}
+            strokeWidth={1}
+            className={cn(
+              'fill-(--background)',
+              attention
+                ? 'stroke-(--state-waiting-fg)'
+                : 'stroke-[var(--border-strong)]'
+            )}
+          />
+          <text
+            x={midX}
+            y={midY + 4}
+            textAnchor="middle"
+            className={cn(
+              'text-[11px] font-semibold tabular-nums',
+              attention
+                ? 'fill-(--state-waiting-fg)'
+                : 'fill-(--text-secondary)'
+            )}
+          >
+            {label}
+          </text>
+        </g>
+      )}
+    </g>
   );
 }
+
+/** An edge's colour: amber when what it leads from needs you. */
+type EdgeTone = 'default' | 'attention';
 
 export interface DependencyGraphProps {
   /** The node set — dagLayout derives layering/edges from `blockedBy` links among just this
@@ -131,6 +196,19 @@ export interface DependencyGraphProps {
   onOpenNode?: (id: string) => void;
   ariaLabel?: string;
   className?: string;
+  /** Top to bottom by default; left to right wraps after `wrap` columns. */
+  direction?: DagDirection;
+  wrap?: number;
+  /** A label on an edge, such as how many waits it stands for. */
+  edgeLabel?: (edge: DagEdge) => string | undefined;
+  /** An edge's tooltip, saying in words what its label counts. */
+  edgeHint?: (edge: DagEdge) => string | undefined;
+  edgeTone?: (edge: DagEdge) => EdgeTone;
+  /** Draws a node's body in place of the task card; `nodeSize` sizes it. */
+  renderNode?: (node: DagNode) => ReactNode;
+  nodeSize?: { width: number; height: number };
+  /** Shown when there are no nodes. */
+  empty?: { heading: string; description: string };
 }
 
 /**
@@ -148,18 +226,37 @@ export function DependencyGraph({
   onOpenNode,
   ariaLabel = 'Dependency graph',
   className,
+  direction = 'TB',
+  wrap,
+  edgeLabel,
+  edgeHint,
+  edgeTone,
+  renderNode,
+  nodeSize,
+  empty,
 }: DependencyGraphProps) {
+  const width = nodeSize?.width ?? CARD_WIDTH;
+  const height = nodeSize?.height ?? CARD_HEIGHT;
   const layout = useMemo(
-    () => dagLayout(tasks, { nodeWidth: CARD_WIDTH, nodeHeight: CARD_HEIGHT }),
-    [tasks]
+    () =>
+      dagLayout(tasks, {
+        nodeWidth: width,
+        nodeHeight: height,
+        direction,
+        wrap: wrap ?? null,
+      }),
+    [tasks, width, height, direction, wrap]
   );
 
   if (tasks.length === 0) {
     return (
       <EmptyState
         icon={Waypoints}
-        heading="No tasks yet"
-        description="Tasks under this epic show up here with their blocking edges."
+        heading={empty?.heading ?? 'No tasks yet'}
+        description={
+          empty?.description ??
+          'Tasks under this epic show up here with their blocking edges.'
+        }
         className={className}
       />
     );
@@ -197,12 +294,30 @@ export function DependencyGraph({
                 className="fill-[var(--border-strong)]"
               />
             </marker>
+            <marker
+              id="dep-graph-arrow-attention"
+              viewBox="0 0 8 8"
+              refX={4}
+              refY={4}
+              markerWidth={6}
+              markerHeight={6}
+              orient="auto-start-reverse"
+            >
+              <path
+                d="M 0 0 L 8 4 L 0 8 z"
+                className="fill-(--state-waiting-fg)"
+              />
+            </marker>
           </defs>
           {layout.edges.map((edge) => (
             <EdgePath
               key={`${edge.from}->${edge.to}`}
               edge={edge}
               nodesById={nodesById}
+              horizontal={direction === 'LR'}
+              label={edgeLabel?.(edge)}
+              hint={edgeHint?.(edge)}
+              tone={edgeTone?.(edge) ?? 'default'}
             />
           ))}
         </svg>
@@ -217,14 +332,20 @@ export function DependencyGraph({
               height: node.height,
             }}
           >
-            <GraphNodeCard
-              node={node}
-              refLabel={refFor?.(node.id) ?? statusLabel(node.status)}
-              accessory={accessoryFor?.(node.id)}
-              onOpen={
-                onOpenNode === undefined ? undefined : () => onOpenNode(node.id)
-              }
-            />
+            {renderNode !== undefined ? (
+              renderNode(node)
+            ) : (
+              <GraphNodeCard
+                node={node}
+                refLabel={refFor?.(node.id) ?? statusLabel(node.status)}
+                accessory={accessoryFor?.(node.id)}
+                onOpen={
+                  onOpenNode === undefined
+                    ? undefined
+                    : () => onOpenNode(node.id)
+                }
+              />
+            )}
           </div>
         ))}
       </div>

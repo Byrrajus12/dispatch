@@ -20,15 +20,24 @@
       // .meta.url)` in watchdog.ts, never imported, so nothing static reaches
       // it. It is also a second `bun build --compile` entrypoint in
       // apps/desktop/scripts/build-sidecars.ts for the same reason.
+      // blockingGitWorker.ts is loaded the same way by blockingGit.ts.
       //
       // test/fixtures/watchdogTeardown.ts is spawned as a subprocess by
       // test/watchdog-teardown.test.ts (its stderr is the thing under test),
-      // so nothing imports it either.
+      // so nothing imports it either. test/fixtures/a2aFixturePeer.ts is
+      // spawned by the desktop's A2A e2e specs, which run under Node.
       "entry": [
         "src/index.ts",
         "src/watchdogWorker.ts",
-        "test/fixtures/watchdogTeardown.ts"
+        "src/blockingGitWorker.ts",
+        "test/fixtures/watchdogTeardown.ts",
+        "test/fixtures/a2aFixturePeer.ts"
       ]
+    },
+    "packages/protocol-spec": {
+      // Scripts run from moon tasks; fixture adapters are spawned by the
+      // runner tests, never imported.
+      "entry": ["scripts/*.ts", "test/fixtures/adapters/*.ts"]
     },
     "packages/demo": {
       // storefront-src is a template copied into the generated demo repo
@@ -56,7 +65,11 @@
   // lint-staged runs via `pnpm exec lint-staged` in `.moon/workspace.yml`'s
   // `vcs.hooks.pre-commit`; the moonrepo plugin only scans moon.yml and
   // .moon/tasks/*.yml, not .moon/workspace.yml, so it cannot see this usage.
-  "ignoreDependencies": ["@dispatch/mcp", "@dispatch/server", "lint-staged"],
+  "ignoreDependencies": [
+    "@dispatch-foo/mcp",
+    "@dispatch/server",
+    "lint-staged"
+  ],
 
   // pgrep/pkill are spawned by ensure-daemon-race.test.ts to inspect and clean
   // up stray daemon processes. carto is probed by the demo's preflight and is

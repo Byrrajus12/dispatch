@@ -1,3 +1,4 @@
+import { DEFAULT_STATUS_MODEL } from '@dispatch-foo/core/browser';
 import type {
   GateStatus,
   LandingGate,
@@ -534,6 +535,7 @@ describe('landedFromTasks', () => {
         task('t-open', 'ready', '2026-08-04T00:00:00.000Z'),
         task('e-1', 'landed', '2026-08-05T00:00:00.000Z', 'epic'),
       ],
+      DEFAULT_STATUS_MODEL,
       1
     );
     expect(rows.map((r) => r.id)).toEqual(['t-new']);

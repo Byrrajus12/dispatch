@@ -4,14 +4,18 @@ import { z } from 'zod';
 
 import { CLAUDE_INSTALL_HINT } from '../../src/orchestrator/claudeCli.js';
 import { floorGuard } from '../../src/orchestrator/floorHook.js';
+import { toolDescriptionForModel } from '../../src/orchestrator/overseerBackend.js';
 import type {
   OverseerToolResult,
   OverseerToolset,
   OverseerTurnOptions,
 } from '../../src/orchestrator/overseerBackend.js';
 import {
-  ClaudeOverseer,
   EMPTY_REPLY_MESSAGE,
+  overseerInstructions,
+} from '../../src/orchestrator/overseerPrompt.js';
+import {
+  ClaudeOverseer,
   OVERSEER_TOOL_PREFIX,
   overseerSdkTools,
 } from '../../src/orchestrator/overseers/claude.js';
@@ -53,9 +57,11 @@ function stubToolset(result?: OverseerToolResult): {
         mutating: true,
       },
     ],
-    call: async (name, input) => {
+    call: (name, input) => {
       calls.push({ name, input });
-      return result ?? { content: { ok: true }, isError: false };
+      return Promise.resolve(
+        result ?? { content: { ok: true }, isError: false }
+      );
     },
   };
   return { toolset, calls };
@@ -64,8 +70,8 @@ function stubToolset(result?: OverseerToolResult): {
 // One `result` message is the minimum a turn needs to settle.
 function successStream(
   fields: Record<string, unknown> = {}
-): () => AsyncGenerator<unknown> {
-  return async function* stream() {
+): () => Iterable<unknown> {
+  return function* stream() {
     yield { type: 'system', subtype: 'init', session_id: 'sess-1' };
     yield {
       type: 'result',
@@ -78,9 +84,10 @@ function successStream(
 }
 
 // Runs one turn against a scripted message stream, returning both the turn and
-// the Options the backend handed to `query()`.
+// the Options the backend handed to `query()`. The stream is a plain iterable:
+// the backend reads it with `for await`, which accepts sync iterables too.
 async function runTurn(
-  stream: () => AsyncGenerator<unknown>,
+  stream: () => Iterable<unknown>,
   toolset: OverseerToolset,
   send?: (
     overseer: ClaudeOverseer,
@@ -159,7 +166,9 @@ describe('ClaudeOverseer session wiring', () => {
         command: 'gh release create v2.0.0',
       })
     ).toBe('deny');
-    expect(captured?.settings).toEqual(floorGuard('deny').settings);
+    expect(captured?.settings).toMatchObject(
+      floorGuard('deny').settings as Record<string, unknown>
+    );
   });
 
   // The hook holds a floor command through the same authorizeTool gate
@@ -225,12 +234,31 @@ describe('ClaudeOverseer session wiring', () => {
     expect(captured?.maxBudgetUsd).toBeUndefined();
   });
 
+  // Its transcripts are readable by request-tier callers, so it never loads
+  // the owner's native Claude notes.
+  it('keeps Claude’s auto memory off beside the floor’s settings', async () => {
+    const { toolset } = stubToolset();
+    const { captured } = await runTurn(successStream(), toolset);
+    const settings = captured?.settings as Record<string, unknown> | undefined;
+    expect(settings).toMatchObject({
+      env: { CLAUDE_CODE_SIMPLE: '0', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },
+      disableSkillShellExecution: true,
+      autoMemoryEnabled: false,
+    });
+    expect(settings?.autoMemoryDirectory).toBeUndefined();
+    expect(captured?.additionalDirectories).toBeUndefined();
+  });
+
   it('tells the model that a mutating call only queues an action', async () => {
     const { toolset } = stubToolset();
     const { captured } = await runTurn(successStream(), toolset);
 
     const prompt = captured?.systemPrompt as { append?: string } | undefined;
-    expect(prompt?.append).toContain('queues the action for the human');
+    expect(prompt?.append).toContain(
+      'queues the action as an approval card the human answers'
+    );
+    // Dispatch's own side doors always wait on a human.
+    expect(prompt?.append).toContain('always waits on a human');
     expect(prompt?.append).toContain('never report one as done');
     // And that a built-in denial is the human's answer, not an obstacle.
     expect(prompt?.append).toContain('respect rather than work around');
@@ -314,7 +342,7 @@ describe('ClaudeOverseer session wiring', () => {
 
   it('reports built-in tool calls from assistant messages, not its own', async () => {
     const { toolset } = stubToolset();
-    const stream = async function* stream() {
+    const stream = function* stream() {
       yield { type: 'system', subtype: 'init', session_id: 'sess-1' };
       yield {
         type: 'assistant',
@@ -370,19 +398,32 @@ describe('ClaudeOverseer session wiring', () => {
 
   it('fails the turn on a non-success result and on a stream with no result', async () => {
     const { toolset } = stubToolset();
-    const errored = async function* stream() {
+    const errored = function* stream() {
       yield { type: 'result', subtype: 'error_max_turns', session_id: 's' };
     };
     await expect(runTurn(errored, toolset)).rejects.toThrow(
       'overseer turn failed: error_max_turns'
     );
 
-    const silent = async function* stream() {
+    const silent = function* stream() {
       yield { type: 'system', subtype: 'init', session_id: 's' };
     };
     await expect(runTurn(silent, toolset)).rejects.toThrow(
       'overseer turn produced no result message'
     );
+  });
+
+  it('fails a turn the signed-out CLI reports as an error success', async () => {
+    const { toolset } = stubToolset();
+    await expect(
+      runTurn(
+        successStream({
+          is_error: true,
+          result: 'Not logged in · Please run /login',
+        }),
+        toolset
+      )
+    ).rejects.toThrow('Not logged in · Please run /login');
   });
 
   it('rewrites the SDK missing-CLI error into an install hint', async () => {
@@ -455,5 +496,49 @@ describe('overseerSdkTools', () => {
     expect(Object.keys(cancelRun.inputSchema)).toEqual(['runId']);
     expect(listRuns.description).not.toContain('QUEUES');
     expect(cancelRun.description).toContain('QUEUES this action');
+  });
+});
+
+describe('shared overseer pieces', () => {
+  it('words the instructions for whichever agent runs the session', () => {
+    expect(overseerInstructions('Claude Code')).toContain(
+      'a full Claude Code session in the project checkout'
+    );
+    expect(overseerInstructions('Codex')).toContain(
+      'a full Codex session in the project checkout'
+    );
+    expect(overseerInstructions('Codex').replace('Codex', 'Claude Code')).toBe(
+      overseerInstructions('Claude Code')
+    );
+  });
+
+  it('promises gated reads only to an agent that asks before reading', () => {
+    const gated = overseerInstructions('Claude Code');
+    expect(gated).toContain('reading its token file');
+    const ungated = overseerInstructions('Codex', { ungatedReads: true });
+    expect(ungated).not.toContain('reading its token file');
+    expect(ungated).toContain('without asking');
+    expect(ungated).toContain('Never read the daemon’s token file');
+    // Only that paragraph differs.
+    expect(ungated.split('\n\n').length).toBe(gated.split('\n\n').length);
+  });
+
+  it('tells the model a mutating tool only queues', () => {
+    const { toolset } = stubToolset();
+    const [listRuns, cancelRun] = toolset.tools;
+    expect(toolDescriptionForModel(listRuns)).toBe('Live and recent runs.');
+    expect(toolDescriptionForModel(cancelRun)).toBe(
+      'Stop a live run. QUEUES this action for human confirmation — calling it does not perform it.'
+    );
+  });
+
+  it('appends the Claude-worded instructions to the claude_code preset', async () => {
+    const { toolset } = stubToolset();
+    const { captured } = await runTurn(successStream(), toolset);
+    expect(captured?.systemPrompt).toEqual({
+      type: 'preset',
+      preset: 'claude_code',
+      append: overseerInstructions('Claude Code'),
+    });
   });
 });
