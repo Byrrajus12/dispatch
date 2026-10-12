@@ -207,6 +207,17 @@ jobs:
             mv "$f" "Dispatch_${{ matrix.updater_platform }}.app.tar.gz"
           done
 
+      # Version-free copies let the site link releases/latest/download/Dispatch_<arch>.dmg
+      # to the newest build; the versioned DMGs stay for the Homebrew cask.
+      - name: Add version-free DMG names
+        if: runner.os == 'macOS'
+        working-directory: apps/desktop/src-tauri/target/release/bundle/dmg
+        run: |
+          set -euo pipefail
+          for f in Dispatch_*_*.dmg; do
+            cp "$f" "Dispatch_${f##*_}"
+          done
+
       - name: Upload bundles to the release
         working-directory: apps/desktop
         env:

@@ -201,3 +201,23 @@ test('the alias pages render no .md href either', async () => {
     });
   }
 });
+
+test('docs lead with the desktop path and tell the truth about the dispatch command', async () => {
+  const docs = await Bun.file(
+    new URL('../dist/docs/index.html', import.meta.url)
+  ).text();
+  const start = docs.indexOf('id="get-started"');
+  const terminal = docs.indexOf('id="terminal"');
+  expect(start).toBeGreaterThan(-1);
+  expect(terminal).toBeGreaterThan(start);
+  expect(docs.indexOf('dispatch init')).toBeGreaterThan(terminal);
+  expect(docs).not.toContain('Installing the app also puts');
+  expect(docs).toContain('Terminal command');
+});
+
+test('the landing page offers the DMG beside the brew command', () => {
+  expect(html).toContain(
+    'href="https://github.com/wsoule/dispatch/releases/latest/download/Dispatch_aarch64.dmg"'
+  );
+  expect(html).toContain('Dispatch_x64.dmg');
+});

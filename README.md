@@ -27,6 +27,19 @@ See [LICENSING.md](LICENSING.md) and [pricing](https://dispatch.foo/pricing).
 - **Local-first.** Runs on your machine, against your checkout, with your API
   key. No account, no server, nothing uploaded.
 
+## Prerequisites
+
+- **macOS** (Apple Silicon or Intel) or **Linux**.
+- **A project folder**, ideally a git repository you push to GitHub. Setup can
+  turn a plain folder into one.
+- **Git.** On a Mac without it, Setup runs Apple's installer.
+- **An AI coding agent:** Claude Code (Claude Pro or Max plan, or an API key),
+  Codex (ChatGPT plan or an API key), or Gemini CLI, Cursor Agent, opencode,
+  Qwen Code, Crush, Goose or Aider. Setup installs the one you pick and opens
+  its sign-in.
+- **Optional:** the GitHub CLI (`gh`) to clone from GitHub and open pull
+  requests.
+
 ## Install
 
 Desktop app for macOS via Homebrew:
@@ -38,8 +51,9 @@ Or grab an installer from the
 (Apple Silicon and Intel) and Linux `.deb`/`.rpm`/`.AppImage`. macOS builds are
 signed and notarized (Developer ID).
 
-On macOS, installing the app also puts the `dispatch` CLI on your `PATH` (the
-cask links the binary bundled inside `Dispatch.app`).
+The Homebrew cask also puts the `dispatch` CLI on your `PATH` (it links the
+binary bundled inside `Dispatch.app`). After a DMG or Linux install, add it from
+**Settings › Setup › Terminal command › Install command**.
 
 ## Quickstart
 

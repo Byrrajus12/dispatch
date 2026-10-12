@@ -1,5 +1,6 @@
 ---
 import AppDemo from './AppDemo.astro';
+import { DMG, RELEASES } from '../../lib/downloads';
 import InstallCommand from './InstallCommand.astro';
 ---
 
@@ -15,11 +16,12 @@ import InstallCommand from './InstallCommand.astro';
         <a class="new" href="#two-views"><b>New</b> Overseer topic routing</a>
       </div>
       <div class="actions" id="install">
-        <a class="btn btn-primary" href="https://github.com/wsoule/dispatch/releases/latest">
-          Download for Mac
-        </a>
+        <a class="btn btn-primary" href={DMG.arm}>Download for Mac</a>
         <InstallCommand />
       </div>
+      <p class="alt">
+        Apple Silicon. <a href={DMG.x64}>Intel Mac</a> or <a href={RELEASES}>Linux</a>.
+      </p>
     </div>
   </div>
 
@@ -32,6 +34,15 @@ import InstallCommand from './InstallCommand.astro';
 </section>
 
 <style>
+  .alt {
+    margin-top: 0.75rem;
+    color: var(--ink-3);
+    font-size: 0.85rem;
+  }
+  .alt a {
+    color: var(--ink-2);
+    text-underline-offset: 3px;
+  }
   .hero {
     position: relative;
     padding: clamp(4rem, 10vw, 8rem) 0 0;

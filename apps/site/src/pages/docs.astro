@@ -2,6 +2,7 @@
 import Footer from '../components/landing/Footer.astro';
 import Nav from '../components/landing/Nav.astro';
 import Landing from '../layouts/Landing.astro';
+import { DMG, RELEASES } from '../lib/downloads';
 import '../styles/page.css';
 
 const repo = 'https://github.com/wsoule/dispatch';
@@ -9,7 +10,7 @@ const repo = 'https://github.com/wsoule/dispatch';
 
 <Landing
   title="Docs: Dispatch"
-  description="Install Dispatch, put a repo on the board, connect Claude Code or any MCP agent, and dispatch your first task."
+  description="Download Dispatch, follow Setup, and land your first change with an AI agent. The terminal path follows."
   path="/docs"
 >
   <Nav />
@@ -18,35 +19,55 @@ const repo = 'https://github.com/wsoule/dispatch';
       <div class="head">
         <h1>Quickstart</h1>
         <p class="lede">
-          From install to an agent landing its first task, in a repo you already have. The{' '}
-          <a href={`${repo}#readme`}>README</a> goes deeper on every step.
+          From download to an agent landing its first change in a repo you already have, without
+          opening a terminal. The <a href={`${repo}#readme`}>README</a> goes deeper on every step.
         </p>
       </div>
 
       <div class="prose">
-        <h2>1. Install</h2>
-        <p>On macOS, with Homebrew:</p>
-        <pre><code>brew install --cask wsoule/tap/dispatch</code></pre>
+        <h2 id="get-started">Get started</h2>
+
+        <h3>1. Download</h3>
         <p>
-          Or download an installer from the <a href={`${repo}/releases/latest`}>latest release</a>:
-          macOS (Apple Silicon and Intel, signed and notarized) and Linux (<code>.deb</code>,{' '}
-          <code>.rpm</code>, <code>.AppImage</code>). Installing the app also puts the{' '}
-          <code>dispatch</code> command on your path.
+          Download Dispatch for Mac, <a href={DMG.arm}>Apple Silicon</a> or <a href={DMG.x64}>Intel</a>,
+          open the DMG and drag Dispatch into Applications. Builds are signed and notarized. Linux
+          packages (<code>.deb</code>, <code>.rpm</code>, <code>.AppImage</code>) are on the{' '}
+          <a href={RELEASES}>latest release</a>. Or, with Homebrew:
+        </p>
+        <pre><code>brew install --cask wsoule/tap/dispatch</code></pre>
+
+        <h3>2. Open it and follow Setup</h3>
+        <p>Setup checks three things and fixes each with a button. Anything already in place shows a tick.</p>
+        <ul>
+          <li><strong>Git.</strong> On a Mac without it, Setup opens Apple's installer.</li>
+          <li><strong>Your project.</strong> Choose a folder or clone one from GitHub. A folder without version tracking gets it turned on, with a first snapshot.</li>
+          <li><strong>Your AI agent.</strong> Pick Claude Code, Codex, Gemini CLI or another supported agent. Setup installs it and opens its own sign-in, so it runs on the plan you already have. An API key works too.</li>
+        </ul>
+
+        <h3>3. Land your first change</h3>
+        <p>
+          Describe a change in a sentence. A short guide walks you through it: check the task, send
+          it to the agent, review what changed, and add it to your project. The agent works on its
+          own copy of your project, so nothing changes in your files until you say so.
         </p>
 
-        <h2>2. Put a repo on the board</h2>
-        <p>In any git repository:</p>
+        <h2 id="terminal">From the terminal</h2>
+        <p>
+          The <code>dispatch</code> command comes with the Homebrew install. After a DMG or Linux
+          install, add it from <strong>Settings › Setup › Terminal command</strong>. Then, in any git
+          repository:
+        </p>
         <pre><code>dispatch init
 dispatch task create "My first task" --priority high
 dispatch task list</code></pre>
         <p>
-          Then open the Dispatch app and point it at the repo. <code>dispatch init</code> creates{' '}
-          <code>.dispatch/</code> with the project's settings. Tasks are markdown files in{' '}
-          <code>.dispatch/tasks/</code> by default, or, with <code>dispatch init --db</code>, rows in
-          a local database with a git receipt log kept outside your repo.
+          <code>dispatch init</code> creates <code>.dispatch/</code> with the project's settings. Tasks
+          are markdown files in <code>.dispatch/tasks/</code> by default, or, with{' '}
+          <code>dispatch init --db</code>, rows in a local database with a git receipt log kept
+          outside your repo.
         </p>
 
-        <h2>3. Connect your agents</h2>
+        <h2>Connect your agents</h2>
         <p>
           <code>dispatch init</code> registers Dispatch's MCP server in the project's{' '}
           <code>.mcp.json</code>. Start Claude Code, Codex, Gemini CLI or any MCP agent in the repo
@@ -58,7 +79,7 @@ dispatch task list</code></pre>
           <strong>Coming in</strong>.
         </p>
 
-        <h2>4. Dispatch a task</h2>
+        <h2>Dispatch a task</h2>
         <p>
           In the app, open a task and press <strong>Dispatch</strong>, or from the terminal:
         </p>
@@ -70,7 +91,7 @@ dispatch task list</code></pre>
           land it through the merge queue.
         </p>
 
-        <h2>5. Plan bigger work</h2>
+        <h2>Plan bigger work</h2>
         <p>
           Tell the <strong>Overseer</strong> what you want built, in one sentence. It proposes a
           milestone with tasks and dependencies. Nothing is created until you approve. From the
@@ -79,7 +100,7 @@ dispatch task list</code></pre>
           between you and a release, and copies as Mermaid.
         </p>
 
-        <h2>6. Bring your team</h2>
+        <h2>Bring your team</h2>
         <pre><code>dispatch team start
 dispatch team invite teammate@example.com</code></pre>
         <p>
