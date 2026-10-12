@@ -64,7 +64,7 @@ describe('the composer', () => {
   test('without the app token, i explains instead of opening the composer', () => {
     const readOnly = run([key('i')], ctx({ canCompose: false }));
     expect(readOnly.composing).toBe(false);
-    expect(readOnly.notice).toContain('--token');
+    expect(readOnly.notice).toContain('--ask-token');
   });
 
   test('ctrl+c still quits while composing', () => {

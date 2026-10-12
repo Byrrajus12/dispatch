@@ -58,7 +58,7 @@ export const initialNav: NavState = {
 
 const PHASE_3 = 'Docs, threads, PRs and projects arrive in phase 3.';
 export const READ_ONLY =
-  'read-only: the Overseer and approvals need the app token. Run `dispatch tui --token <token>` with the DISPATCH_APP_TOKEN line `dispatch serve` prints.';
+  'read-only: the Overseer and approvals need the app token. Run `dispatch tui --ask-token`, or set DISPATCH_APP_TOKEN, to the DISPATCH_APP_TOKEN line `dispatch serve` prints.';
 const OVERSEER_PANES: Pane[] = ['in', 'conversation', 'out'];
 
 /** Maps one key to an action, or null when the key belongs to someone else (the composer). */

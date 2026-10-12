@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { type CliContext, CliError } from '../context.js';
 import { projectRoot } from '../projectRoot.js';
 import { ensureDaemon } from './daemon.js';
+import { readSecret } from './secret.js';
 import { requireInitialized } from './task.js';
 
 const ENTRY = join('apps', 'tui', 'src', 'main.tsx');
@@ -98,18 +99,44 @@ export function runTui(launch: TuiLaunch): Promise<number> {
   });
 }
 
+/**
+ * The human-tier app token, never from argv (it would show in `ps` and shell history):
+ * DISPATCH_APP_TOKEN, else a hidden prompt when asked for. Undefined means read-only.
+ */
+export async function resolveAppToken(
+  opts: { askToken?: boolean },
+  env: Record<string, string | undefined>,
+  ask: (prompt: string) => Promise<string>
+): Promise<string | undefined> {
+  const fromEnv = env.DISPATCH_APP_TOKEN;
+  if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
+  if (opts.askToken === true) return (await ask('Daemon app token: ')).trim();
+  return undefined;
+}
+
+// The child gets the token as DISPATCH_TUI_TOKEN; no second copy under another name.
+function withoutAppToken(
+  env: Record<string, string | undefined>
+): Record<string, string | undefined> {
+  const { DISPATCH_APP_TOKEN: _dropped, ...rest } = env;
+  return rest;
+}
+
 export function registerTuiCommand(program: Command, ctx: CliContext): void {
   program
     .command('tui')
     .description('Open Dispatch in the terminal, starting dispatchd if needed')
     .option('--port <n>', 'port to use when starting dispatchd')
     .option(
-      '--token <token>',
-      'the daemon app token (or DISPATCH_APP_TOKEN); without it the TUI is read-only'
+      '--ask-token',
+      'prompt for the daemon app token (or set DISPATCH_APP_TOKEN); without it the TUI is read-only'
     )
-    .action(async (opts: { port?: string; token?: string }) => {
+    .action(async (opts: { port?: string; askToken?: boolean }) => {
       requireInitialized(ctx);
       const entry = resolveTuiEntry();
+      const appToken = await resolveAppToken(opts, process.env, (prompt) =>
+        readSecret(ctx, prompt)
+      );
       const { port, agentToken } = await ensureDaemon(ctx, { port: opts.port });
       process.exitCode = await runTui(
         buildTuiLaunch({
@@ -117,8 +144,8 @@ export function registerTuiCommand(program: Command, ctx: CliContext): void {
           root: projectRoot(ctx.cwd),
           port,
           token: agentToken,
-          appToken: opts.token ?? process.env.DISPATCH_APP_TOKEN,
-          env: process.env,
+          appToken,
+          env: withoutAppToken(process.env),
         })
       );
     });

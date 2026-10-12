@@ -313,7 +313,7 @@ test('without the app token it opens read-only, says how to get one, and never a
   const { frame, press } = await mount(120, 40, client, false);
   const f = await frame();
   expect(f).toContain('read-only');
-  expect(f).toContain('--token');
+  expect(f).toContain('--ask-token');
   expect(f).toContain('Add address autocomplete');
   const typed = await press('i', 'y');
   expect(typed).not.toContain('type, enter to send');

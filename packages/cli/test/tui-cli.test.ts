@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import {
   buildTuiLaunch,
+  resolveAppToken,
   resolveTuiEntry,
   runTui,
 } from '../src/commands/tui.js';
@@ -128,5 +129,41 @@ describe('runTui', () => {
       env: process.env as Record<string, string>,
     });
     expect(code).toBe(3);
+  });
+});
+
+describe('resolveAppToken', () => {
+  it('reads DISPATCH_APP_TOKEN without prompting', async () => {
+    let asked = 0;
+    const token = await resolveAppToken(
+      {},
+      { DISPATCH_APP_TOKEN: 'env-tok' },
+      () => {
+        asked++;
+        return Promise.resolve('typed');
+      }
+    );
+    expect(token).toBe('env-tok');
+    expect(asked).toBe(0);
+  });
+
+  it('--ask-token prompts with the input hidden from argv and history', async () => {
+    const prompts: string[] = [];
+    const token = await resolveAppToken(
+      { askToken: true },
+      {},
+      (prompt: string) => {
+        prompts.push(prompt);
+        return Promise.resolve('typed-tok');
+      }
+    );
+    expect(token).toBe('typed-tok');
+    expect(prompts).toHaveLength(1);
+  });
+
+  it('with neither, there is no app token and the TUI opens read-only', async () => {
+    expect(
+      await resolveAppToken({}, {}, () => Promise.resolve('x'))
+    ).toBeUndefined();
   });
 });
