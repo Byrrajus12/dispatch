@@ -1,4 +1,3 @@
-// apps/desktop/src/lib/firstTaskGuide.ts
 import {
   type CreateInput,
   providerById,
@@ -66,13 +65,7 @@ export function writeGuide(projectPath: string, record: GuideRecord): void {
   }
 }
 
-export type GuideStage =
-  | 'describe'
-  | 'check'
-  | 'works'
-  | 'review'
-  | 'land'
-  | 'done';
+type GuideStage = 'describe' | 'check' | 'works' | 'review' | 'land' | 'done';
 
 /** The five stages a person sees, in order; `done` is the completion state after them. */
 export const GUIDE_STEPS: readonly {
@@ -86,7 +79,7 @@ export const GUIDE_STEPS: readonly {
   { stage: 'land', label: 'Land it' },
 ];
 
-export interface GuideFailure {
+interface GuideFailure {
   error: string;
   providerId?: string;
 }
@@ -131,15 +124,14 @@ export function deriveGuideStage(
   const { taskId } = record;
   if (taskId !== undefined && tasks.some((t) => t.meta.id === taskId)) {
     const run = latestExecuteRun(runs, taskId);
-    if (
-      run === undefined ||
-      run.state === 'cancelled' ||
-      run.reviewAction === 'discard'
-    ) {
+    if (run === undefined) return { stage: 'check', taskId };
+    if (run.reviewedAt !== undefined && run.reviewAction !== 'discard') {
+      return { stage: 'done', taskId, run };
+    }
+    if (run.state === 'cancelled' || run.reviewAction === 'discard') {
       return { stage: 'check', taskId };
     }
     if (!isTerminalRunState(run.state)) return { stage: 'works', taskId, run };
-    if (run.reviewedAt !== undefined) return { stage: 'done', taskId, run };
     if (run.state === 'failed' || run.state === 'interrupted-dirty') {
       return {
         stage: 'works',
@@ -198,7 +190,7 @@ export function guideProvider(
   configured: string | undefined
 ): GuideProvider | null {
   const id = configured ?? report?.defaultProvider ?? undefined;
-  if (id === undefined || id === null) return null;
+  if (id === undefined) return null;
   const state = report?.providers.find((p) => p.id === id);
   if (state !== undefined) {
     return {

@@ -1,4 +1,3 @@
-// apps/desktop/src/lib/firstTaskGuide.test.ts
 import type { SetupReport } from '@dispatch-foo/core/browser';
 import type { DraftRecord, RunMeta } from '@dispatch/client';
 import { beforeEach, describe, expect, test } from 'bun:test';
@@ -218,6 +217,45 @@ describe('deriveGuideStage', () => {
     expect(at(active({ taskId: 't-1' }), { tasks: [] })).toEqual({
       stage: 'describe',
     });
+  });
+
+  test('a cancelled run that was later merged is done', () => {
+    const r = run({
+      state: 'cancelled',
+      reviewedAt: 'x',
+      reviewAction: 'merge',
+    });
+    expect(
+      at(active({ taskId: 't-1' }), { tasks: TASKS, runs: [r] }).stage
+    ).toBe('done');
+  });
+
+  test('a deleted task with its draft still present falls back to the draft', () => {
+    const d = draft();
+    expect(
+      at(active({ taskId: 't-1', draftId: 'd-1' }), { tasks: [], drafts: [d] })
+    ).toEqual({ stage: 'check', draft: d });
+  });
+
+  test('an interrupted-dirty run fails on Agent works', () => {
+    const r = run({ state: 'interrupted-dirty', error: 'Stopped' });
+    expect(
+      at(active({ taskId: 't-1' }), { tasks: TASKS, runs: [r] })
+    ).toMatchObject({ stage: 'works', failure: { error: 'Stopped' } });
+  });
+
+  test('an awaiting-approval run is still Agent works', () => {
+    const r = run({ state: 'awaiting-approval' });
+    expect(
+      at(active({ taskId: 't-1' }), { tasks: TASKS, runs: [r] }).stage
+    ).toBe('works');
+  });
+
+  test('verify runs on the task never move the guide', () => {
+    const r = run({ kind: 'verify' });
+    expect(
+      at(active({ taskId: 't-1' }), { tasks: TASKS, runs: [r] }).stage
+    ).toBe('check');
   });
 });
 
