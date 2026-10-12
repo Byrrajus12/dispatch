@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { overseerHoldFor } from '../../src/orchestrator/overseerHold.js';
+import type { OverseerHold } from '../../src/orchestrator/overseerHold.js';
 
 const ROOT = '/work/shop';
 const bash = (command: string) => overseerHoldFor('Bash', { command }, ROOT);
@@ -434,5 +435,29 @@ describe('more ways to reach the daemon', () => {
     'curl https://localhost.example.com/',
   ])('%p is not the daemon', (command) => {
     expect(bash(command)).toBeNull();
+  });
+});
+
+describe('where a Codex command runs', () => {
+  const run = (command: string, cwd: string) =>
+    overseerHoldFor('codex.commandExecution', { command, cwd }, ROOT);
+
+  test.each<[string, string, OverseerHold]>([
+    ['touch x', `${ROOT}/.dispatch`, 'dispatch-files'],
+    [
+      'cp /work/shop/src/c.json config.json',
+      `${ROOT}/.dispatch`,
+      'dispatch-files',
+    ],
+    ['cp evil x.json', `${ROOT}/.dispatch/daemons`, 'daemon-api'],
+    ['touch x', '.DISPATCH', 'dispatch-files'],
+    ['touch x', '/home/u/.dispatch', 'dispatch-files'],
+  ])('%p in %p is held as %p', (command, cwd, hold) => {
+    expect(run(command, cwd)).toBe(hold);
+  });
+
+  test('a command in an ordinary directory needs no hold', () => {
+    expect(run('ls', `${ROOT}/src`)).toBeNull();
+    expect(run('touch x', '/tmp')).toBeNull();
   });
 });

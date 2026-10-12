@@ -260,22 +260,61 @@ const HELD_TARGET_HINTS = [
 
 // Whether a word names a path outside the checkout: under home (`~`), an
 // absolute path not under rootDir (`/` included), or a relative one whose `..` climbs out.
-function pathOutside(word: string, rootDir: string): boolean {
+// Relative words resolve against `cwd`, where the command runs.
+function pathOutside(word: string, rootDir: string, cwd: string): boolean {
   if (word.startsWith('~')) return true;
   if (!word.startsWith('/') && !word.split('/').includes('..')) return false;
-  return outsideCheckout(word, rootDir);
+  return outsideCheckout(resolve(cwd, word), rootDir);
 }
 
-// Whether any argument (or an option's `=value`) names a path outside the checkout.
-function namesPathOutside(command: string, rootDir: string): boolean {
+// The paths one argument may name: whole, after an option's `=` or `@`
+// (`-d@/x`), glued to a short option (`-f/etc/x`), or as a `file://` URL.
+function pathCandidates(word: string): string[] {
+  const parts = [
+    word,
+    ...word.split('=').slice(1),
+    ...word.split('@').slice(1),
+  ];
+  return parts.flatMap((part) => [
+    part,
+    part.replace(/^-[A-Za-z]+/, ''),
+    part.replace(/^file:\/\//i, ''),
+  ]);
+}
+
+// Whether any argument names a path outside the checkout.
+function namesPathOutside(
+  command: string,
+  rootDir: string,
+  cwd: string
+): boolean {
   const words = shellWords(command) ?? commandTokens(command);
   return words
     .slice(1)
     .some((word) =>
-      [word, ...word.split('=').slice(1)].some((part) =>
-        pathOutside(part, rootDir)
-      )
+      pathCandidates(word).some((part) => pathOutside(part, rootDir, cwd))
     );
+}
+
+/** Where a command ask runs, resolved against the checkout; the checkout when it names none. */
+export function commandCwd(input: unknown, rootDir: string): string {
+  const cwd =
+    typeof input === 'object' && input !== null
+      ? (input as { cwd?: unknown }).cwd
+      : undefined;
+  return typeof cwd === 'string' && cwd !== ''
+    ? resolve(rootDir, cwd)
+    : resolve(rootDir);
+}
+
+// The hold a working directory needs: inside a `.dispatch` directory, its daemon files included.
+function cwdHold(cwd: string): OverseerHold | null {
+  const segments = normalize(cwd)
+    .split(sep)
+    .map((segment) => segment.toLowerCase());
+  const at = segments.indexOf('.dispatch');
+  if (at === -1) return null;
+  return segments[at + 1] === 'daemons' ? 'daemon-api' : 'dispatch-files';
 }
 
 /**
@@ -284,8 +323,17 @@ function namesPathOutside(command: string, rootDir: string): boolean {
  * never answers such a command itself and grants it only by its text, so a
  * gap in a hold costs an ask, not a bypass.
  */
-export function hintsAtHeldTarget(command: string, rootDir?: string): boolean {
-  if (rootDir !== undefined && namesPathOutside(command, rootDir)) return true;
+export function hintsAtHeldTarget(
+  command: string,
+  rootDir?: string,
+  cwd?: string
+): boolean {
+  if (rootDir !== undefined) {
+    const where = resolve(rootDir, cwd ?? '.');
+    // Running outside the checkout, or inside `.dispatch`, is itself a hint.
+    if (outsideCheckout(where, rootDir) || cwdHold(where) !== null) return true;
+    if (namesPathOutside(command, rootDir, where)) return true;
+  }
   const strip = (text: string): string =>
     rootDir !== undefined && rootDir.length > 1
       ? text.split(rootDir).join('')
@@ -434,5 +482,8 @@ export function overseerHoldFor(
   }
   const command = commandOf(input);
   if (command === null) return null;
-  return commandHold(command);
+  // A command run inside `.dispatch` may write there with no path naming it.
+  const held = commandHold(command);
+  if (held === 'dispatch-cli' || held === 'daemon-api') return held;
+  return cwdHold(commandCwd(input, rootDir)) ?? held;
 }

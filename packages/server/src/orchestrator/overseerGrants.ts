@@ -1,4 +1,6 @@
-import { hintsAtHeldTarget } from './overseerHold.js';
+import { resolve } from 'node:path';
+
+import { commandCwd, hintsAtHeldTarget } from './overseerHold.js';
 import { isSimpleCommand, programName, shellWords } from './shellCommand.js';
 
 /** How long "Allow for this conversation" lasts at most. */
@@ -56,8 +58,9 @@ function foldBlanks(command: string): string {
  * plain arguments) grants its program, named as written when it is a path;
  * any other command line, or a simple one that hints at what a hold guards
  * (hintsAtHeldTarget, past `rootDir`), grants only that exact text, with runs
- * of blanks outside quotes folded. A Codex permissions ask grants exactly what
- * it requested; any other tool's grant is the tool.
+ * of blanks outside quotes folded. A command run anywhere but the checkout
+ * root carries its directory in the key. A Codex permissions ask grants exactly
+ * what it requested; any other tool's grant is the tool.
  */
 export function grantKey(
   toolName: string,
@@ -79,14 +82,26 @@ export function grantKey(
       ? (input as { command?: unknown }).command
       : undefined;
   if (typeof command !== 'string') return toolName;
+  const rawCwd =
+    typeof input === 'object' && input !== null
+      ? (input as { cwd?: unknown }).cwd
+      : undefined;
+  const cwd =
+    typeof rawCwd === 'string' && rawCwd !== ''
+      ? commandCwd(input, rootDir ?? '/')
+      : undefined;
   const first =
-    isSimpleCommand(command) && !hintsAtHeldTarget(command, rootDir)
+    isSimpleCommand(command) && !hintsAtHeldTarget(command, rootDir, cwd)
       ? shellWords(command)?.[0]
       : undefined;
-  if (first !== undefined) {
-    return `${toolName}:${first.includes('/') ? first : programName(first)}`;
-  }
-  return `${toolName}:${foldBlanks(command)}`;
+  const key =
+    first !== undefined
+      ? `${toolName}:${first.includes('/') ? first : programName(first)}`
+      : `${toolName}:${foldBlanks(command)}`;
+  // A grant made in one directory never covers a command run in another.
+  const elsewhere =
+    cwd !== undefined && (rootDir === undefined || cwd !== resolve(rootDir));
+  return elsewhere ? `${key} (in ${cwd})` : key;
 }
 
 interface Grant {

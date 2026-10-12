@@ -162,7 +162,8 @@ function selfDecision(
   // A command that hints at Dispatch or a loopback host asks even when no hold
   // fired, so a gap in a hold costs an ask, not a bypass.
   const command = view.input.command;
-  if (typeof command === 'string' && hintsAtHeldTarget(command, rootDir)) {
+  const cwd = typeof view.input.cwd === 'string' ? view.input.cwd : undefined;
+  if (typeof command === 'string' && hintsAtHeldTarget(command, rootDir, cwd)) {
     return undefined;
   }
   if (mode === 'bypassPermissions') return { allow: true };

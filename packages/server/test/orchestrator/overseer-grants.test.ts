@@ -9,7 +9,11 @@ import {
 describe('grantKey', () => {
   test('a Codex command is scoped to its program, like Bash', () => {
     expect(
-      grantKey('codex.commandExecution', { command: 'git status', cwd: '/w' })
+      grantKey(
+        'codex.commandExecution',
+        { command: 'git status', cwd: '/w' },
+        '/w'
+      )
     ).toBe('codex.commandExecution:git');
     expect(grantKey('codex.fileChange', { paths: ['/w/a.ts'] })).toBe(
       'codex.fileChange'
@@ -124,6 +128,24 @@ describe('grantKey', () => {
       expect(grantKey('Bash', { command }, root)).toBe(`Bash:${command}`);
     }
     expect(grantKey('Bash', { command: 'ls src' }, root)).toBe('Bash:ls');
+  });
+
+  test('a Codex command run outside the checkout root keys by its directory', () => {
+    const root = '/r';
+    const at = (command: string, cwd: string) =>
+      grantKey('codex.commandExecution', { command, cwd }, root);
+    expect(at('touch x', '/r')).toBe('codex.commandExecution:touch');
+    expect(at('touch x', '/r/src')).toBe(
+      'codex.commandExecution:touch (in /r/src)'
+    );
+    // A `touch` grant made at the root never answers one inside .dispatch.
+    expect(at('touch x', '/r/.dispatch')).not.toBe(at('touch y', '/r'));
+    expect(at('touch x', '/r/.dispatch')).toBe(
+      'codex.commandExecution:touch x (in /r/.dispatch)'
+    );
+    expect(at('cp id_rsa /r/leak', '/home/u/.ssh')).toBe(
+      'codex.commandExecution:cp id_rsa /r/leak (in /home/u/.ssh)'
+    );
   });
 
   test('newlines stay distinct from spaces in an exact-text key', () => {
