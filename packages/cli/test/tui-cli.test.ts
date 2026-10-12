@@ -18,6 +18,10 @@ function checkout(): { root: string; nested: string; entry: string } {
   writeFileSync(entry, '');
   const nested = join(root, 'packages', 'cli', 'dist');
   mkdirSync(nested, { recursive: true });
+  writeFileSync(
+    join(root, 'packages', 'cli', 'package.json'),
+    '{"name":"@dispatch/cli"}'
+  );
   return { root, nested, entry };
 }
 
@@ -28,9 +32,24 @@ describe('resolveTuiEntry', () => {
     ).toBe('/opt/tui/main.js');
   });
 
-  it('finds apps/tui/src/main.tsx by walking up from the CLI', () => {
+  it("finds apps/tui/src/main.tsx in the CLI's own checkout", () => {
     const { nested, entry } = checkout();
     expect(resolveTuiEntry({}, nested)).toBe(entry);
+  });
+
+  it('ignores an apps/tui in an ancestor that is not the checkout the CLI runs from', () => {
+    // e.g. a global install under a home directory that happens to hold apps/tui/src/main.tsx
+    const { root } = checkout();
+    const install = join(
+      root,
+      'lib',
+      'node_modules',
+      '@dispatch-foo',
+      'cli',
+      'dist'
+    );
+    mkdirSync(install, { recursive: true });
+    expect(() => resolveTuiEntry({}, install)).toThrow(CliError);
   });
 
   it('outside a checkout, says how to point at a TUI build', () => {

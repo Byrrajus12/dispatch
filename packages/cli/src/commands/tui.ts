@@ -1,7 +1,7 @@
 import type { Command } from 'commander';
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { type CliContext, CliError } from '../context.js';
@@ -10,6 +10,22 @@ import { ensureDaemon } from './daemon.js';
 import { requireInitialized } from './task.js';
 
 const ENTRY = join('apps', 'tui', 'src', 'main.tsx');
+
+// True when `root` is the Dispatch checkout the running CLI belongs to: the CLI sits inside its
+// packages/cli, which is @dispatch/cli. Anything else is a stranger's file, never run with our token.
+function isOwnCheckout(root: string, startDir: string): boolean {
+  const cliDir = join(root, 'packages', 'cli');
+  const rel = relative(cliDir, startDir);
+  if (rel.startsWith('..') || isAbsolute(rel)) return false;
+  try {
+    const pkg = JSON.parse(
+      readFileSync(join(cliDir, 'package.json'), 'utf8')
+    ) as { name?: unknown };
+    return pkg.name === '@dispatch/cli';
+  } catch {
+    return false;
+  }
+}
 
 /** Where the TUI lives: `DISPATCH_TUI_ENTRY`, else `apps/tui` in the checkout this CLI runs from. */
 export function resolveTuiEntry(
@@ -20,7 +36,7 @@ export function resolveTuiEntry(
   if (override !== undefined && override !== '') return override;
   for (let dir = startDir; ; dir = dirname(dir)) {
     const candidate = join(dir, ENTRY);
-    if (existsSync(candidate)) return candidate;
+    if (existsSync(candidate) && isOwnCheckout(dir, startDir)) return candidate;
     if (dirname(dir) === dir) break;
   }
   throw new CliError(
