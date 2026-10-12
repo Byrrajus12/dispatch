@@ -794,7 +794,7 @@ describe('OverseerManager built-in tool gate', () => {
         .get(started.id)
         .messages.find((m) => m.role === 'approval' && m.outcome === 'allowed')
     ).toMatchObject({
-      text: 'Allowed Bash:ls for this conversation (up to 4 hours): Bash: ls',
+      text: 'Allowed Bash program "ls" for this conversation (up to 4 hours): Bash: ls',
     });
     h.manager.decideApproval(started.id, 'req-3', { allow: false });
     await waitFor(() => h.manager.get(started.id).state === 'ready');
@@ -816,7 +816,7 @@ describe('OverseerManager built-in tool gate', () => {
       () => h.manager.get(started.id).pendingApprovals[0]?.requestId === 'req-2'
     );
     expect(h.manager.listGrants(started.id).map((g) => g.key)).toEqual([
-      'Bash:moonx',
+      'Bash program "moonx"',
     ]);
     h.manager.decideApproval(started.id, 'req-2', { allow: false });
     await waitFor(() => h.manager.get(started.id).state === 'ready');

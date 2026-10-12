@@ -53,6 +53,9 @@ function foldBlanks(command: string): string {
   return out;
 }
 
+// A tool name with no blanks, quotes or colons stands as its own key.
+const PLAIN_TOOL_NAME = /^[\w.-]+$/;
+
 /**
  * What a grant covers. A simple shell command (isSimpleCommand: one program,
  * plain arguments) grants its program, named as written when it is a path;
@@ -60,7 +63,8 @@ function foldBlanks(command: string): string {
  * (hintsAtHeldTarget, past `rootDir`), grants only that exact text, with runs
  * of blanks outside quotes folded. A command run anywhere but the checkout
  * root carries its directory in the key. A Codex permissions ask grants exactly
- * what it requested; any other tool's grant is the tool.
+ * what it requested; any other tool's grant is the tool. Each free-text part is
+ * JSON-quoted after a fixed kind word, so no two kinds of key can collide.
  */
 export function grantKey(
   toolName: string,
@@ -72,10 +76,10 @@ export function grantKey(
       typeof input === 'object' && input !== null
         ? (input as { permissions?: unknown }).permissions
         : undefined;
-    return `${toolName}:${stableJson(permissions ?? null)}`;
+    return `${toolName} ${stableJson(permissions ?? null)}`;
   }
   if (toolName !== 'Bash' && toolName !== 'codex.commandExecution') {
-    return toolName;
+    return PLAIN_TOOL_NAME.test(toolName) ? toolName : JSON.stringify(toolName);
   }
   const command =
     typeof input === 'object' && input !== null
@@ -96,12 +100,12 @@ export function grantKey(
       : undefined;
   const key =
     first !== undefined
-      ? `${toolName}:${first.includes('/') ? first : programName(first)}`
-      : `${toolName}:${foldBlanks(command)}`;
+      ? `${toolName} program ${JSON.stringify(first.includes('/') ? first : programName(first))}`
+      : `${toolName} command ${JSON.stringify(foldBlanks(command))}`;
   // A grant made in one directory never covers a command run in another.
   const elsewhere =
     cwd !== undefined && (rootDir === undefined || cwd !== resolve(rootDir));
-  return elsewhere ? `${key} (in ${cwd})` : key;
+  return elsewhere ? `${key} in ${JSON.stringify(cwd)}` : key;
 }
 
 interface Grant {

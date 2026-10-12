@@ -1785,7 +1785,7 @@ export interface OverseerAction {
 // body of `POST /api/overseer` and `GET /api/overseer/:id`.
 /** One live "Allow for this conversation" grant. */
 export interface OverseerGrant {
-  /** `Bash:<program>` for Bash, else the tool's name. */
+  /** `Bash program "<program>"` or `Bash command "<text>"` for a command, else the tool's name. */
   key: string;
   grantedAt: string;
   expiresAt: string;
