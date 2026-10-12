@@ -39,6 +39,7 @@ import { registerScopeCommands } from './commands/scope.js';
 import { registerShareCommands } from './commands/share.js';
 import { registerTaskCommands } from './commands/task.js';
 import { registerTeamCommands } from './commands/team.js';
+import { registerTuiCommand } from './commands/tui.js';
 import { registerWorktreeCommands } from './commands/worktree.js';
 import { type CliContext, CliError } from './context.js';
 import { registerMcpServer } from './mcpConfig.js';
@@ -327,6 +328,7 @@ export function makeProgram(ctx: CliContext): Command {
   registerTaskCommands(program, ctx);
   registerDoctorCommand(program, ctx);
   registerDaemonCommands(program, ctx);
+  registerTuiCommand(program, ctx);
   registerOrchestrateCommands(program, ctx);
   registerPlanCommands(program, ctx);
   registerMergeTaskCommand(program, ctx);
