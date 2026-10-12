@@ -11,6 +11,7 @@ import {
 import type { MainView } from '../../lib/twoViews';
 import { ErrorBoundary } from './ErrorBoundary';
 import { TwoViewTopBar, type TwoViewTopBarProps } from './TwoViewTopBar';
+import { cn } from '@/lib/utils';
 
 export interface TwoViewShellProps {
   topBar: TwoViewTopBarProps;
@@ -91,7 +92,11 @@ export function TwoViewShell({
                 {guide !== undefined && guide !== null && peek === null && (
                   <div
                     data-testid="first-task-guide-slot"
-                    className="absolute right-3 bottom-16 z-30 max-w-[calc(100%-24px)]"
+                    className={cn(
+                      'absolute right-3 z-30 max-w-[calc(100%-24px)]',
+                      // Tasks pages pin action footers (draft Send, run review) above the dock.
+                      view === 'tasks' ? 'bottom-28' : 'bottom-16'
+                    )}
                   >
                     {guide}
                   </div>
