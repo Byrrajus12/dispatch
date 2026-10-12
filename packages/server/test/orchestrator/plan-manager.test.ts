@@ -1078,3 +1078,29 @@ describe('PlanManager planner registry', () => {
     expect(manager.get(started.id).proposal).toEqual(SAMPLE_PROPOSAL);
   });
 });
+
+describe('PlanManager shutdown', () => {
+  it('ends each planner turn in flight and leaves the plan for the next boot', async () => {
+    let stopped = 0;
+    let reject: (error: Error) => void = () => undefined;
+    const held = new Promise<never>((_resolve, fail) => {
+      reject = fail;
+    });
+    const manager = new PlanManager({ store, cache, events, rootDir: root });
+    manager.registerPlanner('held', {
+      start: () => held,
+      sendMessage: () => held,
+      shutdown: () => {
+        stopped += 1;
+        reject(new Error('the Codex turn was stopped'));
+      },
+    });
+    const record = manager.startPlan('plan it', 'held');
+    manager.shutdown();
+    await Bun.sleep(10);
+    expect(stopped).toBe(1);
+    expect(manager.get(record.id).state).toBe('running');
+    const reloaded = new PlanManager({ store, cache, events, rootDir: root });
+    expect(reloaded.get(record.id).state).toBe('failed');
+  });
+});

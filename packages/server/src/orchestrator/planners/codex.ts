@@ -39,6 +39,10 @@ export const PLANNER_FEATURES = {
 // One planning attempt; a schema retry doubles it, so it stays under the runner's default.
 const PLANNER_TURN_TIMEOUT_MS = 5 * 60_000;
 
+// The retry's whole message: the thread already holds the request, so it is not resent.
+const SCHEMA_RETRY_PROMPT =
+  'Reply with only the JSON object matching the schema.';
+
 interface CodexPlannerOptions {
   spawnProcess?: SpawnCodexAppServer;
   userMcpServers?: () => string[];
@@ -48,10 +52,17 @@ interface CodexPlannerOptions {
 // ClaudePlanner's conversation (same prompts, same turn shape) on Codex: one
 // App Server turn per message in the main checkout; `sessionId` is the thread.
 export class CodexPlanner implements Planner {
+  // Each attempt in flight, so shutdown() can end its App Server.
+  private readonly live = new Set<AbortController>();
+
   constructor(
     private readonly rootDir: string,
     private readonly options: CodexPlannerOptions = {}
   ) {}
+
+  shutdown(): void {
+    for (const abort of this.live) abort.abort();
+  }
 
   start(
     prompt: string,
@@ -86,7 +97,8 @@ export class CodexPlanner implements Planner {
     return codexEffort(loadConfig(this.rootDir).effort?.plan);
   }
 
-  // One retry when the final message isn't the schema's JSON, as ClaudePlanner retries.
+  // One retry when the final message isn't the schema's JSON, as ClaudePlanner
+  // retries: a short correction in the same thread, so nothing is sent or billed twice.
   private async runTurn(
     prompt: string,
     resume: string | undefined,
@@ -94,9 +106,14 @@ export class CodexPlanner implements Planner {
     effort: string | undefined
   ): Promise<PlannerTurn> {
     const first = await this.attemptTurn(prompt, resume, model, effort);
-    if (first !== null) return first;
-    const second = await this.attemptTurn(prompt, resume, model, effort);
-    if (second !== null) return second;
+    if (first.turn !== null) return first.turn;
+    const second = await this.attemptTurn(
+      SCHEMA_RETRY_PROMPT,
+      first.threadId,
+      model,
+      effort
+    );
+    if (second.turn !== null) return second.turn;
     throw new Error(EMPTY_TURN_MESSAGE);
   }
 
@@ -105,12 +122,14 @@ export class CodexPlanner implements Planner {
     resume: string | undefined,
     model: string | undefined,
     effort: string | undefined
-  ): Promise<PlannerTurn | null> {
+  ): Promise<{ turn: PlannerTurn | null; threadId: string }> {
     const userServers = (
       this.options.userMcpServers ?? codexUserMcpServerNames
     )();
     // Declared on thread/start; Codex keeps a thread's tools across resumes.
     const readTools = plannerReadTools(this.rootDir);
+    const abort = new AbortController();
+    this.live.add(abort);
     const result = await runCodexTurn({
       cwd: this.rootDir,
       prompt,
@@ -124,6 +143,7 @@ export class CodexPlanner implements Planner {
       },
       dynamicTools: readTools.tools,
       experimentalApi: true,
+      signal: abort.signal,
       timeoutMs: PLANNER_TURN_TIMEOUT_MS,
       outputSchema: CODEX_TURN_JSON_SCHEMA,
       spawnProcess: this.options.spawnProcess,
@@ -144,14 +164,18 @@ export class CodexPlanner implements Planner {
         );
         return true;
       },
-    });
+    }).finally(() => this.live.delete(abort));
     const output = parseCodexTurnOutput(result.reply);
-    if (output === null) return null;
+    const threadId = result.threadId;
+    if (output === null) return { turn: null, threadId };
     return {
-      reply: output.message,
-      proposal: output.proposal,
-      questions: output.questions,
-      sessionId: result.threadId,
+      turn: {
+        reply: output.message,
+        proposal: output.proposal,
+        questions: output.questions,
+        sessionId: threadId,
+      },
+      threadId,
     };
   }
 }

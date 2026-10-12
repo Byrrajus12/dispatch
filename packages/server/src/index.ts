@@ -2822,6 +2822,9 @@ async function bootServer(
       // starting an agent (see Orchestrator.shutdown).
       orchestrator.shutdown();
       epicEngine.shutdown();
+      // So no Overseer or planner agent process (a Codex App Server) outlives the daemon.
+      overseerManager.shutdown();
+      planManager.shutdown();
       watcher?.close();
       sourceWatcher.close();
       prManager.stopPolling();

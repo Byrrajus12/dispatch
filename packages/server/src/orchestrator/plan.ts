@@ -268,6 +268,8 @@ export class PlanManager {
   private readonly planners = new Map<string, Planner>();
   private readonly drafts = new Map<string, DraftRecord>();
   private readonly recordStore: PlanRecordStore;
+  // Set by shutdown(): a plan turn still settling writes nothing more.
+  private shuttingDown = false;
 
   constructor(private readonly ctx: PlanManagerContext) {
     this.recordStore = new PlanRecordStore(ctx.rootDir);
@@ -307,6 +309,15 @@ export class PlanManager {
 
   registerPlanner(name: string, planner: Planner): void {
     this.planners.set(name, planner);
+  }
+
+  /**
+   * Daemon stop: ends every planner turn in flight. A plan left `running`
+   * boots as failed, as it would had the daemon died mid-turn.
+   */
+  shutdown(): void {
+    this.shuttingDown = true;
+    for (const planner of this.planners.values()) planner.shutdown?.();
   }
 
   // api.ts derives its "is this planner name even valid" 400 message from
@@ -606,6 +617,7 @@ export class PlanManager {
         ],
       });
     } catch (err) {
+      if (this.shuttingDown) return;
       this.updateRecord(planId, {
         state: 'failed',
         error: (err as Error).message,

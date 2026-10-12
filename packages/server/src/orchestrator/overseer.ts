@@ -342,6 +342,8 @@ export class OverseerManager {
 
   // The running turn's abort handle, per conversation; Stop fires it.
   private readonly turns = new Map<string, AbortController>();
+  // Set by shutdown(): turns still settling write nothing more.
+  private shuttingDown = false;
   // Who typed each conversation's queued messages, for posting them when they go.
   private readonly queuedBy = new Map<string, Sender | null>();
   // Ids of queued entries that already went out in a turn, so a late edit or
@@ -686,6 +688,15 @@ export class OverseerManager {
   }
 
   /**
+   * Daemon stop: aborts every running turn so no agent process outlives the
+   * daemon. Records stay `running`, so the next boot marks them restarted.
+   */
+  shutdown(): void {
+    this.shuttingDown = true;
+    for (const abort of this.turns.values()) abort.abort();
+  }
+
+  /**
    * Stops the running turn. Its parked calls are denied, the decisions it
    * carried go back on the record, and anything queued waits for the next send.
    */
@@ -720,6 +731,7 @@ export class OverseerManager {
         rejectOnAbort(abort.signal),
       ]);
       if (abort.signal.aborted) throw new Error('stopped');
+      if (this.shuttingDown) return;
       const current = this.conversations.get(conversationId);
       if (current === undefined) return;
       this.updateRecord(conversationId, {
@@ -749,6 +761,7 @@ export class OverseerManager {
         from.line
       );
     } catch (err) {
+      if (this.shuttingDown) return;
       const current = this.conversations.get(conversationId);
       // Oldest first: anything decided *during* the turn comes after.
       const undeliveredDecisions = [
@@ -780,9 +793,11 @@ export class OverseerManager {
       this.turns.delete(conversationId);
       // A turn that is over has no tool call left to run: anything still
       // parked would otherwise sit on the record forever, undecidable in any
-      // way that could matter.
-      this.sweepApprovals(conversationId);
-      if (!abort.signal.aborted) this.sendQueued(conversationId);
+      // way that could matter. Past shutdown the next boot clears them instead.
+      if (!this.shuttingDown) {
+        this.sweepApprovals(conversationId);
+        if (!abort.signal.aborted) this.sendQueued(conversationId);
+      }
     }
   }
 

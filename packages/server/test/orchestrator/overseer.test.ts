@@ -1633,6 +1633,20 @@ describe('one durable conversation', () => {
     });
   });
 
+  it('daemon shutdown aborts the running turn and leaves it for the next boot', async () => {
+    const h = heldManager();
+    const started = h.manager.start('do a long thing', 'held');
+    h.manager.shutdown();
+    await tick();
+    // The backend saw the abort (its child dies with the daemon), but nothing
+    // is written past shutdown: the next boot marks the turn restarted.
+    expect(h.manager.get(started.id).state).toBe('running');
+    const again = heldManager(h.store);
+    expect(again.manager.get(started.id).messages.at(-1)).toMatchObject({
+      notice: 'restarted',
+    });
+  });
+
   it('Stop ends the turn as stopped, not failed', async () => {
     const h = heldManager();
     const started = h.manager.start('do a long thing', 'held');

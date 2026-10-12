@@ -204,12 +204,32 @@ describe('CodexPlanner', () => {
     }
   });
 
+  it('shutdown kills an in-flight Codex turn instead of leaving it running', async () => {
+    const codex = scriptedCodex();
+    const planner = plannerOver([codex]);
+    const pending = planner.start('plan it');
+    await waitFor(() => codex.paramsOf('turn/start') !== undefined);
+    planner.shutdown();
+    await expect(pending).rejects.toThrow('stopped');
+    expect(codex.killed).toBe(true);
+  });
+
   it('retries once when the final message is not the schema JSON, then gives up plainly', async () => {
-    const recovered = await plannerOver([
-      answering('Sure! Here is the plan in prose.'),
-      answering({ message: 'ok', proposal: PROPOSAL, questions: [] }),
-    ]).start('plan it');
+    const prose = answering('Sure! Here is the plan in prose.');
+    const retry = answering({
+      message: 'ok',
+      proposal: PROPOSAL,
+      questions: [],
+    });
+    const recovered = await plannerOver([prose, retry]).start('plan it');
     expect(recovered.reply).toBe('ok');
+    // The retry is a short correction in the same thread, not the prompt again.
+    expect(retry.paramsOf('thread/resume')?.threadId).toBe('thread-1');
+    expect(retry.paramsOf('thread/start')).toBeUndefined();
+    expect(promptOf(retry)).toBe(
+      'Reply with only the JSON object matching the schema.'
+    );
+    expect(retry.paramsOf('turn/start')?.outputSchema).toBeDefined();
 
     await expect(
       plannerOver([answering(''), answering('{"message": 3}')]).start('plan it')
