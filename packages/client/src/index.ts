@@ -297,3 +297,14 @@ export {
   storeRoleModelOverride,
 } from './models';
 export type { ModelOption, PickableRole } from './models';
+export {
+  invalidateOverseerEvent,
+  overseerKey,
+  overseerKeyPrefix,
+  useOverseerSession,
+} from './useOverseerSession';
+export type {
+  OverseerApprovalDecision,
+  OverseerSession,
+  OverseerSessionOptions,
+} from './useOverseerSession';

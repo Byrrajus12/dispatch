@@ -1,20 +1,26 @@
+import './dom-env';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import { afterEach, expect, test } from 'bun:test';
+
 import {
   type ApiClient,
   ApiError,
   type Message,
   type OverseerRecord,
   type ReplyInput,
-} from '@dispatch/client';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, renderHook, waitFor } from '@testing-library/react';
-import { expect, test } from 'bun:test';
+} from '../src/api';
+
+afterEach(cleanup);
 import { type ReactNode, StrictMode } from 'react';
 
+import { memoryStorage } from '../src/storage';
 import {
+  invalidateOverseerEvent,
   overseerKey,
   overseerKeyPrefix,
   useOverseerSession,
-} from './useOverseerSession';
+} from '../src/useOverseerSession';
 
 const PORT = 4321;
 
@@ -847,4 +853,96 @@ test('a queued edit the turn already sent resolves false with the reason on send
   });
   expect(ok).toBe(true);
   expect(result.current.sendError).toBeNull();
+});
+
+// Records what `start` asked the daemon for, so the backend choice is observable.
+function recordingClient(calls: { backend?: string }[]): ApiClient {
+  return {
+    baseUrl: `http://127.0.0.1:${PORT}`,
+    startOverseer: (_prompt: string, opts: { backend?: string }) => {
+      calls.push(opts);
+      return Promise.resolve(overseerRecord());
+    },
+    getOverseer: () => Promise.resolve(overseerRecord()),
+  } as unknown as ApiClient;
+}
+
+test('a host that opts into the fake backend opens conversations on it', async () => {
+  const calls: { backend?: string }[] = [];
+  const { result } = renderHook(
+    () =>
+      useOverseerSession(
+        recordingClient(calls),
+        PORT,
+        '/repo',
+        undefined,
+        undefined,
+        false,
+        {
+          storage: memoryStorage(),
+          fakeBackend: () => true,
+        }
+      ),
+    { wrapper }
+  );
+  await act(async () => {
+    await result.current.submit('hi');
+  });
+  expect(calls[0]?.backend).toBe('fake');
+});
+
+test('without the opt-in, no backend is named and the daemon picks', async () => {
+  const calls: { backend?: string }[] = [];
+  const { result } = renderHook(
+    () =>
+      useOverseerSession(
+        recordingClient(calls),
+        PORT,
+        '/repo',
+        undefined,
+        undefined,
+        false,
+        {
+          storage: memoryStorage(),
+        }
+      ),
+    { wrapper }
+  );
+  await act(async () => {
+    await result.current.submit('hi');
+  });
+  expect(calls[0]).toBeDefined();
+  expect(calls[0]?.backend).toBeUndefined();
+});
+
+test("the composer's model pick persists through the host's storage", () => {
+  const storage = memoryStorage();
+  const { result } = renderHook(
+    () =>
+      useOverseerSession(
+        recordingClient([]),
+        PORT,
+        '/repo',
+        undefined,
+        undefined,
+        false,
+        {
+          storage,
+        }
+      ),
+    { wrapper }
+  );
+  act(() => {
+    result.current.setModel('claude-fable-5-1');
+  });
+  expect(storage.get('dispatch:model:overseer')).toBe('claude-fable-5-1');
+});
+
+test('an overseer.changed event invalidates that conversation', () => {
+  const queryClient = new QueryClient();
+  queryClient.setQueryData(overseerKey(PORT, 'w-1'), overseerRecord());
+  invalidateOverseerEvent(queryClient, PORT, 'w-1');
+  expect(
+    queryClient.getQueryState(overseerKey(PORT, 'w-1'))?.isInvalidated
+  ).toBe(true);
 });
