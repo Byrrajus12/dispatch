@@ -123,12 +123,11 @@ function setup(r = report()) {
   };
   const onSetDefault = mock((_id: string) => Promise.resolve());
   const onContinue = mock(() => {});
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   render(
-    <QueryClientProvider
-      client={
-        new QueryClient({ defaultOptions: { queries: { retry: false } } })
-      }
-    >
+    <QueryClientProvider client={queryClient}>
       <AgentStep
         client={client as unknown as ApiClient}
         port={4771}
@@ -137,7 +136,7 @@ function setup(r = report()) {
       />
     </QueryClientProvider>
   );
-  return { client, onSetDefault, onContinue };
+  return { client, onSetDefault, onContinue, queryClient };
 }
 
 // Clicks inside an awaited act so the async state updates a click triggers are flushed.
@@ -236,6 +235,30 @@ test('continue is enabled for a ready agent and makes it the default', async () 
   await click(await screen.findByText('Continue'));
   await waitFor(() => expect(onSetDefault).toHaveBeenCalledWith('codex'));
   await waitFor(() => expect(onContinue).toHaveBeenCalled());
+});
+
+test('saving refreshes the executor list, so Dispatch buttons follow the new default', async () => {
+  const base = report();
+  const ready = report({
+    steps: [{ id: 'agent', status: 'ok', message: 'Codex is ready.' }],
+    defaultProvider: 'codex',
+    providers: [
+      {
+        ...base.providers[1],
+        installed: true,
+        works: true,
+        ready: true,
+        auth: 'signed-in',
+      },
+    ],
+  });
+  const { queryClient, onContinue } = setup(ready);
+  queryClient.setQueryData(['dispatch-executors', 4771], { default: 'claude' });
+  await click(await screen.findByText('Continue'));
+  await waitFor(() => expect(onContinue).toHaveBeenCalled());
+  expect(
+    queryClient.getQueryState(['dispatch-executors', 4771])?.isInvalidated
+  ).toBe(true);
 });
 
 test('re-reads installed agents before saving the default', async () => {

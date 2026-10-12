@@ -1069,7 +1069,7 @@ export function useDispatchProject(
     },
     enabled: client !== null,
   });
-  // Registered at daemon boot, so it only needs fetching once per connection.
+  // Changes only through Settings › Setup (a new default, a re-check), which invalidates it.
   const { data: executors } = useQuery({
     queryKey: ['dispatch-executors', port] as const,
     queryFn: () => {

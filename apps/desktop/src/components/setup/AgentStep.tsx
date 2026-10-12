@@ -96,11 +96,20 @@ export function AgentStep({
         selectedProvider.works &&
         (selectedProvider.ready || selectedProvider.auth === 'unknown');
 
+  // The report and the daemon's executor list (Dispatch buttons' default agent)
+  // both change after a refresh or a new default.
+  function invalidateAgents() {
+    return Promise.all([
+      queryClient.invalidateQueries({ queryKey: reportKey }),
+      queryClient.invalidateQueries({ queryKey: ['dispatch-executors'] }),
+    ]);
+  }
+
   // Re-reads the machine after an install or sign-in so the row reflects it.
   async function recheck() {
     try {
       await client.refreshSetup();
-      await queryClient.invalidateQueries({ queryKey: reportKey });
+      await invalidateAgents();
     } catch (err) {
       setProblem(problemOf("Couldn't re-check your agents.", err));
     }
@@ -155,6 +164,7 @@ export function AgentStep({
     try {
       await client.refreshSetup();
       if (selected !== null) await onSetDefault(selected);
+      await invalidateAgents();
       onContinue();
     } catch (err) {
       setProblem(problemOf("Couldn't save your choice. Try again.", err));
