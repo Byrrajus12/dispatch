@@ -55,6 +55,9 @@ const inputGroupAddonVariants = cva(
   }
 );
 
+// The addon is decoration beside the input, not a control: keyboard users Tab straight to
+// the input. A pointer press on the addon (outside its own buttons) just widens the input's
+// hit area, focusing it on mousedown so focus never detours through the body.
 function InputGroupAddon({
   className,
   align = 'inline-start',
@@ -66,17 +69,22 @@ function InputGroupAddon({
       data-slot="input-group-addon"
       data-align={align}
       className={cn(inputGroupAddonVariants({ align }), className)}
-      onClick={(e) => {
-        if ((e.target as HTMLElement).closest('button')) {
+      onMouseDown={(e) => {
+        if (e.button !== 0 || (e.target as HTMLElement).closest('button')) {
           return;
         }
-        e.currentTarget.parentElement?.querySelector('input')?.focus();
+        const input = e.currentTarget.parentElement?.querySelector('input');
+        if (input == null) return;
+        e.preventDefault();
+        input.focus();
       }}
       {...props}
     />
   );
 }
 
+// The group draws the focus ring, so the input drops the app's global `:focus-visible`
+// outline (unlayered, hence the `!`) rather than ringing twice.
 function InputGroupInput({
   className,
   ...props
@@ -85,7 +93,7 @@ function InputGroupInput({
     <Input
       data-slot="input-group-control"
       className={cn(
-        'flex-1 rounded-none border-0 bg-transparent shadow-none focus-visible:ring-0 dark:bg-transparent',
+        'flex-1 rounded-none border-0 bg-transparent shadow-none focus-visible:ring-0 focus-visible:outline-none! dark:bg-transparent',
         className
       )}
       {...props}

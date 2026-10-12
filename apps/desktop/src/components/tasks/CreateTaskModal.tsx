@@ -4,8 +4,8 @@ import type {
   Priority,
   TaskKind,
   TaskListItem,
-} from '@dispatch/core/browser';
-import { isContainerKind, isValidParentKind } from '@dispatch/core/browser';
+} from '@dispatch-foo/core/browser';
+import { isContainerKind, isValidParentKind } from '@dispatch-foo/core/browser';
 import {
   Box,
   Check,
@@ -519,7 +519,6 @@ export function CreateTaskModal({
             placeholder="Task title"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            autoFocus
             className="text-[18px] leading-7 font-medium"
           />
           <Textarea

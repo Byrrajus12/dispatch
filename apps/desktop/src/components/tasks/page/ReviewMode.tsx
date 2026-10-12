@@ -1,3 +1,7 @@
+import {
+  isCanceledStatus,
+  isCompletedStatus,
+} from '@dispatch-foo/core/browser';
 import type { Finding, RunMeta, Snippet } from '@dispatch/client';
 import { canPostReviewToPr } from '@dispatch/client';
 import {
@@ -26,6 +30,7 @@ import {
   useRunReviewThreads,
 } from '../../../hooks/useRunData';
 import { fixLoopNeedsRuling } from '../../../lib/fixLoopStatus';
+import { landButtonLabel, mergeLadderState } from '../../../lib/mergeLadder';
 import {
   readCriteriaChecks,
   writeCriteriaChecks,
@@ -35,9 +40,11 @@ import {
   liveReviewAgentFor,
   postFailWorkLabel,
 } from '../../../lib/runState';
+import { taskOutcome } from '../../../lib/taskOutcome';
 import { reviewedRun } from '../../../lib/taskPageMode';
 import { diffStat } from '../../../lib/taskTimeline';
 import { DiffEmptyState } from '../../runs/DiffEmptyState';
+import { LandedAs } from '../../runs/LandedAs';
 import { PierreReviewDiff } from '../../runs/PierreReviewDiff';
 import { QueueMergeControl } from '../../runs/QueueMergeControl';
 import { ReviewCasePanel } from '../../runs/ReviewCasePanel';
@@ -49,6 +56,7 @@ import { FindingsPanel } from '../detail/FindingsPanel';
 import { FixLoopSection } from '../detail/FixLoopSection';
 import { VerificationSection } from '../detail/VerificationSection';
 import { TabSkeleton } from '../TabSkeleton';
+import { OutcomeCard } from './OutcomeCard';
 import type { TaskPageModel } from './pageModel';
 import { RunStrip } from './RunStrip';
 import { cn } from '@/lib/utils';
@@ -162,12 +170,14 @@ function Verdict({
   page,
   run,
   onRequestChanges,
+  onReviewPr,
   busy,
   act,
 }: {
   page: TaskPageModel;
   run: RunMeta;
   onRequestChanges: () => void;
+  onReviewPr: () => void;
   busy: boolean;
   act: (action: () => Promise<void>) => void;
 }) {
@@ -190,19 +200,30 @@ function Verdict({
           busy={busy}
           onQueueMerge={() => act(() => project.handleEnqueueMerge(run.id))}
         />
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={() => page.host.openPr(run.id)}
-        >
+        <Button size="sm" variant="secondary" onClick={onReviewPr}>
           <GitPullRequest />
           Review PR
         </Button>
       </>
     );
   }
-  if (reviewed) return null;
+  // A reviewed run says where its work went. A merge that never reached origin
+  // carries its retry here, so the page that offered Land also owns the fix.
+  if (reviewed) {
+    return mergeLadderState(run) === 'unmerged' ? null : (
+      <span className="text-[12px]">
+        <LandedAs
+          run={run}
+          originWebUrl={project.health?.originWebUrl}
+          onPublish={project.handlePublishRun}
+        />
+      </span>
+    );
+  }
   const canOpenPr = project.health?.pr === true;
+  // A failed run's work is rarely what should land, so Re-run leads and
+  // landing waits in the menu as "Land anyway".
+  const failed = run.state === 'failed' || run.state === 'interrupted-dirty';
   return (
     <>
       <Button
@@ -215,7 +236,7 @@ function Verdict({
         Request changes
       </Button>
       <Button
-        variant="ghost"
+        variant={failed ? 'default' : 'ghost'}
         size="sm"
         disabled={busy || live}
         title="Start a fresh run of this task"
@@ -227,18 +248,20 @@ function Verdict({
       <div className="flex items-center">
         <Button
           size="sm"
+          variant={failed ? 'outline' : 'default'}
           disabled={busy}
           className="rounded-r-none"
           onClick={() => act(() => project.handleReview(run.id, 'merge'))}
         >
           <GitMerge />
-          Land
+          {failed ? 'Land anyway' : landButtonLabel(run)}
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
               <Button
                 size="sm"
+                variant={failed ? 'outline' : 'default'}
                 aria-label="More ways to land"
                 disabled={busy}
                 className="shadow-hairline-left rounded-l-none px-1.5"
@@ -294,6 +317,8 @@ export function ReviewMode({ page }: { page: TaskPageModel }) {
   const runId = run?.id ?? null;
   const live = run !== undefined && !isTerminalRunState(run.state);
   const detail = useRunDetail(project.client, project.port, runId);
+  // The run's PR, reviewed in place of the diff when the host can show it.
+  const [prOpen, setPrOpen] = useState(false);
   const {
     diff,
     loading: diffLoading,
@@ -380,6 +405,20 @@ export function ReviewMode({ page }: { page: TaskPageModel }) {
     }
   }
   const orphanWork = postFailWorkLabel(meta);
+  // How the task ended, when it has: settled work (landed, merged, dropped)
+  // drops the tools for reviewing work still in flight.
+  const ending = taskOutcome({
+    completed: isCompletedStatus(item.meta.status, page.statusModel),
+    canceled: isCanceledStatus(item.meta.status, page.statusModel),
+    runs: page.runs,
+  });
+  const settled =
+    meta.reviewedAt !== undefined ||
+    ending?.kind === 'landed' ||
+    ending?.kind === 'merged-local' ||
+    ending?.kind === 'dropped';
+  const showCard =
+    ending !== null && ending.kind !== 'ready' && ending.kind !== 'pr-open';
   const reviewAgentLive = liveReviewAgentFor(project.runs, meta.branch);
 
   const side = (
@@ -418,14 +457,16 @@ export function ReviewMode({ page }: { page: TaskPageModel }) {
           </ul>
         </section>
       )}
-      <FixLoopSection
-        fixLoop={fixLoop}
-        escalation={project.config?.fixLoop.escalation ?? []}
-        onStart={() => void startFix()}
-        onStop={() => void stopFixLoop(item.meta.id)}
-        starting={startingFix}
-        startError={fixError}
-      />
+      {!settled && (
+        <FixLoopSection
+          fixLoop={fixLoop}
+          escalation={project.config?.fixLoop.escalation ?? []}
+          onStart={() => void startFix()}
+          onStop={() => void stopFixLoop(item.meta.id)}
+          starting={startingFix}
+          startError={fixError}
+        />
+      )}
       <FindingsPanel
         findings={findings}
         needsRuling={fixLoopNeedsRuling(fixLoop)}
@@ -433,43 +474,49 @@ export function ReviewMode({ page }: { page: TaskPageModel }) {
           await adjudicate(item.meta.id, findingId, input);
         }}
       />
-      <VerificationSection
-        exercised={item.meta.exercised}
-        result={verification}
-        error={verificationError}
-      />
-      {detail !== undefined && detail.meta.id === run.id && (
-        <ReviewCasePanel
-          evidence={detail.evidence}
-          mutations={detail.mutations}
-          findings={findings}
-          decisions={[]}
-          onStartAiReview={
-            project.client === null
-              ? undefined
-              : async () => {
-                  await project.client?.startReview(meta.taskId, {
-                    base: meta.baseBranch,
-                    head: meta.branch,
-                    runId: meta.id,
-                  });
-                }
-          }
-          reviewAgentLive={reviewAgentLive !== undefined}
-          onFixFindings={
-            isTerminalRunState(meta.state) && meta.reviewedAt === undefined
-              ? (selected) =>
-                  project.handleRequestChanges(
-                    meta.id,
-                    fixFindingsRequest(selected)
-                  )
-              : undefined
-          }
-          client={project.client}
-          runId={meta.id}
-          onOpenImpact={page.host.openImpact}
+      {!settled && (
+        <VerificationSection
+          exercised={item.meta.exercised}
+          result={verification}
+          error={verificationError}
         />
       )}
+      {/* Settled work keeps the case only when there is evidence or a finding
+          to read; an empty one just reads as a warning about finished work. */}
+      {detail !== undefined &&
+        detail.meta.id === run.id &&
+        (!settled || detail.evidence.length > 0 || findings.length > 0) && (
+          <ReviewCasePanel
+            evidence={detail.evidence}
+            mutations={detail.mutations}
+            findings={findings}
+            decisions={[]}
+            onStartAiReview={
+              project.client === null
+                ? undefined
+                : async () => {
+                    await project.client?.startReview(meta.taskId, {
+                      base: meta.baseBranch,
+                      head: meta.branch,
+                      runId: meta.id,
+                    });
+                  }
+            }
+            reviewAgentLive={reviewAgentLive !== undefined}
+            onFixFindings={
+              isTerminalRunState(meta.state) && meta.reviewedAt === undefined
+                ? (selected) =>
+                    project.handleRequestChanges(
+                      meta.id,
+                      fixFindingsRequest(selected)
+                    )
+                : undefined
+            }
+            client={project.client}
+            runId={meta.id}
+            onOpenImpact={page.host.openImpact}
+          />
+        )}
       {threads.comments.length > 0 && (
         <ReviewCommentsPanel
           comments={threads.comments}
@@ -492,7 +539,15 @@ export function ReviewMode({ page }: { page: TaskPageModel }) {
       />
     );
   } else if (diffError !== null) {
-    diffPane = <DiffEmptyState message="This run has no changes to review." />;
+    diffPane = (
+      <DiffEmptyState
+        message={
+          settled
+            ? "This work has landed, and its diff wasn't kept."
+            : 'This run has no changes to review.'
+        }
+      />
+    );
   } else if (diff === undefined) {
     diffPane = <TabSkeleton />;
   } else {
@@ -520,6 +575,14 @@ export function ReviewMode({ page }: { page: TaskPageModel }) {
       className="@container/review flex h-full min-h-0 flex-col gap-2"
     >
       <div className="flex shrink-0 flex-col gap-2">
+        {showCard && (
+          <OutcomeCard
+            outcome={ending}
+            page={page}
+            place="review"
+            updatedAt={item.meta.updated}
+          />
+        )}
         <RunStrip
           run={meta}
           runs={page.runs}
@@ -541,6 +604,10 @@ export function ReviewMode({ page }: { page: TaskPageModel }) {
               busy={busy}
               act={act}
               onRequestChanges={() => setChanging(true)}
+              onReviewPr={() => {
+                if (page.host.prView === undefined) page.host.openPr(meta.id);
+                else setPrOpen(true);
+              }}
             />
           }
         />
@@ -586,27 +653,34 @@ export function ReviewMode({ page }: { page: TaskPageModel }) {
           </div>
         )}
       </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-4 @min-[760px]/review:flex-row">
-        <div className="order-2 flex min-h-0 min-w-0 flex-1 flex-col gap-2 @min-[760px]/review:order-1">
-          <div className="min-h-0 flex-1 overflow-auto">{diffPane}</div>
-          {project.client !== null && (
-            <ReviewChatPanel
-              client={project.client}
-              ref={chatRef}
-              runId={meta.id}
-              canResumeAgent={
-                isTerminalRunState(meta.state) && meta.reviewedAt === undefined
-              }
-            />
-          )}
+      {prOpen && page.host.prView !== undefined ? (
+        <div className="min-h-0 flex-1 overflow-hidden">
+          {page.host.prView(meta.id, () => setPrOpen(false))}
         </div>
-        <aside
-          aria-label="Review checklist"
-          className="order-1 max-h-[40%] shrink-0 overflow-y-auto @min-[760px]/review:order-2 @min-[760px]/review:max-h-none @min-[760px]/review:w-[300px]"
-        >
-          {side}
-        </aside>
-      </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col gap-4 @min-[760px]/review:flex-row">
+          <div className="order-2 flex min-h-0 min-w-0 flex-1 flex-col gap-2 @min-[760px]/review:order-1">
+            <div className="min-h-0 flex-1 overflow-auto">{diffPane}</div>
+            {project.client !== null && (
+              <ReviewChatPanel
+                client={project.client}
+                ref={chatRef}
+                runId={meta.id}
+                canResumeAgent={
+                  isTerminalRunState(meta.state) &&
+                  meta.reviewedAt === undefined
+                }
+              />
+            )}
+          </div>
+          <aside
+            aria-label="Review checklist"
+            className="order-1 max-h-[40%] shrink-0 overflow-y-auto @min-[760px]/review:order-2 @min-[760px]/review:max-h-none @min-[760px]/review:w-[300px]"
+          >
+            {side}
+          </aside>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,23 +1,22 @@
+import type { DocHit } from '@dispatch/client';
 import { describe, expect, test } from 'bun:test';
 
 import type { PaletteEntriesContext, PaletteSection } from './paletteEntries';
-import { buildPaletteEntries } from './paletteEntries';
+import {
+  addressEntries,
+  buildPaletteEntries,
+  docHitEntries,
+} from './paletteEntries';
 
 function context(over: Partial<PaletteEntriesContext> = {}) {
   const calls: string[] = [];
   const ctx: PaletteEntriesContext = {
     hasProject: true,
-    views: [
-      { id: 'inbox', label: 'Inbox' },
-      { id: 'overview', label: 'Control room' },
-      { id: 'board', label: 'Tasks' },
-    ],
     tasks: [
       { meta: { id: 't-1', title: 'Wire the thing' } },
       { meta: { id: 't-2', title: 'Blocked one' } },
     ],
     readyIds: new Set(['t-1']),
-    dev: false,
     actions: {
       openCreateTask: () => calls.push('create'),
       openQuickAddTask: () => calls.push('quick-add'),
@@ -26,7 +25,6 @@ function context(over: Partial<PaletteEntriesContext> = {}) {
       peekTask: (id) => calls.push(`peek:${id}`),
       dispatchTask: (id) => calls.push(`dispatch:${id}`),
       openQuickCapture: () => calls.push('capture'),
-      toggleSidebar: () => calls.push('sidebar'),
       openShortcuts: () => calls.push('shortcuts'),
     },
     ...over,
@@ -46,16 +44,10 @@ describe('buildPaletteEntries', () => {
     expect(sections.lastIndexOf('navigation')).toBeLessThan(firstOf('tasks'));
   });
 
-  test('Go-to rows carry ⌘N by rail position; new task is C; Overseer is G A', () => {
+  test('new task is C and the shortcuts sheet is ?', () => {
     const { ctx } = context();
     const byId = new Map(buildPaletteEntries(ctx).map((e) => [e.id, e]));
-    expect(byId.get('go-inbox')?.shortcut).toBe('⌘1');
-    expect(byId.get('go-overview')?.shortcut).toBe('⌘2');
-    expect(byId.get('go-board')?.shortcut).toBe('⌘3');
     expect(byId.get('action-new-task')?.shortcut).toBe('C');
-    expect(byId.get('go-overseer')?.shortcut).toBe('G A');
-    expect(byId.get('go-settings')?.shortcut).toBe('G S');
-    expect(byId.get('action-toggle-sidebar')?.shortcut).toBe('[');
     expect(byId.get('action-shortcuts')?.shortcut).toBe('?');
   });
 
@@ -75,24 +67,11 @@ describe('buildPaletteEntries', () => {
     const { ctx } = context({ hasProject: false });
     const ids = buildPaletteEntries(ctx).map((e) => e.id);
     expect(ids).toEqual([
-      'action-toggle-sidebar',
       'action-shortcuts',
-      'go-all-agents',
-      'go-sessions',
       'go-overseer',
+      'go-board',
       'go-settings',
     ]);
-  });
-
-  test('the Gallery row exists only in a dev build', () => {
-    expect(
-      buildPaletteEntries(context({ dev: true }).ctx).some(
-        (e) => e.id === 'go-gallery'
-      )
-    ).toBe(true);
-    expect(
-      buildPaletteEntries(context().ctx).some((e) => e.id === 'go-gallery')
-    ).toBe(false);
   });
 
   test('saved views become Open view rows under Views that run openSavedView', () => {
@@ -132,14 +111,150 @@ describe('buildPaletteEntries', () => {
     expect(has(context({ currentTaskId: 't-1' }).ctx)).toBe(false);
   });
 
-  test('a tenth rail view has no ⌘N hint', () => {
-    const views = Array.from({ length: 10 }, (_, i) => ({
-      id: 'board' as const,
-      label: `View ${i}`,
-    }));
-    const { ctx } = context({ views, tasks: [] });
-    const rows = buildPaletteEntries(ctx).filter((e) => e.kind === 'go to');
-    expect(rows[8]?.shortcut).toBe('⌘9');
-    expect(rows[9]?.shortcut).toBeUndefined();
+  test('Restart the first-task guide appears when the app offers it', () => {
+    const { ctx, calls } = context();
+    expect(
+      buildPaletteEntries(ctx).some((e) => e.id === 'action-restart-guide')
+    ).toBe(false);
+    const withGuide = {
+      ...ctx,
+      actions: {
+        ...ctx.actions,
+        restartGuide: () => calls.push('restart-guide'),
+      },
+    };
+    const entry = buildPaletteEntries(withGuide).find(
+      (e) => e.id === 'action-restart-guide'
+    );
+    expect(entry?.label).toBe('Restart the first-task guide');
+    entry?.run();
+    expect(calls).toContain('restart-guide');
+  });
+});
+
+describe('docHitEntries', () => {
+  const hit = (anchor: string, heading: string): DocHit => ({
+    doc: 'doc-01K',
+    handle: 'auth',
+    title: 'Auth spec',
+    scope: 'team',
+    anchor,
+    heading,
+    snippet: '',
+    score: 1,
+  });
+
+  test('turns each search hit into a Docs row that opens its section', () => {
+    const opened: [string, string | null][] = [];
+    const rows = docHitEntries(
+      [hit('api', 'API'), hit('', '')],
+      (docId, anchor) => opened.push([docId, anchor])
+    );
+    expect(
+      rows.map(({ id, label, sublabel, kind, section }) => ({
+        id,
+        label,
+        sublabel,
+        kind,
+        section,
+      }))
+    ).toEqual([
+      {
+        id: 'doc:doc-01K#api',
+        label: 'Auth spec › API',
+        sublabel: 'auth',
+        kind: 'doc',
+        section: 'docs',
+      },
+      {
+        id: 'doc:doc-01K#',
+        label: 'Auth spec',
+        sublabel: 'auth',
+        kind: 'doc',
+        section: 'docs',
+      },
+    ]);
+    for (const row of rows) row.run();
+    expect(opened).toEqual([
+      ['doc-01K', 'api'],
+      ['doc-01K', null],
+    ]);
+  });
+});
+
+describe('navigation rows', () => {
+  test('navigates to Overseer, Tasks, Settings and the pages under Tasks', () => {
+    const { ctx, calls } = context();
+    const entries = buildPaletteEntries(ctx);
+    const nav = entries.filter((e) => e.section === 'navigation');
+    expect(nav.map((e) => [e.label, e.shortcut])).toEqual([
+      ['Go to Overseer', '⌘1'],
+      ['Go to Tasks', '⌘2'],
+      ['Go to Settings', '⌘,'],
+      ['Open Plans', undefined],
+      ['Open Notes', undefined],
+      ['Open Git', undefined],
+      ['Open Files', undefined],
+      ['Open Terminals', undefined],
+      ['Open Design', undefined],
+      ['Open Impact', undefined],
+    ]);
+    expect(entries.some((e) => e.id === 'action-toggle-sidebar')).toBe(false);
+    for (const row of nav) row.run();
+    expect(calls).toEqual([
+      'global:overseer',
+      'project:board',
+      'global:settings',
+      'project:plans',
+      'project:brain-dump',
+      'project:branches',
+      'project:files',
+      'project:terminals',
+      'project:design',
+      'project:impact',
+    ]);
+  });
+});
+
+describe('host views below the operator tier', () => {
+  test('leaves out Terminals and Design', () => {
+    const { ctx } = context({ hideHostViews: true });
+    const ids = buildPaletteEntries(ctx).map((e) => e.id);
+    expect(ids).toContain('go-files');
+    expect(ids).not.toContain('go-terminals');
+    expect(ids).not.toContain('go-design');
+  });
+
+  test('the operator sees both', () => {
+    const { ctx } = context();
+    const ids = buildPaletteEntries(ctx).map((e) => e.id);
+    expect(ids).toContain('go-terminals');
+    expect(ids).toContain('go-design');
+  });
+});
+
+describe('addressEntries', () => {
+  test('people but me, active outside peers, and named rooms but milestones', () => {
+    const opened: string[] = [];
+    const entries = addressEntries({
+      people: [
+        { ref: 'human:wyat', name: 'Wyat' },
+        { ref: 'human:sam', name: 'Sam' },
+      ],
+      rooms: ['release', 'epic/t-1'],
+      peers: [
+        { alias: 'acme', status: 'active' },
+        { alias: 'gone', status: 'disabled' },
+      ],
+      me: 'human:wyat',
+      open: (address) => opened.push(address),
+    });
+    expect(entries.map((e) => e.label)).toEqual([
+      'Message Sam',
+      'Message acme (outside)',
+      'Open #release',
+    ]);
+    for (const entry of entries) entry.run();
+    expect(opened).toEqual(['human:sam', 'a2a:acme', 'channel:release']);
   });
 });

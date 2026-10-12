@@ -2,7 +2,7 @@ import type {
   EffortLevel,
   TaskListItem,
   UpdatePatch,
-} from '@dispatch/core/browser';
+} from '@dispatch-foo/core/browser';
 import {
   isCanceledStatus,
   isContainer,
@@ -10,17 +10,23 @@ import {
   parseLinearExternal,
   statusLabel,
   statusType,
-} from '@dispatch/core/browser';
+} from '@dispatch-foo/core/browser';
+import type { ApiClient } from '@dispatch/client';
+import { useQuery } from '@tanstack/react-query';
 import {
   Archive,
   ArchiveRestore,
   Ban,
+  ChevronLeft,
   Copy,
   Ellipsis,
+  FolderTree,
   Link2,
   Maximize2,
+  MessagesSquare,
   MonitorPlay,
   Play,
+  SquareTerminal,
   Star,
   X,
 } from 'lucide-react';
@@ -29,6 +35,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useTaskComments } from '../../../hooks/useTaskComments';
 import { useTaskDoc } from '../../../hooks/useTaskDoc';
+import { useTeamOn } from '../../../hooks/useTeamOn';
 import { parseActivity } from '../../../lib/activityFeed';
 import type { TaskTab } from '../../../lib/appNav';
 import { liveClaimsFrom } from '../../../lib/dispatchPreview';
@@ -47,6 +54,7 @@ import {
   isLinearConfigured,
   pushToLinearError,
 } from '../../../lib/linearSettings';
+import { presenceLine } from '../../../lib/remotePresence';
 import { criteriaItems } from '../../../lib/reviewCriteria';
 import { isTerminalRunState } from '../../../lib/runState';
 import { useStatusModelOf } from '../../../lib/statusModel';
@@ -118,6 +126,45 @@ export interface TaskPageProps {
   onExpand?: () => void;
   /** Leaves the full page once its task has gone. */
   onBack?: () => void;
+  /** Unread messages to you about this task; Two views shows it on the Conversation toggle. */
+  conversationCount?: number;
+}
+
+// Where the task's run is live on the team and whom it waits on; nothing
+// when board sync is off or the task has no live run.
+function TeamPresenceLine({
+  client,
+  port,
+  taskId,
+}: {
+  client: ApiClient | null;
+  port: number | undefined;
+  taskId: string;
+}) {
+  // Presence only exists on a team; without one the route answers 409.
+  const teamOn = useTeamOn(client);
+  const query = useQuery({
+    queryKey: ['task-presence', port, taskId],
+    queryFn: () => {
+      if (client === null) throw new Error('no client');
+      return client.getTaskPresence(taskId);
+    },
+    enabled: client !== null && teamOn,
+    retry: false,
+  });
+  const line =
+    query.data === undefined
+      ? null
+      : presenceLine(query.data.presence, query.data.waitingOn);
+  if (line === null) return null;
+  return (
+    <p
+      data-slot="team-presence"
+      className="text-muted-foreground -mt-4 text-[12px]"
+    >
+      {line}
+    </p>
+  );
 }
 
 function errorMessage(err: unknown): string {
@@ -139,7 +186,8 @@ const PICKER_FOR_KEY: Partial<Record<ListKeyCommand, RailPicker>> = {
  * One task, state-adaptive: the main pane follows where the task is — Spec before it is
  * dispatched, Run while an agent works it, Review once a run finishes, Summary when it is
  * done (a container shows its Plan) — and the lifecycle track above it switches modes by
- * hand. The rail beside it holds every property, relations, sub-issues, comments and
+ * hand; the header's Thread toggle shows the task's message threads instead. The rail
+ * beside it holds every property, relations, sub-issues, comments and
  * activity. One component for every mount: `split` beside a list (the rail opens over
  * the pane), `peek` in a dialog, `full` as the window. Metadata renders from the cached
  * list at once; the body, comments and run data stream in behind skeletons.
@@ -260,6 +308,18 @@ function PropertyChips({
   );
 }
 
+// Every view the page body can show: a lifecycle stage or one of the side tabs.
+type PageView = TaskPageMode | 'thread' | 'preview' | 'files' | 'terminal';
+
+function isStage(view: PageView): view is TaskPageMode {
+  return (
+    view !== 'thread' &&
+    view !== 'preview' &&
+    view !== 'files' &&
+    view !== 'terminal'
+  );
+}
+
 function TaskPageLoaded({
   host,
   item,
@@ -271,6 +331,8 @@ function TaskPageLoaded({
   onSelectRun,
   onClose,
   onExpand,
+  onBack,
+  conversationCount = 0,
 }: TaskPageProps & { host: TaskPageHost; item: TaskListItem }) {
   const { project } = host;
   const meta = item.meta;
@@ -280,7 +342,8 @@ function TaskPageLoaded({
   const deepLink = useDeepLinkActions();
   const savedViews = useSavedViewsContext();
   const rootRef = useRef<HTMLDivElement>(null);
-  const [railOpen, setRailOpen] = useState(layout !== 'split');
+  const compact = host.compactPage === true;
+  const [railOpen, setRailOpen] = useState(layout !== 'split' && !compact);
   const [picker, setPicker] = useState<RailPicker | null>(null);
   const [localMode, setLocalMode] = useState<TaskTab>('auto');
   const [localRunId, setLocalRunId] = useState<string | null>(null);
@@ -333,16 +396,31 @@ function TaskPageLoaded({
   const autoMode = defaultTaskPageMode(stateInput);
   const modes = taskPageModes(container);
   const requested = controlledMode ?? localMode;
-  const mode: TaskPageMode | 'preview' =
+  const { threadView, filesView, terminalView } = host;
+  const runTab = (view: unknown) =>
+    view !== undefined && latestRun !== undefined;
+  const mode: PageView =
     requested === 'auto'
       ? autoMode
       : requested === 'preview'
         ? layout === 'full' && latestRun !== undefined
           ? 'preview'
           : autoMode
-        : modes.includes(requested)
-          ? requested
-          : autoMode;
+        : requested === 'thread'
+          ? threadView !== undefined
+            ? 'thread'
+            : autoMode
+          : requested === 'files'
+            ? runTab(filesView)
+              ? 'files'
+              : autoMode
+            : requested === 'terminal'
+              ? runTab(terminalView)
+                ? 'terminal'
+                : autoMode
+              : modes.includes(requested)
+                ? requested
+                : autoMode;
   const selectedRunId = controlledRunId ?? localRunId;
   // Any kind: a review or verify run opened by id (the live rail, the inbox) shows itself.
   const selectedRun = allRuns.find((r) => r.id === selectedRunId) ?? latestRun;
@@ -384,7 +462,7 @@ function TaskPageLoaded({
     [moveTaskStatus, taskId, fail]
   );
   const selectMode = useCallback(
-    (next: TaskPageMode | 'preview') => {
+    (next: PageView) => {
       // Picking the state's own mode returns the page to following the state.
       const tab: TaskTab = next === autoMode ? 'auto' : next;
       if (onModeChange !== undefined) onModeChange(tab);
@@ -544,6 +622,19 @@ function TaskPageLoaded({
   );
   const openCrumb = layout === 'full' ? host.openTaskPage : host.peekTask;
   const crumb: ReactNode[] = [
+    // Two views' full page leads with the way back to the list.
+    ...(compact && layout === 'full' && onBack !== undefined
+      ? [
+          <button
+            key="back"
+            type="button"
+            onClick={onBack}
+            className="hover:text-foreground flex items-center gap-0.5 outline-none focus-visible:underline"
+          >
+            <ChevronLeft className="size-3.5" /> tasks
+          </button>,
+        ]
+      : []),
     ...(host.projectName !== null ? [host.projectName] : []),
     ...ancestors.map((a) => (
       <button
@@ -573,6 +664,58 @@ function TaskPageLoaded({
           (p) => p.viewing === taskId && p.ref !== project.me
         )}
       />
+      {threadView !== undefined &&
+        (compact ? (
+          // Two views names the toggle, as the conversation is this task's home.
+          <button
+            type="button"
+            aria-pressed={mode === 'thread'}
+            data-testid="task-conversation-toggle"
+            onClick={() => selectMode(mode === 'thread' ? autoMode : 'thread')}
+            className={cn(
+              'rounded-control flex h-7 items-center gap-1.5 px-2 text-[12px] font-medium',
+              mode === 'thread'
+                ? 'bg-surface-active text-foreground'
+                : 'text-muted-foreground hover:text-foreground hover:bg-surface-hover'
+            )}
+          >
+            <MessagesSquare className="size-3.5" />
+            Conversation
+            {conversationCount > 0 && (
+              <span className="text-(--accent) tabular-nums">
+                · {conversationCount}
+              </span>
+            )}
+          </button>
+        ) : (
+          <IconButton
+            label="Thread"
+            active={mode === 'thread'}
+            onClick={() => selectMode(mode === 'thread' ? autoMode : 'thread')}
+          >
+            <MessagesSquare />
+          </IconButton>
+        ))}
+      {runTab(filesView) && (
+        <IconButton
+          label="The run's files"
+          active={mode === 'files'}
+          onClick={() => selectMode(mode === 'files' ? autoMode : 'files')}
+        >
+          <FolderTree />
+        </IconButton>
+      )}
+      {runTab(terminalView) && (
+        <IconButton
+          label="A terminal in the run's worktree"
+          active={mode === 'terminal'}
+          onClick={() =>
+            selectMode(mode === 'terminal' ? autoMode : 'terminal')
+          }
+        >
+          <SquareTerminal />
+        </IconButton>
+      )}
       {layout === 'full' && latestRun !== undefined && (
         <IconButton
           label="Preview the run's app"
@@ -662,13 +805,16 @@ function TaskPageLoaded({
       </IconButton>
     );
 
-  // Spec and Summary read as a column that scrolls; Run, Review and Plan fill the pane and
-  // scroll inside (the transcript, the diff, the Flight Plan's canvas).
+  // Spec and Summary read as a column that scrolls; Run, Review, Plan and the thread fill
+  // the pane and scroll inside (the transcript, the diff, the Flight Plan's canvas).
   const fills =
     mode === 'run' ||
     mode === 'review' ||
     mode === 'plan' ||
-    mode === 'preview';
+    mode === 'thread' ||
+    mode === 'preview' ||
+    mode === 'files' ||
+    mode === 'terminal';
   let modeView: ReactNode;
   switch (mode) {
     case 'spec':
@@ -686,8 +832,28 @@ function TaskPageLoaded({
     case 'plan':
       modeView = <PlanMode page={page} />;
       break;
+    case 'thread':
+      // Its own boundary, so a crashing thread view never strands the other modes.
+      modeView = threadView && (
+        <ErrorBoundary label="this tab">{threadView(taskId)}</ErrorBoundary>
+      );
+      break;
     case 'preview':
       modeView = <TaskPreviewTab data={project} selectedRun={selectedRun} />;
+      break;
+    case 'files':
+      modeView = selectedRun !== undefined && filesView !== undefined && (
+        <ErrorBoundary label="this tab">
+          {filesView(selectedRun.id)}
+        </ErrorBoundary>
+      );
+      break;
+    case 'terminal':
+      modeView = selectedRun !== undefined && terminalView !== undefined && (
+        <ErrorBoundary label="this tab">
+          {terminalView(selectedRun.id)}
+        </ErrorBoundary>
+      );
       break;
   }
 
@@ -792,12 +958,17 @@ function TaskPageLoaded({
                 />
               </div>
             </div>
-            {layout === 'split' && !railOpen && (
+            <TeamPresenceLine
+              client={project.client}
+              port={project.port}
+              taskId={meta.id}
+            />
+            {(layout === 'split' || compact) && !railOpen && (
               <PropertyChips page={page} onOpenRail={() => setRailOpen(true)} />
             )}
             <LifecycleTrack
               stages={stages}
-              active={mode === 'preview' ? autoMode : mode}
+              active={isStage(mode) ? mode : autoMode}
               onSelect={selectMode}
               statusColor={statusColor(meta.status, model)}
               className="max-w-[720px]"

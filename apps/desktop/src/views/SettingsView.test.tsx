@@ -8,9 +8,11 @@ import {
   within,
 } from '@testing-library/react';
 import { describe, expect, mock, test } from 'bun:test';
+import { Bot } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 import {
+  ATTACHED_BACKGROUND_READ_ONLY,
   ATTACHED_READ_ONLY,
   NEEDS_DECIDE,
 } from '../components/settings/access';
@@ -113,20 +115,24 @@ test('the rail groups every page, and the page title is the H1', () => {
     client: { fetchLedger: () => Promise.resolve([]) } as unknown as ApiClient,
   });
   render(<SettingsView activeProject={project} data={ledgerData} />);
-  for (const heading of ['Project', 'Team', 'This machine']) {
+  for (const heading of ['Project', 'Team', 'Connections', 'This machine']) {
     expect(screen.getByText(heading)).toBeDefined();
   }
   expect(navRows().map((row) => row.textContent)).toEqual([
+    'Setup',
     'General',
     'Agents',
     'Checks',
     'Autonomy',
+    'Memory',
     'Previews',
     'Notifications',
     'Members',
     'Board sync',
-    'Linear',
     'License',
+    'Linear',
+    'Connected agents',
+    'A2A',
     'Remotes',
     'Background',
     'Diff display',
@@ -139,6 +145,49 @@ test('the rail groups every page, and the page title is the H1', () => {
   );
   selectPage('Notifications');
   expect(screen.getByLabelText('Webhook URL')).toBeDefined();
+});
+
+// Memory's page reads the store's health on its own, beside its run settings.
+test('the Memory page shows the store and the run settings', async () => {
+  const memoryData = dataWith({
+    port: 4321,
+    client: {
+      memoryHealth: () =>
+        Promise.resolve({
+          available: true,
+          reason: null,
+          search: 'fts5',
+          entries: 3,
+          openProposals: 0,
+          ledgerImport: null,
+          configWarnings: [],
+          lastDecayAt: null,
+          personal: null,
+          pinnedOverflow: false,
+          claudeImport: null,
+        }),
+      memoryIdentity: () =>
+        Promise.resolve({
+          identity: 'self',
+          aliases: [],
+          placeholderEmail: false,
+        }),
+      listIngestProblems: () => Promise.resolve({ problems: [] }),
+    } as unknown as ApiClient,
+  });
+  render(
+    <SettingsView
+      activeProject={project}
+      data={memoryData}
+      initialPage="memory"
+    />,
+    { wrapper: withQueryClient() }
+  );
+  expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Memory');
+  expect(
+    await screen.findByText('3 entries · no open proposals · full-text search')
+  ).toBeDefined();
+  expect(screen.getByLabelText('Index budget')).toBeDefined();
 });
 
 // Each page is a stack of section headings over grouped cards.
@@ -409,6 +458,20 @@ function tierData(
       syncBoardNow: () => Promise.resolve(sync),
       fetchTeamTokens: () => Promise.resolve([]),
       fetchTeamAddress: () => Promise.resolve({ origins: [] }),
+      listAgentRoster: () =>
+        Promise.resolve({
+          agents: [
+            {
+              address: 'agent:wyat/cursor.macbook',
+              displayName: 'cursor.macbook',
+              client: 'cursor',
+              status: 'pending',
+              muted: false,
+              approvedBy: null,
+              createdAt: '2026-09-20T10:00:00.000Z',
+            },
+          ],
+        }),
     } as unknown as ApiClient,
     presence: [],
     ...rest,
@@ -618,6 +681,42 @@ describe('below the decide tier, config is read-only', () => {
     expect(headingLock('Limits')).toBe(ATTACHED_READ_ONLY);
   });
 
+  // The restart that note asks for sits right under it.
+  test('an attached window offers the restart under the note', async () => {
+    const restart = mock(() => Promise.resolve());
+    renderAt(
+      tierData({
+        myTier: 'request',
+        attachedWithoutAppToken: true,
+        takeover: { background: false, busy: [], parked: 0, waiting: 0 },
+        handleRestartDaemon: restart,
+      }),
+      'agents'
+    );
+    fireEvent.click(screen.getByTestId('daemon-takeover'));
+    await waitFor(() => expect(restart).toHaveBeenCalledTimes(1));
+  });
+
+  test('says when the CLI started the daemon in the background', () => {
+    renderAt(
+      tierData({
+        myTier: 'request',
+        attachedWithoutAppToken: true,
+        takeover: { background: true, busy: null, parked: 0, waiting: 0 },
+      }),
+      'agents'
+    );
+    expect(screen.getByRole('note').textContent).toBe(
+      ATTACHED_BACKGROUND_READ_ONLY
+    );
+    expect(screen.getByTestId('daemon-takeover')).toBeTruthy();
+  });
+
+  test('a teammate below decide is offered no restart', () => {
+    renderAt(tierData({ myTier: 'request' }), 'agents');
+    expect(screen.queryByTestId('daemon-takeover')).toBeNull();
+  });
+
   // No tier means no connection yet, not a refusal: the owner is not told to
   // ask for access while their own Dispatch starts. Nothing is editable yet.
   test('no tier yet (no connection) shows no read-only note', () => {
@@ -696,6 +795,36 @@ describe('below the decide tier, what has its own route stays usable', () => {
     ]) {
       expect(isDisabled(control)).toBe(false);
     }
+  });
+});
+
+// Anyone can read the roster; approving, muting and revoking need decide.
+describe('Connected agents', () => {
+  const PENDING = 'agent:wyat/cursor.macbook';
+  const actions = () =>
+    ['Approve', 'Mute', 'Revoke'].map((name) => ({
+      name,
+      disabled: isDisabled(
+        screen.getByRole('button', { name: `${name} ${PENDING}` })
+      ),
+    }));
+
+  // The reason is written out, since disabled buttons never show their tooltips.
+  test('below decide, the roster shows with its actions locked and the reason', async () => {
+    renderAt(tierData({ myTier: 'request' }), 'connected-agents');
+    expect(await screen.findByText(PENDING)).toBeDefined();
+    expect(screen.queryByRole('note')).toBeNull();
+    expect(headingLock('Agents')).toBeNull();
+    expect(rowLock('Approving, muting and revoking')).toBe(NEEDS_DECIDE);
+    expect(screen.getByText(NEEDS_DECIDE)).toBeDefined();
+    expect(actions().every((a) => a.disabled)).toBe(true);
+  });
+
+  test('at decide, every action is open', async () => {
+    renderAt(tierData({ myTier: 'decide' }), 'connected-agents');
+    expect(await screen.findByText(PENDING)).toBeDefined();
+    expect(headingLock('Agents')).toBeNull();
+    expect(actions().some((a) => a.disabled)).toBe(false);
   });
 });
 
@@ -1018,4 +1147,30 @@ describe('Board sync by storage backend', () => {
     ).toBeNull();
     expect(screen.getByText('No settings match')).toBeDefined();
   });
+});
+
+// Two views folds whole views (Sessions, All agents) into Settings as pages.
+test('a hosted page joins the rail and renders full width', () => {
+  render(
+    <SettingsView
+      activeProject={project}
+      data={data}
+      hostedPages={[
+        {
+          id: 'runs',
+          label: 'Runs',
+          icon: Bot,
+          intro: 'Every run.',
+          render: () => <p>every run here</p>,
+        },
+      ]}
+    />
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Runs' }));
+  expect(screen.getByText('every run here')).toBeTruthy();
+});
+
+test('Classic shows no hosted pages', () => {
+  render(<SettingsView activeProject={project} data={data} />);
+  expect(screen.queryByRole('button', { name: 'Runs' })).toBeNull();
 });

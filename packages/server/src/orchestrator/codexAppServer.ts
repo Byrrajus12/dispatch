@@ -1,3 +1,4 @@
+import { agentEnv } from '@dispatch-foo/core';
 import { spawn } from 'node:child_process';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
@@ -43,9 +44,14 @@ export interface CodexAppServerClose {
 
 const STDERR_TAIL_LIMIT = 8_192;
 
-function spawnCodexAppServer(cwd: string): ChildProcessWithoutNullStreams {
-  return spawn('codex', ['app-server', '--stdio'], {
+// `binary` is `codex`; a test names another to read the env it hands over.
+export function spawnCodexAppServer(
+  cwd: string,
+  binary = 'codex'
+): ChildProcessWithoutNullStreams {
+  return spawn(binary, binary === 'codex' ? ['app-server', '--stdio'] : [], {
     cwd,
+    env: agentEnv(),
     stdio: 'pipe',
     windowsHide: true,
   });
@@ -140,8 +146,8 @@ export class CodexAppServer {
   }
 
   close(): void {
-    if (this.settled) return;
-    this.process.stdin.end();
+    if (!this.settled) this.process.stdin.end();
+    // Kill even once settled: a stdin error settles the server with the child alive.
     this.process.kill();
   }
 

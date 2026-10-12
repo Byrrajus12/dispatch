@@ -14,12 +14,26 @@ export interface CliContext {
   // <productName>`, and tests inject a stub to assert on the root without
   // actually launching anything.
   openApp?: (rootDir: string) => void;
+  // Reads all of stdin (a secret piped in with --token-stdin); tests inject it.
+  readStdin?: () => Promise<string>;
+  // Reads a secret (an invite or recovery code) without it reaching argv:
+  // tests inject a stub; real usage falls back to stdin or a muted prompt
+  // (`readSecret` in commands/secret.ts).
+  readSecret?: (prompt: string) => Promise<string>;
+  // Asks a yes/no question (team start's relay disclosure); tests inject
+  // it, real usage asks on the terminal and answers no without one.
+  confirm?: (question: string) => Promise<boolean>;
+  // Asks for a line of text (team start's place); tests inject it, real
+  // usage asks on the terminal and answers null without one.
+  ask?: (question: string) => Promise<string | null>;
 }
 
 export class CliError extends Error {
   constructor(
     message: string,
-    readonly exitCode: number = 1
+    readonly exitCode: number = 1,
+    /** The daemon's stable error `code`, when the failure came from one. */
+    readonly code?: string
   ) {
     super(message);
     this.name = 'CliError';

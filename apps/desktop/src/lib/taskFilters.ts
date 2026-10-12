@@ -1,5 +1,5 @@
+import type { TaskListItem } from '@dispatch-foo/core/browser';
 import type { RunState } from '@dispatch/client';
-import type { TaskListItem } from '@dispatch/core/browser';
 
 import { formatShortDate } from './taskDates';
 import { assigneeLabel, priorityLabel, statusLabel } from './taskDisplay';
@@ -39,8 +39,6 @@ export interface TaskFilterSet {
   clauses: FilterClause[];
   join: FilterJoin;
 }
-
-export const TASK_FILTERS_V2_STORAGE_KEY = 'dispatch:tasks-filters-v2';
 
 export const EMPTY_TASK_FILTER_SET: TaskFilterSet = {
   clauses: [],

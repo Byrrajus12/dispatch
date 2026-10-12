@@ -1,14 +1,20 @@
+import type { EffortLevel } from '@dispatch-foo/core/browser';
 import {
   type ApiClient,
   ApiError,
   type OverseerRecord,
 } from '@dispatch/client';
-import type { EffortLevel } from '@dispatch/core/browser';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Dispatch, SetStateAction } from 'react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { isFakeOverseerDevToolEnabled } from '../lib/devTools';
+import {
+  approvalReply,
+  findOverseerActionGate,
+  findOverseerApprovalGate,
+  openGatesKey,
+} from '../lib/gates';
 import {
   DEFAULT_EFFORT_ID,
   effortFromId,
@@ -17,8 +23,8 @@ import {
   storeRoleModelOverride,
 } from '../lib/models';
 
-/** What the human answered to a parked built-in tool call — the body of
- * `decideOverseerApproval`. */
+/** What the human answered to a parked built-in tool call, sent as the answer
+ * to its `tool-approval` gate. */
 export interface OverseerApprovalDecision {
   allow: boolean;
   /** 'session' also pre-approves the same tool for the rest of the conversation. */
@@ -52,6 +58,11 @@ export function overseerKey(
   return [...overseerKeyPrefix(port), conversationId] as const;
 }
 
+// The daemon's coded refusal for a revoked Overseer (overseer.ts refuseIfRevoked).
+function isRevokedRefusal(err: unknown): boolean {
+  return err instanceof ApiError && err.code === 'overseer_revoked';
+}
+
 export interface OverseerSession {
   /** The open conversation, or `null` before one is started (the composer state). */
   conversationId: string | null;
@@ -76,6 +87,9 @@ export interface OverseerSession {
    * the outcome is readable on `sending` and `sendError`.
    */
   submit: (text: string) => Promise<void>;
+  /** Posts `text` for a surface with its own draft (a Threads reply): raises
+   *  `sending`, leaves `draft` and `sendError` alone, and rejects on failure. */
+  reply: (text: string) => Promise<void>;
   /**
    * A submit is in flight. Session-held for the same reason `draft` is: the
    * rail unmounts the chat's whole panel on a tab flip, and a component-local
@@ -91,10 +105,13 @@ export interface OverseerSession {
    * unmounted tree and the failure is reported to nobody.
    */
   sendError: string | null;
+  /** The last send was refused because the Overseer is revoked; cleared by a send that works. */
+  revoked: boolean;
   /**
-   * Decides one queued mutating action: approving runs the real effect before
-   * resolving, denying never runs it. Allowed mid-turn — the server accepts a
-   * decision while the assistant is still answering.
+   * Decides one queued mutating action by answering its `overseer-action`
+   * gate: approving runs the real effect before resolving, denying never runs
+   * it. Allowed mid-turn — the server accepts a decision while the assistant
+   * is still answering.
    *
    * Owns the whole decide cycle — the lock, the failure, and the re-entrancy
    * guard — for the same reason `submit` owns the send cycle. Never rejects:
@@ -104,10 +121,11 @@ export interface OverseerSession {
   confirmAction: (actionId: string, approve: boolean) => Promise<void>;
   /**
    * Decides one built-in tool call the running turn is parked on (see
-   * `OverseerRecord.pendingApprovals`). Allowing runs the call at once and
-   * the turn continues; denying hands the reason to the model. Owns the
-   * lock and the failure exactly as `confirmAction` does, and never rejects:
-   * the outcome is readable on `decidingRequestId` and `decideError`.
+   * `OverseerRecord.pendingApprovals`) by answering its `tool-approval` gate.
+   * Allowing runs the call at once and the turn continues; denying hands the
+   * reason to the model. Owns the lock and the failure exactly as
+   * `confirmAction` does, and never rejects: the outcome is readable on
+   * `decidingRequestId` and `decideError`.
    */
   decideApproval: (
     requestId: string,
@@ -157,6 +175,28 @@ export interface OverseerSession {
   decideError: string | null;
   /** Drops back to the "start a conversation" state. Nothing is deleted server-side. */
   reset: () => void;
+  /** Stops the running turn; what was typed during it waits for the next send. */
+  stop: () => Promise<void>;
+  /**
+   * Rewrites one queued message (`OverseerRecord.queued[].id`) before the turn
+   * ends and sends it. Resolves `true` once saved; on failure — a 409 when the
+   * turn already sent it — resolves `false` with the reason on `sendError`.
+   */
+  editQueued: (entryId: string, text: string) => Promise<boolean>;
+  /** Drops one queued message; same outcome contract as `editQueued`. */
+  removeQueued: (entryId: string) => Promise<boolean>;
+  /** Sends `text` as the opening of a new conversation, whatever is open now. */
+  submitNew: (text: string) => Promise<void>;
+  /** Makes an existing conversation the open one. */
+  open: (conversationId: string) => void;
+  /**
+   * Moves the open conversation to another model or effort for its next
+   * turns. `DEFAULT_EFFORT_ID` goes back to the project's configured effort.
+   */
+  setConversationOptions: (options: {
+    model?: string;
+    effortId?: string;
+  }) => Promise<void>;
   /**
    * What the human has typed into the composer but not sent yet. It lives on
    * the session rather than inside OverseerChat because every surface that
@@ -182,17 +222,18 @@ export interface OverseerSession {
  * rather than another field on it — the overseer is one surface's data, and the
  * god-hook is already 2400 lines.
  *
- * Every mutation writes its returned record straight into the query cache: the
- * server responds with the full post-mutation record, so the transcript updates
- * the moment the call resolves rather than waiting a round-trip for the
- * `overseer.changed` refetch. Each write is followed by an invalidation of the
- * same key: a turn can settle — and broadcast `overseer.changed` — while the
- * mutation's own response is still in flight, in which case that event either
- * found no mounted query to invalidate (start) or its refetch result is about
- * to be overwritten by the staler mutation response (sendMessage). Marking the
- * key stale right after writing lets a refetch reconcile whatever was missed;
- * with a real LLM backend the window is milliseconds wide, but the scripted
- * fake backend settles inside it every time.
+ * Starting and sending write their returned record straight into the query
+ * cache: the server responds with the full post-mutation record, so the
+ * transcript updates the moment the call resolves rather than waiting a
+ * round-trip for the `overseer.changed` refetch. Each write is followed by an
+ * invalidation of the same key: a turn can settle — and broadcast
+ * `overseer.changed` — while the mutation's own response is still in flight,
+ * in which case that event either found no mounted query to invalidate
+ * (start) or its refetch result is about to be overwritten by the staler
+ * mutation response (sendMessage). Marking the key stale right after writing
+ * lets a refetch reconcile whatever was missed; with a real LLM backend the
+ * window is milliseconds wide, but the scripted fake backend settles inside it
+ * every time.
  */
 export function useOverseerSession(
   client: ApiClient | null,
@@ -202,7 +243,9 @@ export function useOverseerSession(
   // what the composer's picker shows until the human picks otherwise.
   configuredModel?: string,
   // The project's configured `effort.overseer`, named on the Default entry.
-  configuredEffort?: EffortLevel
+  configuredEffort?: EffortLevel,
+  // Two views: reopen this person's one conversation instead of a blank composer.
+  resume = false
 ): OverseerSession {
   const queryClient = useQueryClient();
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -234,6 +277,7 @@ export function useOverseerSession(
 
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [revoked, setRevoked] = useState(false);
 
   // A conversation opened against one project's dispatchd must not survive a
   // project switch — the stale id would 404 against the new daemon (the same
@@ -247,7 +291,38 @@ export function useOverseerSession(
     setDecidingRequestId(null);
     setSendError(null);
     setDecideError(null);
+    setRevoked(false);
   }, [projectPath]);
+
+  // One conversation per person per project: pick up the newest one once per
+  // project, unless the human has already started typing into a fresh one.
+  const resumedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!resume || client === null || projectPath === null) return;
+    if (resumedFor.current === projectPath) return;
+    let cancelled = false;
+    // Marked done only when the answer lands: a cancelled fetch (a remount, a
+    // new client) must leave the next run free to ask again.
+    client
+      .currentOverseer()
+      .then(({ conversation }) => {
+        if (cancelled) return;
+        resumedFor.current = projectPath;
+        if (conversation === null) return;
+        queryClient.setQueryData(
+          overseerKey(port, conversation.id),
+          conversation
+        );
+        setConversationId((open) => open ?? conversation.id);
+      })
+      .catch(() => {
+        // An older daemon has no such route; the blank composer is the fallback.
+        if (!cancelled) resumedFor.current = projectPath;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, port, projectPath, queryClient, resume]);
 
   const { data: record, error } = useQuery({
     queryKey: overseerKey(port, conversationId),
@@ -321,18 +396,20 @@ export function useOverseerSession(
    * back — but only if the composer is still empty, since whatever the human
    * has started typing since is theirs to keep.
    */
-  const submit = useCallback(
-    async (text: string) => {
+  const send = useCallback(
+    async (text: string, fresh: boolean) => {
       setSending(true);
       setSendError(null);
       setDraft('');
       try {
-        if (conversationId === null) {
+        if (fresh || conversationId === null) {
           await start(text);
         } else {
           await sendMessage(text);
         }
+        setRevoked(false);
       } catch (err) {
+        setRevoked(isRevokedRefusal(err));
         setSendError(err instanceof Error ? err.message : String(err));
         setDraft((current) => (current === '' ? text : current));
       } finally {
@@ -341,6 +418,36 @@ export function useOverseerSession(
     },
     [conversationId, sendMessage, start]
   );
+  const submit = useCallback((text: string) => send(text, false), [send]);
+  const submitNew = useCallback((text: string) => send(text, true), [send]);
+
+  const reply = useCallback(
+    async (text: string) => {
+      setSending(true);
+      try {
+        await sendMessage(text);
+        setRevoked(false);
+      } catch (err) {
+        setRevoked(isRevokedRefusal(err));
+        throw err;
+      } finally {
+        setSending(false);
+      }
+    },
+    [sendMessage]
+  );
+
+  // The open gates, read fresh rather than from cache: a gate answered
+  // elsewhere (another window, the CLI) must not be answered twice.
+  const fetchOpenGates = useCallback(async () => {
+    if (client === null) throw new Error('dispatchd client not ready');
+    const { items } = await queryClient.fetchQuery({
+      queryKey: openGatesKey(port),
+      queryFn: () => client.openDecisions(),
+      staleTime: 0,
+    });
+    return items;
+  }, [client, port, queryClient]);
 
   const confirmAction = useCallback(
     async (actionId: string, approve: boolean) => {
@@ -359,27 +466,40 @@ export function useOverseerSession(
       setDecidingActionId(actionId);
       setDecideError(null);
       try {
-        const rec = await client.confirmOverseerAction(
+        const gate = findOverseerActionGate(
+          await fetchOpenGates(),
           conversationId,
-          actionId,
-          approve
+          actionId
         );
-        queryClient.setQueryData(overseerKey(port, conversationId), rec);
-        // Confirming is allowed mid-turn, so the same in-flight-settle race as
-        // sendMessage applies here.
+        if (gate === null) {
+          throw new Error('This action is no longer waiting for you.');
+        }
+        await client.replyToMessage(gate.id, {
+          body: '',
+          choice: approve ? 'confirm' : 'cancel',
+        });
+        void queryClient.invalidateQueries({ queryKey: openGatesKey(port) });
+        // The effect has run by the time the answer is accepted; the refetch
+        // shows it, and the lock holds until then.
         await queryClient.invalidateQueries({
           queryKey: overseerKey(port, conversationId),
         });
       } catch (err) {
-        // An approved-but-failed effect comes back as a record with a failure
-        // row on the card, so this only ever reports a transport-level failure
-        // where no record came back at all.
+        // An approved-but-failed effect shows as a failure row on the card, so
+        // this reports a gate that is gone or a transport-level failure.
         setDecideError(err instanceof Error ? err.message : String(err));
       } finally {
         setDecidingActionId(null);
       }
     },
-    [client, conversationId, decidingActionId, port, queryClient]
+    [
+      client,
+      conversationId,
+      decidingActionId,
+      fetchOpenGates,
+      port,
+      queryClient,
+    ]
   );
 
   // The same cycle as confirmAction, for a parked built-in call. One lock per
@@ -396,14 +516,20 @@ export function useOverseerSession(
       setDecidingRequestId(requestId);
       setDecideError(null);
       try {
-        const rec = await client.decideOverseerApproval(
+        const gate = findOverseerApprovalGate(
+          await fetchOpenGates(),
           conversationId,
-          requestId,
-          decision
+          requestId
         );
-        queryClient.setQueryData(overseerKey(port, conversationId), rec);
-        // Allowing unblocks the turn, which can settle before this response
-        // lands — the same in-flight-settle race sendMessage reconciles.
+        if (gate === null) {
+          throw new Error('This approval is no longer waiting for you.');
+        }
+        await client.replyToMessage(
+          gate.id,
+          approvalReply(decision.allow, decision)
+        );
+        void queryClient.invalidateQueries({ queryKey: openGatesKey(port) });
+        // Allowing unblocks the turn, which can settle before this refetch.
         await queryClient.invalidateQueries({
           queryKey: overseerKey(port, conversationId),
         });
@@ -413,7 +539,14 @@ export function useOverseerSession(
         setDecidingRequestId(null);
       }
     },
-    [client, conversationId, decidingRequestId, port, queryClient]
+    [
+      client,
+      conversationId,
+      decidingRequestId,
+      fetchOpenGates,
+      port,
+      queryClient,
+    ]
   );
 
   const reset = useCallback(() => {
@@ -424,6 +557,76 @@ export function useOverseerSession(
     setSendError(null);
     setDecideError(null);
   }, []);
+
+  const stop = useCallback(async () => {
+    if (client === null || conversationId === null) return;
+    try {
+      const rec = await client.stopOverseer(conversationId);
+      queryClient.setQueryData(overseerKey(port, conversationId), rec);
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : String(err));
+    }
+    await queryClient.invalidateQueries({
+      queryKey: overseerKey(port, conversationId),
+    });
+  }, [client, conversationId, port, queryClient]);
+
+  const setConversationOptions = useCallback(
+    async (options: { model?: string; effortId?: string }) => {
+      if (client === null || conversationId === null) return;
+      try {
+        const rec = await client.setOverseerOptions(conversationId, {
+          ...(options.model !== undefined ? { model: options.model } : {}),
+          ...(options.effortId !== undefined
+            ? { effort: effortFromId(options.effortId) ?? null }
+            : {}),
+        });
+        queryClient.setQueryData(overseerKey(port, conversationId), rec);
+      } catch (err) {
+        setSendError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [client, conversationId, port, queryClient]
+  );
+
+  // Runs one change to the queue and writes the returned record into the
+  // cache. A refusal lands on `sendError`, the composer's error line, since
+  // the bubble it came from is usually gone by then (the turn sent it).
+  const changeQueued = useCallback(
+    async (
+      call: (api: ApiClient, id: string) => Promise<OverseerRecord>
+    ): Promise<boolean> => {
+      if (client === null || conversationId === null) return false;
+      setSendError(null);
+      let ok = true;
+      try {
+        const rec = await call(client, conversationId);
+        queryClient.setQueryData(overseerKey(port, conversationId), rec);
+      } catch (err) {
+        ok = false;
+        setSendError(err instanceof Error ? err.message : String(err));
+      }
+      await queryClient.invalidateQueries({
+        queryKey: overseerKey(port, conversationId),
+      });
+      return ok;
+    },
+    [client, conversationId, port, queryClient]
+  );
+
+  const editQueued = useCallback(
+    (entryId: string, text: string) =>
+      changeQueued((api, id) =>
+        api.editQueuedOverseerMessage(id, entryId, text)
+      ),
+    [changeQueued]
+  );
+
+  const removeQueued = useCallback(
+    (entryId: string) =>
+      changeQueued((api, id) => api.removeQueuedOverseerMessage(id, entryId)),
+    [changeQueued]
+  );
 
   // react-query keeps the last good `data` through a *background* refetch
   // failure, which is right for a hiccup and wrong for a conversation the
@@ -439,8 +642,10 @@ export function useOverseerSession(
     record: recordGone ? undefined : record,
     recordError: error instanceof Error ? error.message : null,
     submit,
+    reply,
     sending,
     sendError,
+    revoked,
     confirmAction,
     decidingActionId,
     decideApproval,
@@ -452,6 +657,12 @@ export function useOverseerSession(
     setEffortId,
     configuredEffort,
     reset,
+    stop,
+    editQueued,
+    removeQueued,
+    setConversationOptions,
+    submitNew,
+    open: setConversationId,
     draft,
     setDraft,
   };

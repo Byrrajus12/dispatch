@@ -1,5 +1,5 @@
-import type { TaskDoc } from '@dispatch/core/browser';
-import { statusModelOf } from '@dispatch/core/browser';
+import type { TaskDoc } from '@dispatch-foo/core/browser';
+import { statusModelOf } from '@dispatch-foo/core/browser';
 import {
   act,
   cleanup,
@@ -123,14 +123,13 @@ function shellWith(log: ShellLog) {
   const noop = () => {};
   const actions = {
     openTask: noop,
+    openThread: noop,
     peekTask: (id: string) => log.peeked.push(id),
     openCreateTask: (preset?: CreateTaskPreset) =>
       log.presets.push(preset ?? {}),
     createPreset: null,
     closeCreateTask: noop,
     openPalette: noop,
-    toggleSidebar: noop,
-    sidebarHidden: false,
     openOverseer: noop,
     setProjectView: noop,
     setGlobalView: noop,
@@ -696,6 +695,18 @@ test('an empty filter result shows the no-match empty state', () => {
   );
 
   expect(screen.getByText('No tasks match')).not.toBeNull();
+});
+
+test('a project with no tasks says so instead of blaming a filter', () => {
+  const Shell = shellWith(shellLog());
+  render(
+    <Shell>
+      <TasksListView data={dataWith([])} onSelectTask={() => {}} />
+    </Shell>
+  );
+
+  expect(screen.getByText('No tasks yet')).not.toBeNull();
+  expect(screen.queryByText('No tasks match')).toBeNull();
 });
 
 // 2000 tasks under status headers: the grid mounts a screenful, and j/k walk it by

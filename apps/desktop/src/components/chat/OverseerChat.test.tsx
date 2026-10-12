@@ -4,6 +4,7 @@ import { expect, test } from 'bun:test';
 import { useState } from 'react';
 
 import type { OverseerSession } from '../../hooks/useOverseerSession';
+import { askAgentToFix } from '../failure/FailureNotice';
 import { OverseerChat } from './OverseerChat';
 
 // The same fixture shapes overseerThread.test.ts builds; the component's whole
@@ -43,8 +44,10 @@ function overseerSession(over: Partial<OverseerSession> = {}): OverseerSession {
     record: undefined,
     recordError: null,
     submit: () => Promise.resolve(),
+    reply: () => Promise.resolve(),
     sending: false,
     sendError: null,
+    revoked: false,
     confirmAction: () => Promise.resolve(),
     decidingActionId: null,
     decideApproval: () => Promise.resolve(),
@@ -56,6 +59,12 @@ function overseerSession(over: Partial<OverseerSession> = {}): OverseerSession {
     setEffortId: () => {},
     configuredEffort: undefined,
     reset: () => {},
+    stop: () => Promise.resolve(),
+    editQueued: () => Promise.resolve(true),
+    removeQueued: () => Promise.resolve(true),
+    setConversationOptions: () => Promise.resolve(),
+    submitNew: () => Promise.resolve(),
+    open: () => {},
     draft: '',
     setDraft: () => {},
     ...over,
@@ -68,15 +77,18 @@ function overseerSession(over: Partial<OverseerSession> = {}): OverseerSession {
 function ChatWithDraft({
   overseer,
   compact = false,
+  durable = false,
 }: {
   overseer: OverseerSession;
   compact?: boolean;
+  durable?: boolean;
 }) {
   const [draft, setDraft] = useState('');
   return (
     <OverseerChat
       overseer={{ ...overseer, draft, setDraft }}
       compact={compact}
+      durable={durable}
     />
   );
 }
@@ -108,11 +120,21 @@ test('full mode: the start card takes an opening question through overseer.submi
   });
   render(<ChatWithDraft overseer={overseer} />);
 
-  // Full-page copy, and no compact-only reset control.
+  // Full-page welcome, and no compact-only reset control.
+  expect(screen.getByText('What should we work on?')).toBeDefined();
   expect(
-    screen.getByText(/every mutation waits for your explicit approval/)
+    screen.getByText(/changes the project waits for your approval/)
   ).toBeDefined();
   expect(screen.queryByLabelText('Start a new conversation')).toBeNull();
+
+  // A starter fills the composer rather than sending on its own.
+  fireEvent.click(screen.getByRole('button', { name: 'What needs me?' }));
+  expect(asked).toEqual([]);
+  expect(
+    screen
+      .getByDisplayValue('What needs me right now?')
+      .getAttribute('aria-label')
+  ).toBe('Overseer opening question');
 
   fireEvent.change(screen.getByLabelText('Overseer opening question'), {
     target: { value: 'status?' },
@@ -444,6 +466,107 @@ test('a new transcript row re-pins to the bottom', () => {
   expect(log.scrollTop).toBe(480);
 });
 
+// The pin follows only a reader already at the bottom: one who scrolled up to
+// read (a tool run's details, an earlier reply) keeps their place while the
+// turn keeps adding rows below them.
+test('a reader scrolled up stays put when a new row arrives', () => {
+  const messages = [
+    { role: 'user' as const, text: 'status?', at: '2026-08-10T00:00:01Z' },
+  ];
+  const { rerender } = render(
+    <OverseerChat
+      overseer={overseerSession({
+        conversationId: 'w-1',
+        record: overseerRecord({ messages }),
+      })}
+      compact
+    />
+  );
+
+  const log = screen.getByRole('log');
+  Object.defineProperty(log, 'scrollHeight', {
+    value: 900,
+    configurable: true,
+  });
+  Object.defineProperty(log, 'clientHeight', {
+    value: 300,
+    configurable: true,
+  });
+  Object.defineProperty(log, 'scrollTop', {
+    value: 100,
+    writable: true,
+    configurable: true,
+  });
+  fireEvent.scroll(log);
+
+  rerender(
+    <OverseerChat
+      overseer={overseerSession({
+        conversationId: 'w-1',
+        record: overseerRecord({
+          messages: [
+            ...messages,
+            {
+              role: 'assistant',
+              text: 'All quiet.',
+              at: '2026-08-10T00:00:02Z',
+            },
+          ],
+        }),
+      })}
+      compact
+    />
+  );
+  expect(log.scrollTop).toBe(100);
+});
+
+// Sending is an explicit "show me the answer": it re-attaches a reader who had
+// scrolled up, so their own message and the reply land in view.
+test('sending a message re-pins a reader who had scrolled up', async () => {
+  const messages = [
+    { role: 'user' as const, text: 'status?', at: '2026-08-10T00:00:01Z' },
+  ];
+  const session = (msgs: typeof messages) =>
+    overseerSession({
+      conversationId: 'w-1',
+      record: overseerRecord({ messages: msgs }),
+    });
+  const { rerender } = render(
+    <ChatWithDraft overseer={session(messages)} compact />
+  );
+
+  const log = screen.getByRole('log');
+  Object.defineProperty(log, 'scrollHeight', {
+    value: 900,
+    configurable: true,
+  });
+  Object.defineProperty(log, 'clientHeight', {
+    value: 300,
+    configurable: true,
+  });
+  Object.defineProperty(log, 'scrollTop', {
+    value: 100,
+    writable: true,
+    configurable: true,
+  });
+  fireEvent.scroll(log);
+
+  fireEvent.change(screen.getByLabelText('Follow-up message'), {
+    target: { value: 'and the queue?' },
+  });
+  await clickAndSettle(screen.getByRole('button', { name: 'Send' }));
+  rerender(
+    <ChatWithDraft
+      overseer={session([
+        ...messages,
+        { role: 'user', text: 'and the queue?', at: '2026-08-10T00:00:02Z' },
+      ])}
+      compact
+    />
+  );
+  expect(log.scrollTop).toBe(900);
+});
+
 // The case `lastKey` is in the scroll effect's deps for, and the one the
 // row-count test above cannot reach: a turn settling in place. While the
 // record is `running` the thread is [user message, pending spinner]; when it
@@ -565,8 +688,7 @@ test('a parked tool call renders an allow/deny card wired to decideApproval', as
 });
 
 // The opening composer picks the model the conversation opens on (the
-// `PromptBar`'s own model select); an open conversation names the model it
-// started on and offers no picker.
+// `PromptBar`'s own model select); an open conversation's picker shows its own model.
 test('the opening composer offers the model picker and an open conversation names its model', () => {
   const picks: string[] = [];
   const fresh = overseerSession({
@@ -591,8 +713,10 @@ test('the opening composer offers the model picker and an open conversation name
       })}
     />
   );
-  expect(screen.queryByRole('combobox', { name: 'Choose model' })).toBeNull();
-  expect(screen.getByText(/Fable 5\.1/)).toBeDefined();
+  // An open conversation's picker shows its own model; a change applies from its next turn.
+  expect(
+    screen.getByRole('combobox', { name: 'Choose model' }).textContent
+  ).toContain('Fable 5.1');
 });
 
 // Card headings are 12px/500 sentence case, never uppercase tracked labels, and the
@@ -610,4 +734,328 @@ test('the confirm card heading is 12px sentence case and its tool id is sans', (
   const toolId = screen.getByText('cancel_run');
   expect(toolId.className).toContain('font-book');
   expect(toolId.className).not.toContain('font-mono');
+});
+
+test('a durable conversation takes a message mid-turn and offers Stop', () => {
+  let submitted = '';
+  let stopped = false;
+  render(
+    <ChatWithDraft
+      overseer={overseerSession({
+        conversationId: 'w-1',
+        record: overseerRecord({ state: 'running', spendUsd: 0.5 }),
+        submit: (text) => {
+          submitted = text;
+          return Promise.resolve();
+        },
+        stop: () => {
+          stopped = true;
+          return Promise.resolve();
+        },
+      })}
+      durable
+    />
+  );
+  const box = screen.getByRole('textbox', { name: 'Follow-up message' });
+  expect(box.hasAttribute('disabled')).toBe(false);
+  fireEvent.change(box, { target: { value: 'also this' } });
+  fireEvent.keyDown(box, { key: 'Enter' });
+  expect(submitted).toBe('also this');
+  fireEvent.click(screen.getByTestId('overseer-stop'));
+  expect(stopped).toBe(true);
+  expect(screen.getByTestId('overseer-spend').textContent).toContain('$0.50');
+});
+
+test('a classic conversation still locks its composer mid-turn', () => {
+  render(
+    <ChatWithDraft
+      overseer={overseerSession({
+        conversationId: 'w-1',
+        record: overseerRecord({ state: 'running' }),
+      })}
+    />
+  );
+  expect(
+    screen
+      .getByRole('textbox', { name: 'Follow-up message' })
+      .hasAttribute('disabled')
+  ).toBe(true);
+  expect(screen.queryByTestId('overseer-stop')).toBeNull();
+});
+
+test('an open conversation shows its own model and effort in the pickers', () => {
+  render(
+    <ChatWithDraft
+      overseer={overseerSession({
+        conversationId: 'w-1',
+        record: overseerRecord({ model: 'claude-opus-5-5', effort: 'high' }),
+      })}
+      durable
+    />
+  );
+  expect(
+    screen.getByRole('combobox', { name: 'Choose model' }).textContent
+  ).toContain('Opus 5.5');
+  expect(
+    screen.getByRole('combobox', { name: 'Choose effort' }).textContent
+  ).toContain('High');
+});
+
+test('typing a slash suggests the session’s commands and a pick fills the draft', () => {
+  render(
+    <ChatWithDraft
+      overseer={overseerSession({
+        conversationId: 'w-1',
+        record: overseerRecord({
+          commands: [
+            {
+              name: 'compact',
+              description: 'Compact the context',
+              argumentHint: '',
+            },
+            {
+              name: 'review',
+              description: 'Review a PR',
+              argumentHint: '<pr>',
+            },
+          ],
+        }),
+      })}
+      durable
+    />
+  );
+  const box = screen.getByRole('textbox', { name: 'Follow-up message' });
+  fireEvent.change(box, { target: { value: '/co' } });
+  expect(screen.queryByRole('button', { name: /^review/ })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /^compact/ }));
+  expect((box as HTMLTextAreaElement).value).toBe('/compact ');
+  expect(screen.queryByRole('button', { name: /^compact/ })).toBeNull();
+});
+
+test('actions queued together share one card, and Approve both decides each in turn', async () => {
+  const decided: [string, boolean][] = [];
+  const a = overseerAction({
+    id: 'act-a',
+    tool: 'dispatch_task',
+    summary: 'Dispatch t-1',
+  });
+  const b = overseerAction({
+    id: 'act-b',
+    tool: 'dispatch_task',
+    summary: 'Dispatch t-2',
+  });
+  render(
+    <ChatWithDraft
+      overseer={overseerSession({
+        conversationId: 'w-1',
+        record: overseerRecord({
+          pendingActions: [a, b],
+          messages: [
+            {
+              role: 'action',
+              actionId: 'act-a',
+              outcome: 'pending',
+              text: 'q',
+              at: 't1',
+            },
+            {
+              role: 'action',
+              actionId: 'act-b',
+              outcome: 'pending',
+              text: 'q',
+              at: 't2',
+            },
+          ],
+        }),
+        confirmAction: (id, approve) => {
+          decided.push([id, approve]);
+          return Promise.resolve();
+        },
+      })}
+      durable
+    />
+  );
+  const card = screen.getByTestId('overseer-confirm-batch');
+  expect(card.textContent).toContain('dispatch_task ×2');
+  await clickAndSettle(screen.getByRole('button', { name: 'Approve both' }));
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(decided).toEqual([
+    ['act-a', true],
+    ['act-b', true],
+  ]);
+});
+
+// A running turn with two lines queued behind it, for the edit/remove tests.
+function queuedSession(over: Partial<OverseerSession> = {}): OverseerSession {
+  return overseerSession({
+    conversationId: 'w-1',
+    record: overseerRecord({
+      state: 'running',
+      queued: [
+        { id: 'q-1', text: 'teh typo', at: '2026-08-10T00:00:03Z' },
+        { id: 'q-2', text: 'second line', at: '2026-08-10T00:00:04Z' },
+      ],
+    }),
+    ...over,
+  });
+}
+
+test('a queued line edits in place: Save sends the new text for that entry', async () => {
+  const edits: [string, string][] = [];
+  render(
+    <ChatWithDraft
+      overseer={queuedSession({
+        editQueued: (id, text) => {
+          edits.push([id, text]);
+          return Promise.resolve(true);
+        },
+      })}
+      durable
+    />
+  );
+  const [first] = screen.getAllByRole('button', {
+    name: 'Edit queued message',
+  });
+  fireEvent.click(first);
+  const box = screen.getByRole('textbox', { name: 'Queued message' });
+  expect((box as HTMLTextAreaElement).value).toBe('teh typo');
+  fireEvent.change(box, { target: { value: 'the fix' } });
+  await clickAndSettle(screen.getByRole('button', { name: 'Save' }));
+  expect(edits).toEqual([['q-1', 'the fix']]);
+  // Saved: the editor closes back to the queued line.
+  expect(screen.queryByRole('textbox', { name: 'Queued message' })).toBeNull();
+});
+
+test('Enter commits a queued edit and Esc cancels one without a call', async () => {
+  const edits: [string, string][] = [];
+  render(
+    <ChatWithDraft
+      overseer={queuedSession({
+        editQueued: (id, text) => {
+          edits.push([id, text]);
+          return Promise.resolve(true);
+        },
+      })}
+      durable
+    />
+  );
+  const second = screen.getAllByRole('button', {
+    name: 'Edit queued message',
+  })[1];
+  fireEvent.click(second);
+  const box = screen.getByRole('textbox', { name: 'Queued message' });
+  fireEvent.change(box, { target: { value: 'never mind' } });
+  fireEvent.keyDown(box, { key: 'Escape' });
+  expect(screen.queryByRole('textbox', { name: 'Queued message' })).toBeNull();
+  expect(screen.getByText('second line')).toBeDefined();
+  expect(edits).toEqual([]);
+
+  fireEvent.click(second);
+  const again = screen.getByRole('textbox', { name: 'Queued message' });
+  fireEvent.change(again, { target: { value: 'second, fixed' } });
+  fireEvent.keyDown(again, { key: 'Enter' });
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(edits).toEqual([['q-2', 'second, fixed']]);
+});
+
+test('a refused queued edit keeps the editor open', async () => {
+  render(
+    <ChatWithDraft
+      overseer={queuedSession({ editQueued: () => Promise.resolve(false) })}
+      durable
+    />
+  );
+  fireEvent.click(
+    screen.getAllByRole('button', { name: 'Edit queued message' })[0]
+  );
+  fireEvent.change(screen.getByRole('textbox', { name: 'Queued message' }), {
+    target: { value: 'the fix' },
+  });
+  await clickAndSettle(screen.getByRole('button', { name: 'Save' }));
+  expect(screen.getByRole('textbox', { name: 'Queued message' })).toBeDefined();
+});
+
+test('Remove drops that queued entry through the session', async () => {
+  const removed: string[] = [];
+  render(
+    <ChatWithDraft
+      overseer={queuedSession({
+        removeQueued: (id) => {
+          removed.push(id);
+          return Promise.resolve(true);
+        },
+      })}
+      durable
+    />
+  );
+  await clickAndSettle(
+    screen.getAllByRole('button', { name: 'Remove queued message' })[1]
+  );
+  expect(removed).toEqual(['q-2']);
+});
+
+test('an edit the turn beat says so on the error line', () => {
+  render(
+    <ChatWithDraft
+      overseer={queuedSession({
+        sendError:
+          'already sent: the turn ended and this message went out with it',
+      })}
+      durable
+    />
+  );
+  expect(screen.getByText(/already sent/)).toBeDefined();
+});
+
+test('a failed Overseer turn explains a sign-in problem', () => {
+  render(
+    <OverseerChat
+      overseer={overseerSession({
+        conversationId: 'w-1',
+        record: overseerRecord({
+          state: 'failed',
+          backendName: 'claude',
+          error: 'Invalid API key · Please run /login',
+        }),
+      })}
+    />
+  );
+  expect(
+    screen.getByText('Claude Code needs you to sign in again.')
+  ).toBeTruthy();
+});
+
+test('a failed Overseer turn can be retried or handed back to the agent', async () => {
+  const replies: string[] = [];
+  render(
+    <OverseerChat
+      overseer={overseerSession({
+        conversationId: 'w-1',
+        reply: (text) => {
+          replies.push(text);
+          return Promise.resolve();
+        },
+        record: overseerRecord({
+          state: 'failed',
+          error: 'TypeError: boom',
+          messages: [
+            {
+              role: 'user',
+              text: 'what needs me?',
+              at: '2026-08-10T00:00:01Z',
+            },
+          ],
+        }),
+      })}
+    />
+  );
+  await clickAndSettle(screen.getByRole('button', { name: 'Try again' }));
+  await clickAndSettle(
+    screen.getByRole('button', { name: 'Ask the agent to fix it' })
+  );
+  expect(replies).toEqual(['what needs me?', askAgentToFix('TypeError: boom')]);
 });

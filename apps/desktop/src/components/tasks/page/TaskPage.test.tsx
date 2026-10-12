@@ -1,4 +1,5 @@
-import type { TaskComment } from '@dispatch/core/browser';
+import type { TaskComment } from '@dispatch-foo/core/browser';
+import type { ApiClient, LedgerEntry } from '@dispatch/client';
 import {
   act,
   fireEvent,
@@ -11,6 +12,7 @@ import { describe, expect, mock, test } from 'bun:test';
 import type { ReactNode } from 'react';
 
 import type { TaskTab } from '../../../lib/appNav';
+import { entry as memoryEntry } from '../../../lib/memory.test-helper';
 import { linearWorkflowConfig } from '../../settings/fixtures.test-helper';
 import {
   fakeHost,
@@ -173,13 +175,62 @@ describe('the mode follows the task', () => {
             reviewedAt: '2026-09-23T11:00:00.000Z',
             reviewAction: 'merge',
             mergeCommit: 'abc1234def',
+            landsOn: 'origin',
+            pushedToOrigin: true,
           }),
         ],
       })
     );
     expect(modeOf()).toBe('summary');
-    expect(screen.getByText('Merged into main')).not.toBeNull();
+    // Where it landed, never a bare "merged": origin and the branch, then the sha.
+    expect(screen.getByText('Landed on origin/main')).not.toBeNull();
     expect(screen.getByText('abc1234')).not.toBeNull();
+  });
+
+  // Lessons live in memory now: the summary lists what reaches the task under
+  // Memory, and reads only the ledger's audit class for its Receipts.
+  test('the summary splits the ledger into the memory that reaches the task and its receipts', async () => {
+    const reads = { ledger: [] as unknown[], memory: [] as unknown[] };
+    const ledger: LedgerEntry[] = [
+      {
+        id: 'l-000001',
+        epicId: null,
+        sourceTaskId: 't-1',
+        kind: 'decision',
+        title: 'Scope extended for run r-x',
+        detail: 'src/x.ts — needed',
+        appliesTo: [],
+        authoredBy: 'human:x',
+        createdAt: '2026-09-01T00:00:00.000Z',
+      },
+    ];
+    mount(
+      fakeHost(newLog(), {
+        tasks: [task('t-1', { status: 'landed' })],
+        runs: [run({ state: 'finished' })],
+        client: {
+          fetchLedger: (filter: unknown) => {
+            reads.ledger.push(filter);
+            return Promise.resolve(ledger);
+          },
+          listMemory: (q: unknown) => {
+            reads.memory.push(q);
+            return Promise.resolve({
+              entries: [memoryEntry({ title: 'pnpm builds' })],
+            });
+          },
+        } as Partial<ApiClient>,
+      })
+    );
+    expect(modeOf()).toBe('summary');
+    expect(await screen.findByText('pnpm builds')).not.toBeNull();
+    expect(
+      await screen.findByText('Scope extended for run r-x')
+    ).not.toBeNull();
+    expect(screen.getByText('Receipts')).not.toBeNull();
+    expect(screen.queryByText('Ledger')).toBeNull();
+    expect(reads.ledger).toEqual([{ epicId: null, class: 'audit' }]);
+    expect(reads.memory).toEqual([{ taskId: 't-1', limit: 200 }]);
   });
 
   test('a task reopened after it landed opens on its spec, with Dispatch', () => {
@@ -491,6 +542,159 @@ describe('dispatching from the spec', () => {
     await waitFor(() => expect(log.dispatches).toHaveLength(1));
     expect(log.dispatches[0]?.stayInPlace).toBe(false);
   });
+
+  test('every test-only fake executor stays out of the picker', () => {
+    const executor = (name: string) => ({
+      name,
+      reportsCost: true,
+      reportsTurns: true,
+      enforcesCaps: true,
+    });
+    mount(
+      fakeHost(newLog(), {
+        tasks: [task('t-1')],
+        project: {
+          executors: {
+            executors: [
+              executor('claude'),
+              executor('fake'),
+              executor('fake-ask'),
+            ],
+            default: 'claude',
+          },
+        },
+      }),
+      { layout: 'full' }
+    );
+    // Read as text: a failed match on a DOM node never finishes printing it.
+    expect(
+      screen.queryByRole('button', { name: 'Executor' })?.textContent
+    ).toBeUndefined();
+  });
+});
+
+describe('the docs a task links', () => {
+  // A client whose task links one spec doc, recording each docs-linking target.
+  function linkingASpec(asked: string[]) {
+    return {
+      docsLinking: (target: string) => {
+        asked.push(target);
+        return Promise.resolve({
+          docs: [
+            {
+              doc: { id: 'doc-1', title: 'Burgess spec', status: 'draft' },
+              rel: 'spec',
+              source: 'manual',
+              fromParent: false,
+            },
+          ],
+        });
+      },
+    } as unknown as Partial<ApiClient>;
+  }
+
+  test('the spec lists them after its attachments and opens one', async () => {
+    const opened: [string, string | null][] = [];
+    const host = fakeHost(newLog(), {
+      tasks: [task('t-1')],
+      body: BODY,
+      client: linkingASpec([]),
+    });
+    mount({ ...host, openDoc: (id, anchor) => opened.push([id, anchor]) });
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Burgess spec/ })
+    );
+    expect(opened).toEqual([['doc-1', null]]);
+    const docs = screen.getByRole('heading', { name: 'Docs' });
+    const attachments = document.querySelector('[data-slot=attachments-row]');
+    expect(
+      attachments !== null &&
+        (attachments.compareDocumentPosition(docs) &
+          Node.DOCUMENT_POSITION_FOLLOWING) !==
+          0
+    ).toBe(true);
+  });
+
+  test('no Docs block, and no docs request, for a caller who cannot read docs', async () => {
+    const asked: string[] = [];
+    mount(
+      fakeHost(newLog(), {
+        tasks: [task('t-1')],
+        body: BODY,
+        client: linkingASpec(asked),
+      })
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(asked).toEqual([]);
+    expect(screen.queryByRole('heading', { name: 'Docs' })).toBeNull();
+  });
+});
+
+// A thread view whose render throws, as a broken ThreadsView would.
+function Boom(): ReactNode {
+  throw new Error('thread boom');
+}
+
+describe('the task thread', () => {
+  // A host whose thread view names the task it was drawn for.
+  function hostWithThreads(): TaskPageHost {
+    return {
+      ...fakeHost(newLog(), { tasks: [task('t-1')] }),
+      threadView: (taskId) => <p>threads of {taskId}</p>,
+    };
+  }
+
+  test('the Thread toggle shows the task’s threads, and again returns to its state', () => {
+    mount(hostWithThreads());
+    const toggle = screen.getByRole('button', { name: 'Thread' });
+    fireEvent.click(toggle);
+    expect(modeOf()).toBe('thread');
+    expect(screen.getByText('threads of t-1')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Thread' }));
+    expect(modeOf()).toBe('spec');
+  });
+
+  test('the full page keeps the thread mode in the caller', () => {
+    const changes: TaskTab[] = [];
+    mount(hostWithThreads(), {
+      layout: 'full',
+      mode: 'auto',
+      onModeChange: (tab) => changes.push(tab),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Thread' }));
+    expect(changes).toEqual(['thread']);
+  });
+
+  test('a crashing thread view is contained to its tab', () => {
+    const quiet = console.error;
+    console.error = () => {};
+    try {
+      mount({
+        ...fakeHost(newLog(), { tasks: [task('t-1')] }),
+        threadView: () => <Boom />,
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Thread' }));
+      expect(
+        screen.getByText('Something went wrong rendering this tab')
+      ).not.toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Thread' }));
+      expect(modeOf()).toBe('spec');
+      expect(screen.queryByText(/Something went wrong/)).toBeNull();
+    } finally {
+      console.error = quiet;
+    }
+  });
+
+  test('no Thread toggle, and a thread mode falls back to the state, without a thread view', () => {
+    mount(fakeHost(newLog(), { tasks: [task('t-1')] }), {
+      layout: 'full',
+      mode: 'thread',
+    });
+    expect(screen.queryByRole('button', { name: 'Thread' })).toBeNull();
+    expect(modeOf()).toBe('spec');
+  });
 });
 
 describe('the rail', () => {
@@ -582,4 +786,82 @@ describe('keyboard', () => {
     fireEvent.keyDown(inner, { key: 's' });
     expect(opened()).toBe(false);
   });
+
+  test("shows where a task's run is live on the team and whom it waits on", async () => {
+    const getTaskPresence = () =>
+      Promise.resolve({
+        presence: { replica: 'bob-0000000b', handle: 'bob', device: 'desk' },
+        waitingOn: 'ada',
+      });
+    mount(
+      fakeHost(newLog(), {
+        tasks: [task('t-1')],
+        body: BODY,
+        // Presence is only asked for once the project is on a team.
+        client: {
+          getTaskPresence,
+          getTeamStatus: () =>
+            Promise.resolve({ state: 'member' } as Awaited<
+              ReturnType<ApiClient['getTeamStatus']>
+            >),
+        } as Partial<ApiClient>,
+      })
+    );
+    expect(
+      await screen.findByText("Running on bob's desk, waiting on ada")
+    ).toBeTruthy();
+  });
+});
+
+describe('Two views’ compact page', () => {
+  test('leads with “‹ tasks”, shows properties as chips and keeps the column closed', async () => {
+    const log = newLog();
+    let back = 0;
+    const host = {
+      ...fakeHost(log, { tasks: [task('t-1')], body: BODY }),
+      compactPage: true,
+    };
+    mount(host, {
+      layout: 'full',
+      onBack: () => {
+        back++;
+      },
+    });
+    await waitFor(() => {
+      expect(
+        document.querySelector('[data-slot=property-chips]')
+      ).not.toBeNull();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /tasks/ }));
+    expect(back).toBe(1);
+  });
+
+  test('a split or peek pane keeps Expand and Close, with no “‹ tasks”', () => {
+    for (const layout of ['split', 'peek'] as const) {
+      const view = mount(
+        { ...fakeHost(newLog(), { tasks: [task('t-1')] }), compactPage: true },
+        { layout, onBack: () => {}, onClose: () => {}, onExpand: () => {} }
+      );
+      expect(screen.queryByRole('button', { name: /tasks/ })).toBeNull();
+      expect(
+        screen.getByRole('button', { name: 'Open the full page' })
+      ).not.toBeNull();
+      expect(screen.getByRole('button', { name: 'Close' })).not.toBeNull();
+      view.unmount();
+    }
+  });
+});
+
+test('Two views names the Conversation toggle and shows its unread count', async () => {
+  const log = newLog();
+  const host = {
+    ...fakeHost(log, { tasks: [task('t-1')], body: BODY }),
+    compactPage: true,
+    threadView: () => <div>thread</div>,
+  };
+  mount(host, { layout: 'full', conversationCount: 2 });
+  const toggle = await screen.findByTestId('task-conversation-toggle');
+  expect(toggle.textContent).toBe('Conversation· 2');
+  fireEvent.click(toggle);
+  expect(toggle.getAttribute('aria-pressed')).toBe('true');
 });

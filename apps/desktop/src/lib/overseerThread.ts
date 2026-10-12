@@ -5,6 +5,8 @@ import type {
   OverseerRecord,
 } from '@dispatch/client';
 
+import { TASKS_PRESETS, type TasksPreset } from './tasksPresets';
+
 // One rendered row of a overseer conversation, flattened from the record's
 // transcript the same way planThread.ts flattens a plan's. Beyond the plan
 // thread's message/pending/failed rows, the overseer transcript carries three
@@ -41,7 +43,59 @@ export type OverseerThreadItem =
     }
   | { kind: 'approve'; key: string; approval: OverseerApproval }
   | { kind: 'pending'; key: string }
-  | { kind: 'failed'; key: string; error: string };
+  | { kind: 'failed'; key: string; error: string }
+  /** A line across the stream: Stop, a context rollover, a daemon restart. */
+  | {
+      kind: 'notice';
+      key: string;
+      notice: 'stopped' | 'rollover' | 'restarted';
+      text: string;
+      at: string;
+    }
+  /** Typed during a turn; `waiting` once that turn ended without sending it.
+   *  `id` is the queue entry's, for editing or removing it. */
+  | { kind: 'queued'; key: string; id: string; text: string; waiting: boolean }
+  /** The agent's show_tasks: a door the human opens, never a jump. */
+  | { kind: 'door'; key: string; door: OverseerDoor; at: string };
+
+/** Where a show_tasks door opens Tasks. */
+export interface OverseerDoor {
+  preset?: TasksPreset;
+  taskId?: string;
+  milestoneId?: string;
+}
+
+// The door a show_tasks result recorded, or null for an error or a shape this build does not know.
+function doorOf(text: string): OverseerDoor | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const door = (parsed as { door?: unknown } | null)?.door;
+  if (typeof door !== 'object' || door === null) return null;
+  const { preset, taskId, milestoneId } = door as Record<string, unknown>;
+  const presets: readonly string[] = TASKS_PRESETS.map((p) => p.id);
+  return {
+    ...(typeof preset === 'string' && presets.includes(preset)
+      ? { preset: preset as TasksPreset }
+      : {}),
+    ...(typeof taskId === 'string' ? { taskId } : {}),
+    ...(typeof milestoneId === 'string' ? { milestoneId } : {}),
+  };
+}
+
+/** The door's button text. */
+export function doorLabel(door: OverseerDoor): string {
+  const target =
+    door.taskId ??
+    door.milestoneId ??
+    (door.preset !== undefined && door.preset !== 'all'
+      ? TASKS_PRESETS.find((p) => p.id === door.preset)?.label
+      : undefined);
+  return target === undefined ? 'Show in tasks →' : `Show ${target} in tasks →`;
+}
 
 const TURN_FAILED_FALLBACK =
   'The overseer stopped before it answered. Send the message again to retry.';
@@ -138,6 +192,15 @@ export function buildOverseerThread(
           : TURN_FAILED_FALLBACK,
     });
   }
+  (record.queued ?? []).forEach((queued) => {
+    items.push({
+      kind: 'queued',
+      key: `${record.id}-queued-${queued.id}`,
+      id: queued.id,
+      text: queued.text,
+      waiting: record.state !== 'running',
+    });
+  });
   return items;
 }
 
@@ -161,6 +224,19 @@ function buildRow(
       text: message.text,
       at: message.at,
     };
+  }
+  if (message.role === 'notice') {
+    return {
+      kind: 'notice',
+      key,
+      notice: message.notice ?? 'stopped',
+      text: message.text,
+      at: message.at,
+    };
+  }
+  if (message.role === 'tool' && message.tool === 'show_tasks') {
+    const door = doorOf(message.text);
+    if (door !== null) return { kind: 'door', key, door, at: message.at };
   }
   if (message.role === 'tool') {
     return {
@@ -231,4 +307,103 @@ function buildRow(
     };
   }
   return null;
+}
+
+// The words a row can be found by; cards and spinners have none of their own.
+function searchableText(item: OverseerThreadItem): string | null {
+  switch (item.kind) {
+    case 'message':
+    case 'outcome':
+    case 'notice':
+    case 'queued':
+      return item.text;
+    case 'tool':
+      return `${item.tool} ${item.text}`;
+    case 'confirm':
+      return item.action.summary;
+    case 'approve':
+      return item.approval.summary;
+    case 'failed':
+      return item.error;
+    case 'pending':
+    case 'door':
+      return null;
+  }
+}
+
+/** ⌘F over the stream: the rows whose text holds `query`, ignoring case. */
+export function findInThread(
+  items: OverseerThreadItem[],
+  query: string
+): OverseerThreadItem[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === '') return items;
+  return items.filter(
+    (item) => searchableText(item)?.toLowerCase().includes(needle) === true
+  );
+}
+
+// The SDK's own tool-loading step: plumbing, not work the human asked about.
+const HIDDEN_TOOLS = new Set(['ToolSearch']);
+
+/** A thread row as the chat renders it: consecutive tool calls fold into one chip row. */
+export type OverseerStreamItem =
+  | OverseerThreadItem
+  | {
+      kind: 'tools';
+      key: string;
+      calls: { tool: string; text: string; failed: boolean }[];
+    }
+  /** Two or more actions queued together, answered on one card. */
+  | {
+      kind: 'confirms';
+      key: string;
+      actions: { action: OverseerAction; failure: string | null }[];
+    };
+
+/** Folds each run of two or more queued actions into one card's row list. */
+export function groupConfirmRows(
+  items: readonly OverseerStreamItem[]
+): OverseerStreamItem[] {
+  const out: OverseerStreamItem[] = [];
+  for (const item of items) {
+    const last = out.at(-1);
+    if (item.kind !== 'confirm') {
+      out.push(item);
+      continue;
+    }
+    const row = { action: item.action, failure: item.failure };
+    if (last?.kind === 'confirms') last.actions.push(row);
+    else if (last?.kind === 'confirm') {
+      out[out.length - 1] = {
+        kind: 'confirms',
+        key: last.key,
+        actions: [{ action: last.action, failure: last.failure }, row],
+      };
+    } else out.push(item);
+  }
+  return out;
+}
+
+/** Folds each run of tool rows into one `tools` row and drops the SDK's own plumbing. */
+export function groupToolRows(
+  items: readonly OverseerThreadItem[]
+): OverseerStreamItem[] {
+  const out: OverseerStreamItem[] = [];
+  for (const item of items) {
+    if (item.kind !== 'tool') {
+      out.push(item);
+      continue;
+    }
+    if (HIDDEN_TOOLS.has(item.tool)) continue;
+    const call = {
+      tool: item.tool,
+      text: item.text,
+      failed: item.text.startsWith('error:'),
+    };
+    const last = out.at(-1);
+    if (last?.kind === 'tools') last.calls.push(call);
+    else out.push({ kind: 'tools', key: item.key, calls: [call] });
+  }
+  return out;
 }

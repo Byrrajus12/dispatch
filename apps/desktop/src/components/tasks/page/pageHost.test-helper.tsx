@@ -1,11 +1,11 @@
-import type { ApiClient, RunMeta } from '@dispatch/client';
 import type {
   TaskComment,
   TaskDoc,
   TaskListItem,
   UpdatePatch,
-} from '@dispatch/core/browser';
-import { defaultTaskFields } from '@dispatch/core/browser';
+} from '@dispatch-foo/core/browser';
+import { defaultTaskFields } from '@dispatch-foo/core/browser';
+import type { ApiClient, RunMeta } from '@dispatch/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { useState } from 'react';
@@ -93,6 +93,7 @@ export function fakeHost(
     comments = [],
     me = 'human:wyat',
     client: extra = {},
+    project: projectOverrides = {},
   }: {
     tasks: TaskListItem[];
     runs?: RunMeta[];
@@ -101,6 +102,8 @@ export function fakeHost(
     comments?: TaskComment[];
     me?: string;
     client?: Partial<ApiClient>;
+    /** Replaces the fake project's own fields. */
+    project?: Partial<TaskPageProject>;
   }
 ): TaskPageHost {
   const client = {
@@ -119,6 +122,7 @@ export function fakeHost(
     fetchRun: () => pending(),
     fetchRunDiff: () => pending(),
     fetchReviewComments: () => Promise.resolve([]),
+    getTaskPresence: () => pending(),
     ...extra,
   } as unknown as ApiClient;
   const latestRunByTaskId = new Map<string, RunMeta>();
@@ -157,6 +161,7 @@ export function fakeHost(
     },
     handleEnrichTask: () => Promise.resolve(),
     handleDismissEnrich: () => {},
+    ...projectOverrides,
   } as unknown as TaskPageProject;
   return {
     projectName: 'demo',
@@ -177,15 +182,14 @@ export function fakeHost(
 }
 
 const noop = () => {};
-const SHELL: ShellActions = {
+export const SHELL: ShellActions = {
   openTask: noop,
+  openThread: noop,
   peekTask: noop,
   openCreateTask: noop,
   createPreset: null,
   closeCreateTask: noop,
   openPalette: noop,
-  toggleSidebar: noop,
-  sidebarHidden: false,
   openOverseer: noop,
   setProjectView: noop,
   setGlobalView: noop,
@@ -195,9 +199,12 @@ const SHELL: ShellActions = {
 
 export function PageProviders({
   host,
+  shell = SHELL,
   children,
 }: {
   host: TaskPageHost | null;
+  /** Replaces the default shell, whose verbs do nothing. */
+  shell?: ShellActions;
   children: ReactNode;
 }) {
   const [queryClient] = useState(
@@ -206,7 +213,7 @@ export function PageProviders({
   return (
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
-        <ShellActionsProvider value={SHELL}>
+        <ShellActionsProvider value={shell}>
           <TaskPageHostContext.Provider value={host}>
             {children}
           </TaskPageHostContext.Provider>

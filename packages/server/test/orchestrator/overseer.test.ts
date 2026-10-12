@@ -1,5 +1,6 @@
-import { TaskStore, updateConfig } from '@dispatch/core';
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { TaskStore, updateConfig } from '@dispatch-foo/core';
+import type { JsonValue, Message, Sender } from '@dispatch-foo/protocol';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { appendFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,10 +9,20 @@ import { TaskCache } from '../../src/cache.js';
 import { EventBus } from '../../src/events.js';
 import type { ServerEvent } from '../../src/events.js';
 import { LedgerStore } from '../../src/ledger.js';
+import { closeOrphanedGates } from '../../src/messaging/gates.js';
+import {
+  createOverseerBus,
+  ensureOverseerActor,
+  overseerToolMessaging,
+} from '../../src/messaging/overseerBus.js';
+import { openMessaging } from '../../src/messaging/service.js';
 import { FakeExecutor } from '../../src/orchestrator/executors/fake.js';
 import { MergeQueue } from '../../src/orchestrator/mergeQueue.js';
 import { Orchestrator } from '../../src/orchestrator/orchestrator.js';
-import { OverseerManager } from '../../src/orchestrator/overseer.js';
+import {
+  OverseerManager,
+  ROLLOVER_TOKENS,
+} from '../../src/orchestrator/overseer.js';
 import type { OverseerRecord } from '../../src/orchestrator/overseer.js';
 import type {
   OverseerBackend,
@@ -21,17 +32,20 @@ import type {
 } from '../../src/orchestrator/overseerBackend.js';
 import { FakeOverseer } from '../../src/orchestrator/overseers/fake.js';
 import type { FakeOverseerScript } from '../../src/orchestrator/overseers/fake.js';
+import {
+  fileOverseerStore,
+  overseerDir,
+} from '../../src/orchestrator/overseerStore.js';
 import type { OverseerToolContext } from '../../src/orchestrator/overseerTools.js';
 import { OverseerToolRegistry } from '../../src/orchestrator/overseerTools.js';
 import type { CommandResult } from '../../src/orchestrator/pr.js';
-import { QuestionRegistry } from '../../src/orchestrator/questions.js';
 import {
   OrchestratorClientError,
   OrchestratorConflictError,
   OrchestratorNotFoundError,
 } from '../../src/orchestrator/types.js';
 import type { ApprovalDecision } from '../../src/orchestrator/types.js';
-import { initGitRepo } from './helpers.js';
+import { initGitRepo, lateBoundOverseerMessaging } from './helpers.js';
 
 let fakeHome: string;
 let repo: string;
@@ -82,22 +96,22 @@ async function waitFor(check: () => boolean, timeoutMs = 5000): Promise<void> {
 
 // Answers the git/gh invocations the merge queue makes, so no test here
 // depends on a real rebase/push (copied in shape from overseerTools.test.ts).
-const stubRunner = async (
-  _cwd: string,
-  cmd: string[]
-): Promise<CommandResult> => {
+function stubResult(cmd: string[]): CommandResult {
   const ok = { ok: true, stdout: '', stderr: '' };
   if (cmd[0] === 'git' && cmd[1] === 'fetch') return ok;
   if (cmd[0] === 'git' && cmd[1] === 'rebase') return ok;
   if (cmd[0] === 'bash' && cmd[1] === '-lc') return ok;
   if (cmd[0] === 'git' && cmd[1] === 'push') return ok;
   return { ok: false, stdout: '', stderr: 'unhandled stub command' };
-};
+}
+const stubRunner = (_cwd: string, cmd: string[]): Promise<CommandResult> =>
+  Promise.resolve(stubResult(cmd));
 
 interface Harness extends OverseerToolContext {
   registry: OverseerToolRegistry;
   events: EventBus;
   seen: ServerEvent[];
+  lateMessaging: ReturnType<typeof lateBoundOverseerMessaging>;
 }
 
 // A whole project's wiring over a throwaway git repo, assembled the way
@@ -133,16 +147,25 @@ function makeHarness(): Harness {
     stubRunner
   );
   liveQueues.push(mergeQueue);
+  const lateMessaging = lateBoundOverseerMessaging();
   const ctx: OverseerToolContext = {
     store,
     cache,
     orchestrator,
     mergeQueue,
-    questions: new QuestionRegistry(),
+    openGates: () => [],
     ledgerStore: new LedgerStore(repo),
     defaultExecutor: 'fake',
+    messaging: lateMessaging.port,
+    ownerRef: 'human:test',
   };
-  return { ...ctx, registry: new OverseerToolRegistry(ctx), events, seen };
+  return {
+    ...ctx,
+    registry: new OverseerToolRegistry(ctx),
+    events,
+    seen,
+    lateMessaging,
+  };
 }
 
 interface ManagerHarness extends Harness {
@@ -315,30 +338,6 @@ describe('OverseerManager turns', () => {
     expect(record.error).toBe('model unreachable');
   });
 
-  it('rejects a follow-up while a turn is still in flight', async () => {
-    const h = makeManager({ ok: true, reply: 'unused' });
-    // A backend that never settles, so the conversation stays `running`.
-    let release: (() => void) | undefined;
-    const stuck: OverseerBackend = {
-      start: () =>
-        new Promise<OverseerTurn>((resolve) => {
-          release = () => resolve({ reply: 'done' });
-        }),
-      sendMessage: async () => ({ reply: 'done' }),
-    };
-    h.manager.registerBackend('stuck', stuck);
-
-    const started = h.manager.start('hello', 'stuck');
-    expect(() => h.manager.sendMessage(started.id, 'and also')).toThrow(
-      OrchestratorConflictError
-    );
-
-    release?.();
-    await waitFor(() => h.manager.get(started.id).state === 'ready');
-    // Idle again — the same follow-up is now accepted.
-    expect(h.manager.sendMessage(started.id, 'and also').state).toBe('running');
-  });
-
   it('resumes the prior session on a follow-up and keeps the whole transcript', async () => {
     const h = makeManager({
       ok: true,
@@ -363,11 +362,11 @@ describe('OverseerManager turns', () => {
     const h = makeManager({ ok: true, reply: 'ok' });
     let offered: OverseerToolset | undefined;
     h.manager.registerBackend('spy', {
-      start: async (_prompt, toolset) => {
+      start: (_prompt, toolset) => {
         offered = toolset;
-        return { reply: 'ok' };
+        return Promise.resolve({ reply: 'ok' });
       },
-      sendMessage: async () => ({ reply: 'ok' }),
+      sendMessage: () => Promise.resolve({ reply: 'ok' }),
     });
 
     const started = h.manager.start('hi', 'spy');
@@ -386,10 +385,16 @@ describe('OverseerManager turns', () => {
     expect(mutating).toEqual([
       'approve_run',
       'cancel_run',
+      'create_plan',
+      'create_task',
       'deny_run',
       'dequeue_merge',
+      'discard_run',
       'dispatch_task',
       'message_run',
+      'queue_merge',
+      'send_as_you',
+      'update_task',
     ]);
   });
 
@@ -645,7 +650,11 @@ class GatedBackend implements OverseerBackend {
   options: OverseerTurnOptions | undefined;
 
   constructor(
-    private readonly calls: { toolName: string; input: unknown }[],
+    private readonly calls: {
+      toolName: string;
+      input: unknown;
+      check?: string;
+    }[],
     private readonly reply = 'done'
   ) {}
 
@@ -676,6 +685,7 @@ class GatedBackend implements OverseerBackend {
         requestId: `req-${n}`,
         toolName: call.toolName,
         input: call.input,
+        ...(call.check === undefined ? {} : { check: call.check }),
       })) ?? { allow: false };
       this.decisions.push({ toolName: call.toolName, ...decision });
     }
@@ -684,7 +694,7 @@ class GatedBackend implements OverseerBackend {
 }
 
 function makeGated(
-  calls: { toolName: string; input: unknown }[]
+  calls: { toolName: string; input: unknown; check?: string }[]
 ): ManagerHarness & { gated: GatedBackend } {
   const h = makeManager({ ok: true, reply: 'unused' });
   const gated = new GatedBackend(calls);
@@ -783,9 +793,74 @@ describe('OverseerManager built-in tool gate', () => {
       h.manager
         .get(started.id)
         .messages.find((m) => m.role === 'approval' && m.outcome === 'allowed')
-    ).toMatchObject({ text: 'Allowed for this conversation: Bash: ls' });
+    ).toMatchObject({
+      text: 'Allowed Bash program "ls" for this conversation (up to 4 hours): Bash: ls',
+    });
     h.manager.decideApproval(started.id, 'req-3', { allow: false });
     await waitFor(() => h.manager.get(started.id).state === 'ready');
+  });
+
+  it('a Bash grant covers its own program, not another', async () => {
+    const h = makeGated([
+      { toolName: 'Bash', input: { command: 'moonx desktop:test' } },
+      { toolName: 'Bash', input: { command: 'rm -rf build' } },
+    ]);
+    const started = h.manager.start('test it', 'gated');
+    await waitFor(() => h.manager.get(started.id).pendingApprovals.length > 0);
+    h.manager.decideApproval(started.id, 'req-1', {
+      allow: true,
+      scope: 'session',
+    });
+    // `rm` is another program, so it parks for a human.
+    await waitFor(
+      () => h.manager.get(started.id).pendingApprovals[0]?.requestId === 'req-2'
+    );
+    expect(h.manager.listGrants(started.id).map((g) => g.key)).toEqual([
+      'Bash program "moonx"',
+    ]);
+    h.manager.decideApproval(started.id, 'req-2', { allow: false });
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+  });
+
+  it('a held call always asks, and a session answer to it grants nothing', async () => {
+    const h = makeGated([
+      {
+        toolName: 'Bash',
+        input: { command: 'dispatch task list' },
+        check: 'dispatch-cli',
+      },
+      {
+        toolName: 'Bash',
+        input: { command: 'dispatch task list' },
+        check: 'dispatch-cli',
+      },
+    ]);
+    const started = h.manager.start('list tasks', 'gated');
+    await waitFor(() => h.manager.get(started.id).pendingApprovals.length > 0);
+    expect(h.manager.get(started.id).pendingApprovals[0]?.held).toBe(true);
+    h.manager.decideApproval(started.id, 'req-1', {
+      allow: true,
+      scope: 'session',
+    });
+    await waitFor(
+      () => h.manager.get(started.id).pendingApprovals[0]?.requestId === 'req-2'
+    );
+    expect(h.manager.listGrants(started.id)).toEqual([]);
+    h.manager.decideApproval(started.id, 'req-2', { allow: false });
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+  });
+
+  it('a revoked grant asks again', async () => {
+    const h = makeGated([{ toolName: 'Edit', input: { file_path: 'a.ts' } }]);
+    const started = h.manager.start('edit', 'gated');
+    await waitFor(() => h.manager.get(started.id).pendingApprovals.length > 0);
+    h.manager.decideApproval(started.id, 'req-1', {
+      allow: true,
+      scope: 'session',
+    });
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(h.manager.revokeGrant(started.id, 'Edit')).toBe(true);
+    expect(h.manager.listGrants(started.id)).toEqual([]);
   });
 
   it('never lets a session grant or acceptEdits wave an irreversible command through', async () => {
@@ -912,6 +987,31 @@ describe('OverseerManager turn options', () => {
     expect(h.gated.options?.model).toBe('claude-fable-5-1');
   });
 
+  it('changes model and effort for the next turns, and null restores the default', async () => {
+    updateConfig(repo, { models: { overseer: 'claude-haiku-4-5' } });
+    const h = makeGated([]);
+    const started = h.manager.start('hi', 'gated', 'claude-fable-5-1');
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+
+    const changed = h.manager.setOptions(started.id, {
+      model: 'claude-sonnet-5',
+      effort: 'high',
+    });
+    expect(changed).toMatchObject({ model: 'claude-sonnet-5', effort: 'high' });
+    h.manager.sendMessage(started.id, 'next');
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(h.gated.options).toMatchObject({
+      model: 'claude-sonnet-5',
+      effort: 'high',
+    });
+
+    h.manager.setOptions(started.id, { model: null, effort: null });
+    h.manager.sendMessage(started.id, 'again');
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(h.gated.options?.model).toBe('claude-haiku-4-5');
+    expect(h.gated.options?.effort).toBeUndefined();
+  });
+
   it('sends no effort by default, then config effort.overseer, and a chosen effort wins', async () => {
     const h = makeGated([]);
     const plain = h.manager.start('hi', 'gated');
@@ -930,5 +1030,879 @@ describe('OverseerManager turn options', () => {
     expect(chosen.effort).toBe('max');
     await waitFor(() => h.manager.get(chosen.id).state === 'ready');
     expect(h.gated.options?.effort).toBe('max');
+  });
+});
+
+describe('OverseerManager backend choice', () => {
+  it('opens a conversation with no backend named on the default agent', async () => {
+    const h = makeManager({ ok: true, reply: 'unused' });
+    h.manager.registerBackend('claude', new GatedBackend([]));
+    h.manager.registerBackend('codex', new GatedBackend([]));
+
+    const onClaude = h.manager.start('hi');
+    expect(onClaude.backendName).toBe('claude');
+    await waitFor(() => h.manager.get(onClaude.id).state === 'ready');
+
+    updateConfig(repo, { executor: 'codex' });
+    const onCodex = h.manager.start('hi');
+    expect(onCodex.backendName).toBe('codex');
+    await waitFor(() => h.manager.get(onCodex.id).state === 'ready');
+  });
+
+  it('a Codex conversation never runs on a Claude model', async () => {
+    updateConfig(repo, {
+      models: { overseer: 'claude-fable-5-1' },
+      executors: { codex: { models: { execute: 'gpt-5.5' } } },
+    });
+    const h = makeManager({ ok: true, reply: 'unused' });
+    const codex = new GatedBackend([]);
+    h.manager.registerBackend('codex', codex);
+
+    const started = h.manager.start('hi', 'codex', 'claude-opus-5-5');
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(started.model).toBe('claude-opus-5-5');
+    expect(codex.options?.model).toBe('gpt-5.5');
+  });
+});
+
+describe('overseer on the bus', () => {
+  const WYAT: Sender = { address: 'human:wyat', canDecide: true };
+
+  const gateOfType = (m: Message) =>
+    (m.data as { type?: string } | undefined)?.type;
+
+  // Messaging and an overseer manager on it, wired the way index.ts wires them.
+  async function openBus(base: Harness, backend: OverseerBackend) {
+    const messaging = openMessaging({
+      rootDir: repo,
+      orchestrator: base.orchestrator,
+      store: base.store,
+      events: base.events,
+      ownerRef: 'human:wyat',
+      dbPath: join(repo, 'messages.db'),
+    });
+    await messaging.recover();
+    base.lateMessaging.bind(overseerToolMessaging(messaging.engine));
+    ensureOverseerActor(
+      messaging.store,
+      'agent:wyat/overseer',
+      new Date().toISOString()
+    );
+    const manager = new OverseerManager({
+      rootDir: repo,
+      registry: base.registry,
+      events: base.events,
+      bus: createOverseerBus(messaging.engine, messaging.store, {
+        owner: 'human:wyat',
+        overseer: 'agent:wyat/overseer',
+      }),
+    });
+    manager.registerBackend('fake', backend);
+    messaging.bindOverseer(manager);
+    return { messaging, manager };
+  }
+
+  async function busHarness(
+    title = 'Ship the thing',
+    speaker: Sender | null = WYAT
+  ) {
+    const base = makeHarness();
+    const taskId = makeTask(base, title);
+    const backend = new FakeOverseer({
+      ok: true,
+      turns: [
+        {
+          calls: [{ tool: 'dispatch_task', input: { taskId } }],
+          reply: 'queued it for you',
+        },
+        { reply: 'anything else?' },
+      ],
+    });
+    const { messaging, manager } = await openBus(base, backend);
+    const started = manager.start(
+      'dispatch it',
+      'fake',
+      undefined,
+      undefined,
+      speaker
+    );
+    await waitFor(() => manager.get(started.id).state !== 'running');
+    return {
+      base,
+      taskId,
+      messaging,
+      manager,
+      record: manager.get(started.id),
+    };
+  }
+
+  it('keeps the conversation as a thread and tags the record entries with message ids', async () => {
+    const { messaging, manager, record } = await busHarness();
+    await waitFor(() =>
+      manager
+        .get(record.id)
+        .messages.some(
+          (m) => m.role === 'assistant' && m.messageId !== undefined
+        )
+    );
+    const current = manager.get(record.id);
+    expect(current.thread).toBeDefined();
+    const thread = messaging.engine.thread(current.thread ?? '').messages;
+    expect(thread.map((m) => [m.from, m.body])).toEqual([
+      ['human:wyat', 'dispatch it'],
+      ['agent:wyat/overseer', 'queued it for you'],
+    ]);
+    expect(current.messages[0].messageId).toBe(thread[0].id);
+    // The manager consumed the human's line, so it never waits in a mailbox.
+    expect(
+      messaging.engine.inbox('agent:wyat/overseer').map((i) => i.delivery.state)
+    ).toEqual(['read']);
+    messaging.close();
+  });
+
+  it('turns a queued action into a gate, and confirming it applies the action once', async () => {
+    const { base, messaging, record } = await busHarness();
+    const gate = messaging.engine
+      .openBlocking()
+      .find((m) => gateOfType(m) === 'overseer-action');
+    expect(gate?.data).toMatchObject({
+      conversation: record.id,
+      actionId: record.pendingActions[0].id,
+    });
+    expect(gate?.choices).toEqual(['confirm', 'cancel']);
+    await messaging.engine.reply(
+      gate?.id ?? '',
+      { body: '', choice: 'confirm' },
+      { address: 'human:wyat', canDecide: true }
+    );
+    expect(base.orchestrator.list()).toHaveLength(1);
+    if (gate !== undefined) {
+      const answer = messaging.engine.answerOf(gate.id);
+      // A replay is a no-op.
+      if (answer !== null) await messaging.gates.handle(gate, answer);
+    }
+    expect(base.orchestrator.list()).toHaveLength(1);
+    for (const run of base.orchestrator.list())
+      await base.orchestrator.cancel(run.id).catch(() => {});
+    messaging.close();
+  });
+
+  it('closes the action gate when the action is decided another way', async () => {
+    const { messaging, manager, record } = await busHarness();
+    const gate = messaging.engine
+      .openBlocking()
+      .find((m) => gateOfType(m) === 'overseer-action');
+    if (gate === undefined) throw new Error('no overseer-action gate');
+    await manager.confirmAction(
+      record.id,
+      record.pendingActions[0].id,
+      false,
+      'human:wyat'
+    );
+    expect(messaging.engine.answerOf(gate.id)?.data).toMatchObject({
+      type: 'x-closed',
+    });
+    messaging.close();
+  });
+
+  // A queued cancel whose run is then cancelled out from under it, so applying
+  // the action conflicts.
+  async function failingCancel() {
+    const base = makeHarness();
+    const taskId = makeTask(base, 'Long one');
+    const meta = await base.orchestrator.dispatch(taskId, 'slow');
+    const { messaging, manager } = await openBus(
+      base,
+      new FakeOverseer({
+        ok: true,
+        calls: [{ tool: 'cancel_run', input: { runId: meta.id } }],
+        reply: 'queued a cancel',
+      })
+    );
+    const started = manager.start(
+      'cancel it',
+      'fake',
+      undefined,
+      undefined,
+      WYAT
+    );
+    await waitFor(() => manager.get(started.id).state !== 'running');
+    await base.orchestrator.cancel(meta.id);
+    const gate = messaging.engine
+      .openBlocking()
+      .find((m) => gateOfType(m) === 'overseer-action');
+    if (gate === undefined) throw new Error('no overseer-action gate');
+    return { messaging, manager, record: manager.get(started.id), gate };
+  }
+
+  it('re-raises the action gate with the error when applying it fails', async () => {
+    const { messaging, manager, record, gate } = await failingCancel();
+
+    await messaging.engine.reply(
+      gate.id,
+      { body: '', choice: 'confirm' },
+      WYAT
+    );
+
+    const again = messaging.engine
+      .openBlocking()
+      .filter((m) => gateOfType(m) === 'overseer-action');
+    expect(again).toHaveLength(1);
+    expect(again[0].id).not.toBe(gate.id);
+    expect(again[0].body).toContain('(the last attempt failed: ');
+    expect(manager.get(record.id).pendingActions).toHaveLength(1);
+    messaging.close();
+  });
+
+  it('a failed confirm made directly replaces the open gate rather than adding one', async () => {
+    const { messaging, manager, record, gate } = await failingCancel();
+
+    await expect(
+      manager.confirmAction(
+        record.id,
+        record.pendingActions[0].id,
+        true,
+        'human:wyat'
+      )
+    ).rejects.toThrow();
+
+    const open = messaging.engine
+      .openBlocking()
+      .filter((m) => gateOfType(m) === 'overseer-action');
+    expect(open.map((m) => m.id)).not.toContain(gate.id);
+    expect(open).toHaveLength(1);
+    expect(open[0].body).toContain('(the last attempt failed: ');
+    messaging.close();
+  });
+
+  it('the boot sweep closes conversation gates, since conversations do not survive a restart', async () => {
+    const { messaging } = await busHarness();
+    expect(
+      closeOrphanedGates(messaging.engine, {
+        isRunLive: () => false,
+        taskIdOfRun: () => null,
+      })
+    ).toBeGreaterThan(0);
+    expect(
+      messaging.engine
+        .openBlocking()
+        .filter((m) => gateOfType(m) === 'overseer-action')
+    ).toEqual([]);
+    messaging.close();
+  });
+
+  it('a turn with no human speaker runs but puts nothing on the bus', async () => {
+    const { messaging, manager, record } = await busHarness(
+      'Ship the thing',
+      null
+    );
+    expect(
+      manager.get(record.id).messages.some((m) => m.role === 'assistant')
+    ).toBe(true);
+    expect(manager.get(record.id).thread).toBeUndefined();
+    expect(
+      messaging.engine
+        .inbox('human:wyat')
+        .filter((i) => i.message.from === 'agent:wyat/overseer')
+    ).toEqual([]);
+    messaging.close();
+  });
+
+  it('a revoked overseer refuses new messages until it is approved again', async () => {
+    const { messaging, manager, record } = await busHarness();
+    const agent = messaging.store.getAgent('agent:wyat/overseer');
+    if (agent !== null)
+      messaging.store.putAgent({
+        ...agent,
+        status: 'revoked',
+        approvedBy: null,
+      });
+    expect(() => manager.sendMessage(record.id, 'still there?', WYAT)).toThrow(
+      OrchestratorConflictError
+    );
+    let refused: OrchestratorConflictError | undefined;
+    try {
+      manager.sendMessage(record.id, 'still there?', WYAT);
+    } catch (err) {
+      refused = err as OrchestratorConflictError;
+    }
+    expect(refused?.message).toBe('the overseer is revoked');
+    expect(refused?.code).toBe('overseer_revoked');
+    // Only a caller who can turn it back on is told how (the router decides).
+    expect(refused?.operatorHint).toBe(
+      'approve agent:wyat/overseer in Settings → Connected agents to use it again'
+    );
+    ensureOverseerActor(
+      messaging.store,
+      'agent:wyat/overseer',
+      new Date().toISOString()
+    );
+    // A restart does not re-approve.
+    expect(messaging.store.getAgent('agent:wyat/overseer')?.status).toBe(
+      'revoked'
+    );
+    messaging.close();
+  });
+
+  it('an overseer whose record is pending, not approved, stays off', async () => {
+    const { messaging, manager, record } = await busHarness();
+    const agent = messaging.store.getAgent('agent:wyat/overseer');
+    if (agent === null) throw new Error('no overseer record');
+    messaging.store.putAgent({ ...agent, status: 'pending', approvedBy: null });
+    expect(() => manager.sendMessage(record.id, 'still there?', WYAT)).toThrow(
+      OrchestratorConflictError
+    );
+    expect(() =>
+      manager.start('hello', 'fake', undefined, undefined, WYAT)
+    ).toThrow(OrchestratorConflictError);
+    messaging.close();
+  });
+
+  it('a human line the bus refuses gets no reply on the bus either', async () => {
+    const base = makeHarness();
+    const { messaging, manager } = await openBus(
+      base,
+      new FakeOverseer({ ok: true, reply: 'hi' })
+    );
+    // The turn is over and its reply has landed on the bus.
+    const tagged = (id: string) =>
+      manager.get(id).state !== 'running' &&
+      manager.get(id).messages.at(-1)?.messageId !== undefined;
+    const started = manager.start('hello', 'fake', undefined, undefined, WYAT);
+    await waitFor(() => tagged(started.id));
+
+    // A request-tier teammate is no participant of the owner's thread.
+    const ALICE: Sender = { address: 'human:alice', canDecide: false };
+    manager.sendMessage(started.id, 'hello from alice', ALICE);
+    await waitFor(() => manager.get(started.id).state !== 'running');
+    // Posts land in order, so once this turn is tagged alice's have settled.
+    manager.sendMessage(started.id, 'and now?', WYAT);
+    await waitFor(() => tagged(started.id));
+
+    const current = manager.get(started.id);
+    const thread = messaging.engine.thread(current.thread ?? '').messages;
+    expect(thread.map((m) => [m.from, m.to, m.body])).toEqual([
+      ['human:wyat', ['agent:wyat/overseer'], 'hello'],
+      ['agent:wyat/overseer', ['human:wyat'], 'hi'],
+      ['human:wyat', ['agent:wyat/overseer'], 'and now?'],
+      ['agent:wyat/overseer', ['human:wyat'], 'hi'],
+    ]);
+    expect(
+      current.messages.slice(2, 4).map((m) => [m.role, m.text, m.messageId])
+    ).toEqual([
+      ['user', 'hello from alice', undefined],
+      ['assistant', 'hi', undefined],
+    ]);
+    messaging.close();
+  });
+
+  it('an answer to a gate whose conversation is gone is marked applied and the answerer told', async () => {
+    const { messaging } = await busHarness();
+    const gate = messaging.engine
+      .openBlocking()
+      .find((m) => gateOfType(m) === 'overseer-action');
+    if (gate === undefined) throw new Error('no overseer-action gate');
+    const orphan: Message = {
+      ...gate,
+      data: { ...(gate.data as object), conversation: 'wc-gone' } as JsonValue,
+    };
+    const answer: Message = {
+      ...gate,
+      id: 'm-conf',
+      replyTo: gate.id,
+      kind: 'answer',
+      from: 'human:wyat',
+      to: ['agent:dispatch'],
+      blocking: false,
+      choice: 'confirm',
+    };
+    await expect(
+      messaging.gates.handle(orphan, answer)
+    ).resolves.toBeUndefined();
+    const notices = messaging.engine
+      .inbox('human:wyat')
+      .filter((i) => i.message.kind === 'notice');
+    expect(notices.map((i) => i.message.body)).toEqual([
+      'Not applied: overseer conversation wc-gone is gone (the daemon restarted).',
+    ]);
+    messaging.close();
+  });
+
+  it('asks about a parked built-in call through a tool-approval gate', async () => {
+    const base = makeHarness();
+    const gated = new GatedBackend([
+      { toolName: 'Bash', input: { command: 'git status' } },
+    ]);
+    const { messaging, manager } = await openBus(base, gated);
+    const started = manager.start(
+      'what changed?',
+      'fake',
+      undefined,
+      undefined,
+      WYAT
+    );
+    await waitFor(() =>
+      messaging.engine
+        .openBlocking()
+        .some((m) => gateOfType(m) === 'tool-approval')
+    );
+    const gate = messaging.engine
+      .openBlocking()
+      .find((m) => gateOfType(m) === 'tool-approval');
+    expect(gate?.data).toEqual({
+      type: 'tool-approval',
+      requestId: 'req-1',
+      conversation: started.id,
+      tool: 'Bash',
+      input: { command: 'git status' },
+      floor: false,
+    });
+    expect(gate?.choices).toEqual(['approve', 'approve-session', 'deny']);
+
+    await messaging.engine.reply(
+      gate?.id ?? '',
+      { body: '', choice: 'approve-session' },
+      WYAT
+    );
+    await waitFor(() => manager.get(started.id).state === 'ready');
+    expect(gated.decisions).toEqual([
+      { toolName: 'Bash', allow: true, scope: 'session' },
+    ]);
+    messaging.close();
+  });
+
+  it('denies a parked built-in call whose gate cannot be written', async () => {
+    const base = makeHarness();
+    const gated = new GatedBackend([
+      { toolName: 'Bash', input: { command: 'git status' } },
+    ]);
+    const { messaging, manager } = await openBus(base, gated);
+    const send = messaging.engine.send.bind(messaging.engine);
+    spyOn(messaging.engine, 'send').mockImplementation((input, sender) =>
+      (input.data as { type?: string } | undefined)?.type === 'tool-approval'
+        ? Promise.reject(new Error('disk full'))
+        : send(input, sender)
+    );
+    const started = manager.start('hi', 'fake', undefined, undefined, WYAT);
+    await waitFor(() => manager.get(started.id).state === 'ready');
+    expect(gated.decisions).toEqual([
+      {
+        toolName: 'Bash',
+        allow: false,
+        reason: 'Dispatch could not ask a human: disk full',
+      },
+    ]);
+    messaging.close();
+  });
+
+  it('closes the tool-approval gate of a call its turn stopped waiting on', async () => {
+    const base = makeHarness();
+    const dying: OverseerBackend = {
+      start: async (_prompt, _toolset, options) => {
+        void options?.authorizeTool?.({
+          requestId: 'req-x',
+          toolName: 'Bash',
+          input: { command: 'ls' },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        throw new Error('session crashed');
+      },
+      sendMessage: () => Promise.reject(new Error('unused')),
+    };
+    const { messaging, manager } = await openBus(base, dying);
+    const started = manager.start('hi', 'fake', undefined, undefined, WYAT);
+    await waitFor(() => manager.get(started.id).state === 'failed');
+    const gate = messaging.engine
+      .inbox('human:wyat')
+      .find((i) => gateOfType(i.message) === 'tool-approval')?.message;
+    if (gate === undefined) throw new Error('no tool-approval gate');
+    await waitFor(() => messaging.engine.answerOf(gate.id) !== null);
+    expect(messaging.engine.answerOf(gate.id)?.data).toMatchObject({
+      type: 'x-closed',
+    });
+    messaging.close();
+  });
+});
+
+describe('an answer pinned to its card', () => {
+  it('refuses an answer whose card named a different tool', async () => {
+    const h = makeGated([{ toolName: 'Bash', input: { command: 'ls' } }]);
+    const started = h.manager.start('look', 'gated');
+    await waitFor(() => h.manager.get(started.id).pendingApprovals.length > 0);
+    expect(() =>
+      h.manager.decideApproval(started.id, 'req-1', { allow: true }, 'Edit')
+    ).toThrow('waiting on Bash');
+    // The call is still parked for the right card.
+    expect(h.manager.get(started.id).pendingApprovals[0]?.requestId).toBe(
+      'req-1'
+    );
+    h.manager.decideApproval(started.id, 'req-1', { allow: false }, 'Bash');
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One durable conversation: persistence, Stop, the queue, rollover, spend
+// ---------------------------------------------------------------------------
+
+// A backend whose turns end when the test says, or when Stop aborts them.
+class HeldBackend implements OverseerBackend {
+  readonly prompts: string[] = [];
+  readonly resumed: (string | undefined)[] = [];
+  private finish: ((turn: OverseerTurn) => void) | null = null;
+
+  start(
+    prompt: string,
+    _toolset: OverseerToolset,
+    options?: OverseerTurnOptions
+  ): Promise<OverseerTurn> {
+    return this.turn(undefined, prompt, options);
+  }
+
+  sendMessage(
+    sessionId: string | undefined,
+    message: string,
+    _toolset: OverseerToolset,
+    options?: OverseerTurnOptions
+  ): Promise<OverseerTurn> {
+    return this.turn(sessionId, message, options);
+  }
+
+  // Ends the turn in flight with this reply.
+  settle(turn: Partial<OverseerTurn> = {}): void {
+    const finish = this.finish;
+    this.finish = null;
+    finish?.({ reply: 'ok', sessionId: 's-1', ...turn });
+  }
+
+  private turn(
+    sessionId: string | undefined,
+    prompt: string,
+    options?: OverseerTurnOptions
+  ): Promise<OverseerTurn> {
+    this.resumed.push(sessionId);
+    this.prompts.push(prompt);
+    return new Promise((resolve, reject) => {
+      this.finish = resolve;
+      options?.abortController?.signal.addEventListener('abort', () =>
+        reject(new Error('aborted'))
+      );
+    });
+  }
+}
+
+function heldManager(store = fileOverseerStore(overseerDir(repo))) {
+  const h = makeHarness();
+  const backend = new HeldBackend();
+  const manager = new OverseerManager({
+    rootDir: repo,
+    registry: h.registry,
+    events: h.events,
+    store,
+  });
+  manager.registerBackend('held', backend);
+  return { ...h, manager, backend, store };
+}
+
+describe('one durable conversation', () => {
+  it('survives the daemon: a settled conversation loads back whole', async () => {
+    const h = heldManager();
+    const started = h.manager.start('hello', 'held');
+    h.backend.settle({ reply: 'hi', costUsd: 0.25 });
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+
+    const again = heldManager(h.store);
+    const loaded = again.manager.get(started.id);
+    expect(loaded.state).toBe('ready');
+    expect(loaded.messages.map((m) => m.text)).toEqual(['hello', 'hi']);
+    expect(loaded.spendUsd).toBe(0.25);
+    expect(loaded.messages[1].costUsd).toBe(0.25);
+  });
+
+  it('a turn the daemon died in loads as failed, behind a restarted notice', () => {
+    const h = heldManager();
+    const started = h.manager.start('hello', 'held');
+
+    const again = heldManager(h.store);
+    const loaded = again.manager.get(started.id);
+    expect(loaded.state).toBe('failed');
+    expect(loaded.pendingApprovals).toEqual([]);
+    expect(loaded.messages.at(-1)).toMatchObject({
+      role: 'notice',
+      notice: 'restarted',
+    });
+  });
+
+  it('daemon shutdown aborts the running turn and leaves it for the next boot', async () => {
+    const h = heldManager();
+    const started = h.manager.start('do a long thing', 'held');
+    h.manager.shutdown();
+    await tick();
+    // The backend saw the abort (its child dies with the daemon), but nothing
+    // is written past shutdown: the next boot marks the turn restarted.
+    expect(h.manager.get(started.id).state).toBe('running');
+    const again = heldManager(h.store);
+    expect(again.manager.get(started.id).messages.at(-1)).toMatchObject({
+      notice: 'restarted',
+    });
+  });
+
+  it('Stop ends the turn as stopped, not failed', async () => {
+    const h = heldManager();
+    const started = h.manager.start('do a long thing', 'held');
+    h.manager.stop(started.id);
+    await waitFor(() => h.manager.get(started.id).state !== 'running');
+    const record = h.manager.get(started.id);
+    expect(record.state).toBe('ready');
+    expect(record.error).toBeUndefined();
+    expect(record.messages.at(-1)).toMatchObject({
+      role: 'notice',
+      notice: 'stopped',
+    });
+  });
+
+  it('a message typed mid-turn queues, then goes out when the turn ends', async () => {
+    const h = heldManager();
+    const started = h.manager.start('first', 'held');
+    const queued = h.manager.sendMessage(started.id, 'and also this');
+    expect(queued.state).toBe('running');
+    expect(queued.queued?.map((q) => q.text)).toEqual(['and also this']);
+    expect(queued.messages.map((m) => m.text)).toEqual(['first']);
+
+    h.backend.settle();
+    await waitFor(() => h.backend.prompts.length === 2);
+    expect(h.backend.prompts[1]).toBe('and also this');
+    const record = h.manager.get(started.id);
+    expect(record.state).toBe('running');
+    expect(record.queued).toEqual([]);
+    expect(record.messages.map((m) => m.text)).toEqual([
+      'first',
+      'ok',
+      'and also this',
+    ]);
+  });
+
+  it('after Stop, the queue waits and goes out with the next message', async () => {
+    const h = heldManager();
+    const started = h.manager.start('first', 'held');
+    h.manager.sendMessage(started.id, 'queued one');
+    h.manager.stop(started.id);
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(h.backend.prompts).toHaveLength(1);
+
+    h.manager.sendMessage(started.id, 'now this');
+    expect(h.backend.prompts[1]).toBe('queued one\n\nnow this');
+  });
+
+  it('an edited queued message goes out as edited, a removed one not at all', async () => {
+    const h = heldManager();
+    const started = h.manager.start('first', 'held');
+    h.manager.sendMessage(started.id, 'teh typo');
+    const queued = h.manager.sendMessage(started.id, 'never mind this');
+    const [typo, drop] = queued.queued ?? [];
+    expect(typo.id).not.toBe(drop.id);
+
+    h.manager.editQueued(started.id, typo.id, 'the fix');
+    const after = h.manager.removeQueued(started.id, drop.id);
+    expect(after.queued?.map((q) => q.text)).toEqual(['the fix']);
+    // Nothing reaches the agent before the turn ends.
+    expect(h.backend.prompts).toEqual(['first']);
+
+    h.backend.settle();
+    await waitFor(() => h.backend.prompts.length === 2);
+    expect(h.backend.prompts[1]).toBe('the fix');
+    expect(h.manager.get(started.id).messages.map((m) => m.text)).toEqual([
+      'first',
+      'ok',
+      'the fix',
+    ]);
+  });
+
+  it('a queue emptied by removes sends nothing when the turn ends', async () => {
+    const h = heldManager();
+    const started = h.manager.start('first', 'held');
+    const queued = h.manager.sendMessage(started.id, 'one');
+    h.manager.removeQueued(started.id, queued.queued?.[0].id ?? '');
+
+    h.backend.settle();
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    await tick();
+    expect(h.backend.prompts).toEqual(['first']);
+    expect(h.manager.get(started.id).messages.map((m) => m.text)).toEqual([
+      'first',
+      'ok',
+    ]);
+  });
+
+  it('an edit or remove after the queue went out is a 409, an unknown id a 404', async () => {
+    const h = heldManager();
+    const started = h.manager.start('first', 'held');
+    const entry = h.manager.sendMessage(started.id, 'late').queued?.[0];
+    h.backend.settle();
+    await waitFor(() => h.backend.prompts.length === 2);
+
+    expect(() =>
+      h.manager.editQueued(started.id, entry?.id ?? '', 'too late')
+    ).toThrow(OrchestratorConflictError);
+    expect(() => h.manager.removeQueued(started.id, entry?.id ?? '')).toThrow(
+      /already sent/
+    );
+    expect(() => h.manager.editQueued(started.id, 'q-nope', 'x')).toThrow(
+      OrchestratorNotFoundError
+    );
+    expect(h.backend.prompts[1]).toBe('late');
+  });
+
+  it('a message left waiting behind a slash command keeps its id', async () => {
+    const h = heldManager();
+    const started = h.manager.start('first', 'held');
+    h.manager.sendMessage(started.id, '/compact');
+    const after = h.manager.sendMessage(started.id, 'then this').queued?.[1];
+
+    h.backend.settle();
+    await waitFor(() => h.backend.prompts.length === 2);
+    expect(h.backend.prompts[1]).toBe('/compact');
+    expect(h.manager.get(started.id).queued).toEqual([after!]);
+    h.manager.editQueued(started.id, after?.id ?? '', 'then that');
+
+    h.backend.settle();
+    await waitFor(() => h.backend.prompts.length === 3);
+    expect(h.backend.prompts[2]).toBe('then that');
+  });
+
+  it('a queue saved without ids gets them on load', () => {
+    const h = heldManager();
+    const started = h.manager.start('first', 'held');
+    h.store.save({
+      ...h.manager.get(started.id),
+      state: 'ready',
+      queued: [{ text: 'old', at: started.createdAt }],
+    } as unknown as OverseerRecord);
+    const again = heldManager(h.store);
+    const entry = again.manager.get(started.id).queued?.[0];
+    expect(entry?.id).toMatch(/^q-/);
+    again.manager.editQueued(started.id, entry?.id ?? '', 'renewed');
+    expect(again.manager.get(started.id).queued?.[0].text).toBe('renewed');
+  });
+
+  it('a full context rolls over: fresh session, recap, divider, grants gone', async () => {
+    const h = heldManager();
+    const started = h.manager.start('first', 'held');
+    h.backend.settle({ reply: 'answer one', contextTokens: ROLLOVER_TOKENS });
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+
+    h.manager.sendMessage(started.id, 'next');
+    expect(h.backend.resumed[1]).toBeUndefined();
+    expect(h.backend.prompts[1]).toContain('Human: first');
+    expect(h.backend.prompts[1]).toContain('You: answer one');
+    expect(h.backend.prompts[1].endsWith('next')).toBe(true);
+    const record = h.manager.get(started.id);
+    expect(record.messages.at(-2)).toMatchObject({
+      role: 'notice',
+      notice: 'rollover',
+    });
+  });
+
+  it('under the threshold the session resumes', async () => {
+    const h = heldManager();
+    const started = h.manager.start('first', 'held');
+    h.backend.settle({ contextTokens: ROLLOVER_TOKENS - 1 });
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    h.manager.sendMessage(started.id, 'next');
+    expect(h.backend.resumed[1]).toBe('s-1');
+    expect(h.backend.prompts[1]).toBe('next');
+  });
+
+  it('current is the newest conversation its owner opened', () => {
+    const h = heldManager();
+    const ada: Sender = { address: 'human:ada', canDecide: true };
+    const bo: Sender = { address: 'human:bo', canDecide: true };
+    h.manager.start('ada one', 'held', undefined, undefined, ada);
+    h.manager.start('bo one', 'held', undefined, undefined, bo);
+    expect(h.manager.current('human:ada')?.prompt).toBe('ada one');
+    expect(h.manager.current('human:bo')?.prompt).toBe('bo one');
+    expect(h.manager.current('human:cy')).toBeUndefined();
+  });
+});
+
+describe('a conversation reads as its owner', () => {
+  it('hands the owner to a status tool and keeps its words out of the transcript', async () => {
+    const h = makeHarness();
+    let seenOwner: string | undefined;
+    h.lateMessaging.bind({
+      answerRunApproval: () => Promise.resolve(),
+      sendAsHuman: () => Promise.resolve(),
+      readAs: (reader) => {
+        seenOwner = reader;
+        return [];
+      },
+    });
+    const backend = new FakeOverseer({
+      ok: true,
+      calls: [{ tool: 'read_conversation', input: { with: 'human:sam' } }],
+      reply: 'nothing new',
+    });
+    const manager = new OverseerManager({
+      rootDir: repo,
+      registry: h.registry,
+      events: h.events,
+    });
+    manager.registerBackend('fake', backend);
+    const started = manager.start(
+      'any news from sam?',
+      'fake',
+      undefined,
+      undefined,
+      {
+        address: 'human:wyat',
+        canDecide: true,
+      }
+    );
+    await waitFor(() => manager.get(started.id).state !== 'running');
+    expect(seenOwner).toBe('human:wyat');
+    expect(
+      manager.get(started.id).messages.find((m) => m.role === 'tool')?.text
+    ).toBe('read 0 messages (kept out of this transcript)');
+  });
+});
+
+describe('slash commands', () => {
+  it('go to the session verbatim, keeping undelivered decisions for later', async () => {
+    const h = heldManager();
+    const started = h.manager.start('first', 'held');
+    h.backend.settle({
+      commands: [{ name: 'compact', description: 'Compact', argumentHint: '' }],
+    });
+    await waitFor(() => h.manager.get(started.id).state === 'ready');
+    expect(h.manager.get(started.id).commands?.map((c) => c.name)).toEqual([
+      'compact',
+    ]);
+    // A decision the model has not heard about yet.
+    (
+      h.manager.get(started.id) as { undeliveredDecisions: string[] }
+    ).undeliveredDecisions.push('approved: cancel r-1');
+
+    h.manager.sendMessage(started.id, '/compact');
+    expect(h.backend.prompts[1]).toBe('/compact');
+    expect(h.manager.get(started.id).undeliveredDecisions).toEqual([
+      'approved: cancel r-1',
+    ]);
+  });
+
+  it('never ride along with plain messages: a slash command is its own turn', async () => {
+    const h = heldManager();
+    const started = h.manager.start('first', 'held');
+    h.manager.sendMessage(started.id, 'one');
+    h.manager.sendMessage(started.id, '/compact');
+    h.manager.sendMessage(started.id, 'two');
+    h.backend.settle();
+    await waitFor(() => h.backend.prompts.length === 2);
+    expect(h.backend.prompts[1]).toBe('one');
+    h.backend.settle();
+    await waitFor(() => h.backend.prompts.length === 3);
+    expect(h.backend.prompts[2]).toBe('/compact');
+    h.backend.settle();
+    await waitFor(() => h.backend.prompts.length === 4);
+    expect(h.backend.prompts[3]).toBe('two');
   });
 });

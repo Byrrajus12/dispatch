@@ -1,6 +1,6 @@
+import type { TaskDoc } from '@dispatch-foo/core/browser';
+import { statusModelOf } from '@dispatch-foo/core/browser';
 import type { RunMeta } from '@dispatch/client';
-import type { TaskDoc } from '@dispatch/core/browser';
-import { statusModelOf } from '@dispatch/core/browser';
 import {
   act,
   cleanup,
@@ -113,14 +113,13 @@ function shellWith(log: ShellLog) {
   const noop = () => {};
   const actions = {
     openTask: noop,
+    openThread: noop,
     peekTask: (id: string) => log.peeked.push(id),
     openCreateTask: (preset?: CreateTaskPreset) =>
       log.presets.push(preset ?? {}),
     createPreset: null,
     closeCreateTask: noop,
     openPalette: noop,
-    toggleSidebar: noop,
-    sidebarHidden: false,
     openOverseer: noop,
     setProjectView: noop,
     setGlobalView: noop,

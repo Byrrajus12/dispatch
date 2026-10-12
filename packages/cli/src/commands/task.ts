@@ -3,6 +3,8 @@ import {
   ActorContext,
   ASSIGNEES,
   canonicalStatus,
+  childEnv,
+  DISPATCH_DIR,
   loadConfig,
   PRIORITIES,
   readProjectBackend,
@@ -11,7 +13,7 @@ import {
   serializeTaskFile,
   statusModelOf,
   TaskStore,
-} from '@dispatch/core';
+} from '@dispatch-foo/core';
 import type {
   CreateInput,
   GitReader,
@@ -20,10 +22,11 @@ import type {
   TaskDoc,
   TaskKind,
   UpdatePatch,
-} from '@dispatch/core';
+} from '@dispatch-foo/core';
 import type { Command } from 'commander';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import type { TaskApiClient } from '../apiClient.js';
 import { createTaskApiClient } from '../apiClient.js';
@@ -43,7 +46,11 @@ function canonicalStatusOpt(value: string | undefined): string | undefined {
 // repo would.
 function makeGitReader(cwd: string): GitReader {
   return (args) => {
-    const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    const result = spawnSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      env: childEnv(),
+    });
     return result.status === 0 ? result.stdout.trim() : null;
   };
 }
@@ -79,6 +86,10 @@ export function requireStore(ctx: CliContext): TaskStore {
  * the tracked `.dispatch/config.yml`, while the backend marker and the task
  * board live at the root the daemon serves. The raw cwd is still accepted
  * so a plain project directory behaves exactly as before.
+ *
+ * A committed `.dispatch/config.yml` counts too: a teammate's fresh clone of
+ * a database-backed project has the config but no board yet, and dispatchd
+ * creates the database itself when it boots there.
  */
 export function requireInitialized(ctx: CliContext): void {
   const root = projectRoot(ctx.cwd);
@@ -88,7 +99,11 @@ export function requireInitialized(ctx: CliContext): void {
 }
 
 function isInitialized(rootDir: string): boolean {
-  return new TaskStore(rootDir).isInitialized() || databaseBacked(rootDir);
+  return (
+    new TaskStore(rootDir).isInitialized() ||
+    databaseBacked(rootDir) ||
+    existsSync(join(rootDir, DISPATCH_DIR, 'config.yml'))
+  );
 }
 
 /**
@@ -100,7 +115,7 @@ function isInitialized(rootDir: string): boolean {
  * markdown, with no way to say otherwise. Existence is not ownership.
  *
  * The marker is written when a project moves to the database — by the daemon
- * at boot, or by `dispatch migrate`. `@dispatch/core`'s storage.ts owns the
+ * at boot, or by `dispatch migrate`. `@dispatch-foo/core`'s storage.ts owns the
  * format; a mangled marker reads there as null, which degrades this project to
  * its pre-marker behaviour rather than failing every task command.
  */
@@ -132,7 +147,7 @@ async function resolveTaskRoute(ctx: CliContext): Promise<TaskRoute> {
   // `findRunningDaemon` throws rather than returning one. For a task command
   // that is not fatal — it just means there is no daemon we can present a
   // credential to, so fall through to the same handling as no daemon at all.
-  // Commands that genuinely require dispatchd (scope decide, orchestrate)
+  // Commands that genuinely require dispatchd (approve, message, scope, orchestrate)
   // keep the explicit error, which is the right answer for them.
   // projectRoot(), not the raw cwd — see its doc comment: inside a run's
   // worktree the daemon, the marker and the real board all live at the

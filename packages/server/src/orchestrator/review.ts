@@ -1,4 +1,4 @@
-import { executorModels, loadConfig } from '@dispatch/core';
+import { executorModels, loadConfig } from '@dispatch-foo/core';
 import type {
   ActorContext,
   CommandEvidence,
@@ -10,7 +10,7 @@ import type {
   TaskDoc,
   TaskRisk,
   TaskStorePort,
-} from '@dispatch/core';
+} from '@dispatch-foo/core';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -18,12 +18,19 @@ import { spawnGitSync } from '../blockingGit.js';
 import type { DepMap } from '../depmap.js';
 import type { EventBus } from '../events.js';
 import type { FindingStorePort } from '../findings.js';
+import { undeclaredWritesTitle } from '../ledger.js';
 import type { LedgerStorePort } from '../ledger.js';
 import type { ReviewCommentStore } from '../reviewComments.js';
 import type { ReviewTarget } from '../reviewTarget.js';
 import type { Orchestrator } from './orchestrator.js';
 import { reviewDir, reviewOutputPath, reviewPackagePath } from './paths.js';
-import { untrustedBlock, untrustedFenced, untrustedInline } from './prompt.js';
+import {
+  specLineOf,
+  specSection,
+  untrustedBlock,
+  untrustedFenced,
+  untrustedInline,
+} from './prompt.js';
 import type { RunMeta } from './types.js';
 import { OrchestratorNotFoundError, runKind } from './types.js';
 
@@ -102,6 +109,13 @@ export interface StartReviewOptions {
   // Where findings should be filed as comments. Omitted falls back to the
   // reviewed run, matching every caller that predates PR-targeted reviews.
   target?: ReviewTarget;
+  // Who the review run acts for (see Orchestrator.dispatchAuxRun).
+  operator: string | null;
+  // The branch the reviewed work was cut from (the implementer's
+  // `baseBranch`). When the branch has since been restacked onto a newer
+  // tip of it, the review range re-anchors on that newer fork point so the
+  // base's own commits never read as the run's changes. See reviewAnchor.
+  baseBranch?: string;
 }
 
 export interface ReviewPromptInput {
@@ -125,6 +139,8 @@ export interface ReviewPromptInput {
   dependentsTruncated: boolean;
   mirrors: string[];
   mirrorsTruncated: boolean;
+  // The task's own team spec as one docs index line, when it has one.
+  specLine?: string | null;
 }
 
 export interface ParsedReviewFinding {
@@ -218,10 +234,6 @@ export function undeclaredWriteBatchTitle(count: number): string {
   return `${count} file${count === 1 ? '' : 's'} changed outside declared writes`;
 }
 
-function undeclaredWriteBatchLedgerTitle(count: number): string {
-  return `changed ${count} file${count === 1 ? '' : 's'} outside its declared writes`;
-}
-
 export function undeclaredWriteBatchDetail(
   writes: string[],
   files: string[]
@@ -308,8 +320,43 @@ function git(cwd: string, args: string[]): string {
   return result.stdout;
 }
 
+// The commit a review range starts from: the newest point head's own work
+// forks from, never a tip head does not contain. Plain `base..head` would count
+// every commit the base gained after the branch was cut as the run's own work —
+// a run restacked onto a busy main drew a "changed 59 files outside its
+// declared writes" hazard for a 6-file diff. So this is three-dot semantics
+// (merge-base(base, head), the same anchor diffCommittedOnly uses), and when
+// `baseBranch` is known it moves forward to merge-base(baseBranch, head) if
+// that is newer: a fix loop pins `base` at the first fork point, and a restack
+// leaves that sha behind every main commit the rebase pulled in. A fork point
+// equal to head (the branch already landed) is ignored rather than turning the
+// range empty.
+export function reviewAnchor(
+  root: string,
+  base: string,
+  head: string,
+  baseBranch?: string
+): string {
+  const mergeBase = (a: string): string | null => {
+    const result = spawnGitSync(root, ['merge-base', a, head]);
+    return result.exitCode === 0 ? result.stdout.trim() : null;
+  };
+  const anchor = mergeBase(base) ?? base;
+  if (baseBranch === undefined) return anchor;
+  const fork = mergeBase(baseBranch);
+  if (fork === null || fork === anchor) return anchor;
+  if (spawnGitSync(root, ['rev-parse', head]).stdout.trim() === fork) {
+    return anchor;
+  }
+  const newer =
+    spawnGitSync(root, ['merge-base', '--is-ancestor', anchor, fork])
+      .exitCode === 0;
+  return newer ? fork : anchor;
+}
+
 // The files base..head actually touched, repo-relative — the ground truth
-// write-set validation and dependency scope are both measured against.
+// write-set validation and dependency scope are both measured against. `base`
+// must already be an ancestor of head (see reviewAnchor).
 function changedFiles(root: string, base: string, head: string): string[] {
   return git(root, ['diff', '--name-only', `${base}..${head}`])
     .split('\n')
@@ -666,6 +713,8 @@ export function buildReviewPrompt(input: ReviewPromptInput): string {
     ].join('\n'),
     evidenceSection(input),
   ];
+  const spec = specSection(input.specLine);
+  if (spec !== null) sections.push(spec);
 
   const dependencyScope = dependencyScopeSection(input);
   if (dependencyScope !== null) sections.push(dependencyScope);
@@ -790,6 +839,8 @@ export interface ReviewRunnerContext {
   orchestrator: Orchestrator;
   actorContext: ActorContext;
   reviewComments: ReviewCommentStore;
+  // The task's own team spec as one docs index line (docs' specLine).
+  specLine?: (taskId: string) => string | null;
 }
 
 interface PendingReview {
@@ -839,8 +890,15 @@ export class ReviewRunner {
       head: opts.head,
       executor,
       model: reviewModelForRisk(task.meta.risk, models),
+      operator: opts.operator,
       buildPrompt: ({ runId, worktreePath }) => {
-        const changed = changedFiles(this.ctx.rootDir, opts.base, opts.head);
+        const base = reviewAnchor(
+          this.ctx.rootDir,
+          opts.base,
+          opts.head,
+          opts.baseBranch
+        );
+        const changed = changedFiles(this.ctx.rootDir, base, opts.head);
         this.recordUndeclaredWrites(task, changed, opts.round);
         const depMap = this.ctx.depMap.get();
         const dependents = capDependencyList(
@@ -859,7 +917,7 @@ export class ReviewRunner {
         mkdirSync(reviewDir(this.ctx.rootDir, runId), { recursive: true });
         writeFileSync(
           packagePath,
-          buildDiffPackage(this.ctx.rootDir, opts.base, opts.head)
+          buildDiffPackage(this.ctx.rootDir, base, opts.head)
         );
         this.pending.set(runId, {
           taskId: opts.taskId,
@@ -876,7 +934,7 @@ export class ReviewRunner {
           task,
           round: opts.round,
           scope: opts.scope,
-          base: opts.base,
+          base,
           head: opts.head,
           openFindings: opts.openFindings,
           extraRisks: opts.extraRisks ?? [],
@@ -891,6 +949,7 @@ export class ReviewRunner {
           dependentsTruncated: dependents.truncated,
           mirrors: mirrors.list,
           mirrorsTruncated: mirrors.truncated,
+          specLine: specLineOf(this.ctx.specLine, task.meta.id),
         });
       },
     });
@@ -922,7 +981,7 @@ export class ReviewRunner {
     this.ctx.ledgerStore.add({
       sourceTaskId: task.meta.id,
       kind: 'hazard',
-      title: undeclaredWriteBatchLedgerTitle(batch.length),
+      title: undeclaredWritesTitle(batch.length),
       detail: `${detail} ${batch.join(', ')}`,
       appliesTo: [task.meta.id],
       // Mechanically detected by the review harness, not raised by anyone.

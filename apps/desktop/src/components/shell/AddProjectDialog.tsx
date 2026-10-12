@@ -1,5 +1,5 @@
 import { ChevronLeft, FolderOpen, GitBranch, Search } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import {
   cloneGithubRepo,
@@ -20,6 +20,8 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from '@/ui/input-group';
 import { ScrollArea } from '@/ui/scroll-area';
 import { Spinner } from '@/ui/spinner';
 
+type Mode = 'choose' | 'github';
+
 interface AddProjectDialogProps {
   /** Called with an absolute path once a project is chosen — either a locally picked folder
    * or a freshly cloned GitHub repo. Registers the project and switches the window to it (see
@@ -27,9 +29,9 @@ interface AddProjectDialogProps {
    * the error is surfaced here rather than closing the dialog. */
   onAdd: (path: string) => Promise<void>;
   onClose: () => void;
+  /** Which pane to open on; 'github' skips the choice when the caller already asked for GitHub. */
+  initialMode?: Mode;
 }
-
-type Mode = 'choose' | 'github';
 
 /**
  * Add-project modal with two onboarding paths:
@@ -42,8 +44,12 @@ type Mode = 'choose' | 'github';
  * commands reject/return null with clear messages, so the dialog degrades gracefully rather
  * than throwing.
  */
-export function AddProjectDialog({ onAdd, onClose }: AddProjectDialogProps) {
-  const [mode, setMode] = useState<Mode>('choose');
+export function AddProjectDialog({
+  onAdd,
+  onClose,
+  initialMode = 'choose',
+}: AddProjectDialogProps) {
+  const [mode, setMode] = useState<Mode>(initialMode);
   const [error, setError] = useState<string | null>(null);
   // A busy state that blocks interaction: either a clone in progress or the final
   // register-and-switch step. The label distinguishes the two for the user.
@@ -53,6 +59,12 @@ export function AddProjectDialog({ onAdd, onClose }: AddProjectDialogProps) {
   const [repos, setRepos] = useState<GithubRepo[] | null>(null);
   const [reposLoading, setReposLoading] = useState(false);
   const [filter, setFilter] = useState('');
+  // Choosing "From GitHub" swaps the dialog's body for the repo list; the caret follows
+  // that choice into its search box.
+  const filterRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (mode === 'github') filterRef.current?.focus();
+  }, [mode]);
 
   useEffect(() => {
     if (mode !== 'github' || repos !== null || reposLoading) return;
@@ -215,7 +227,7 @@ export function AddProjectDialog({ onAdd, onClose }: AddProjectDialogProps) {
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 placeholder="Search repositories…"
-                autoFocus
+                ref={filterRef}
               />
             </InputGroup>
 

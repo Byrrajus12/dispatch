@@ -8,6 +8,7 @@ import {
   DEFAULT_CARTO,
   DEFAULT_FIX_LOOP,
   DEFAULT_LINEAR,
+  DEFAULT_MESSAGING,
   DEFAULT_MODELS,
   DEFAULT_NOTIFICATIONS,
   DEFAULT_PREVIEW,
@@ -16,8 +17,13 @@ import {
   DEFAULT_SYNC,
   loadConfig,
   queueWeights,
+  syncPlace,
 } from '../src/config.js';
-import { MAX_CONCURRENCY_HARD_CAP } from '../src/configTypes.js';
+import {
+  DEFAULT_A2A,
+  DEFAULT_MEMORY,
+  MAX_CONCURRENCY_HARD_CAP,
+} from '../src/configTypes.js';
 import { DEFAULT_POLICY } from '../src/policy.js';
 import { DEFAULT_QUEUE_WEIGHTS } from '../src/scoring.js';
 
@@ -67,11 +73,15 @@ describe('loadConfig', () => {
       carto: DEFAULT_CARTO,
       repoDigest: DEFAULT_REPO_DIGEST,
       notifications: DEFAULT_NOTIFICATIONS,
+      messaging: DEFAULT_MESSAGING,
+      memory: DEFAULT_MEMORY,
       receipts: DEFAULT_RECEIPTS,
       sync: DEFAULT_SYNC,
       policy: DEFAULT_POLICY,
       preview: DEFAULT_PREVIEW,
       queue: { weights: DEFAULT_QUEUE_WEIGHTS },
+      a2a: DEFAULT_A2A,
+      a2aWarnings: [],
     });
   });
   it('merges file values over defaults', () => {
@@ -644,13 +654,20 @@ describe('sync config', () => {
     return loadConfig(dir);
   }
 
-  it('is off by default and travels on its own branch of origin', () => {
+  it('is off by default and names no place until one is chosen', () => {
     expect(load('statuses: [ready]\n').sync).toEqual(DEFAULT_SYNC);
     expect(DEFAULT_SYNC).toEqual({
       enabled: false,
-      remote: 'origin',
       branch: 'dispatch-sync',
       intervalSec: 30,
+    });
+    // Turned on with nowhere named: no remote is implied.
+    const bare = load('sync:\n  enabled: true\n').sync;
+    expect(bare?.remote).toBeUndefined();
+    expect(bare === undefined ? 'unset' : syncPlace(bare)).toBeNull();
+    const origin = load('sync:\n  enabled: true\n  remote: origin\n').sync;
+    expect(origin === undefined ? null : syncPlace(origin)).toEqual({
+      remote: 'origin',
     });
   });
 
@@ -677,7 +694,6 @@ describe('sync config', () => {
         .sync
     ).toEqual({
       enabled: true,
-      remote: 'origin',
       repo: 'git@example.com:team/board.git',
       branch: 'dispatch-sync',
       intervalSec: 30,

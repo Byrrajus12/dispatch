@@ -1,3 +1,4 @@
+import { DISPATCH_MCP_TOOLS } from '@dispatch-foo/core';
 import { describe, expect, it } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -10,7 +11,10 @@ import {
   CodexAppServer,
   type CodexAppServerProcess,
 } from '../../src/orchestrator/codexAppServer.js';
-import type { StdioServerSpec } from '../../src/orchestrator/dispatchMcp.js';
+import {
+  dispatchMcpSpec,
+  type StdioServerSpec,
+} from '../../src/orchestrator/dispatchMcp.js';
 import {
   CODEX_EXECUTOR_PROFILE,
   CodexExecutor,
@@ -21,6 +25,16 @@ import type {
   ExecutorEvents,
   NormalizedEntry,
 } from '../../src/orchestrator/types.js';
+import {
+  HUMAN,
+  makeOrchestrator,
+  openRecovered,
+  useTempProject,
+} from '../messaging/harness.js';
+
+const APPROVE_EVERY_DISPATCH_TOOL = Object.fromEntries(
+  DISPATCH_MCP_TOOLS.map((name) => [name, { approval_mode: 'approve' }])
+);
 
 interface RpcMessage {
   id?: number | string;
@@ -171,6 +185,7 @@ function startHarness(
       cwd: options.cwd ?? 'C:\\worktree',
       projectRoot: 'C:\\project',
       runId: 'r-codex',
+      runTokenFile: 'C:\\runs\\r-codex.token',
       prompt: 'make the change',
       permissionMode: options.permissionMode ?? 'default',
       resumeSessionId,
@@ -184,6 +199,67 @@ function startHarness(
     }
   );
   return { entries, approvals, sessions, finishes, run };
+}
+
+// The tool names the real dispatch MCP server lists, spawned from the same
+// spec a run gets and asked over stdio JSON-RPC.
+async function registeredDispatchTools(): Promise<string[]> {
+  const root = mkdtempSync(join(tmpdir(), 'codex-dispatch-tools-'));
+  const savedBin = process.env.DISPATCH_MCP_BIN;
+  delete process.env.DISPATCH_MCP_BIN;
+  const spec = dispatchMcpSpec(root, root, 'r-tools');
+  if (savedBin !== undefined) process.env.DISPATCH_MCP_BIN = savedBin;
+  const child = Bun.spawn([spec.command, ...spec.args], {
+    env: spec.env,
+    stdin: 'pipe',
+    stdout: 'pipe',
+    stderr: 'ignore',
+  });
+  const reader = child.stdout.getReader();
+  const decoder = new TextDecoder();
+  let buffered = '';
+  const write = (message: object): void => {
+    void child.stdin.write(`${JSON.stringify(message)}\n`);
+  };
+  const response = async (id: number): Promise<RpcMessage> => {
+    for (;;) {
+      for (
+        let newline = buffered.indexOf('\n');
+        newline !== -1;
+        newline = buffered.indexOf('\n')
+      ) {
+        const line = buffered.slice(0, newline).trim();
+        buffered = buffered.slice(newline + 1);
+        if (line === '') continue;
+        const message = JSON.parse(line) as RpcMessage;
+        if (message.id === id) return message;
+      }
+      const { value, done } = await reader.read();
+      if (done) throw new Error('dispatch MCP server exited before answering');
+      buffered += decoder.decode(value, { stream: true });
+    }
+  };
+  try {
+    write({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'codex-executor-test', version: '0' },
+      },
+    });
+    await response(1);
+    write({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    write({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
+    const list = (await response(2)).result as { tools: { name: string }[] };
+    return list.tools.map((tool) => tool.name).sort();
+  } finally {
+    child.kill();
+    await child.exited;
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 describe('CodexAppServer transport', () => {
@@ -348,6 +424,113 @@ describe('CodexExecutor', () => {
     expect(harness.entries.find((entry) => entry.kind === 'usage')?.text).toBe(
       'tokens: 1200 total (1000 in, 200 out) ≈ $0.0027'
     );
+  });
+
+  it('notify steers the live turn with the digest', async () => {
+    const process = scriptedProcess();
+    const harness = startHarness(process);
+    await waitFor(() =>
+      process.requests.some((request) => request.method === 'turn/start')
+    );
+
+    harness.run.notify('📬 digest');
+
+    await waitFor(() =>
+      process.requests.some((request) => request.method === 'turn/steer')
+    );
+    const steer = process.requests.find(
+      (request) => request.method === 'turn/steer'
+    );
+    expect(steer?.params).toEqual({
+      threadId: 'thread-new',
+      expectedTurnId: 'turn-1',
+      input: [{ type: 'text', text: '📬 digest', text_elements: [] }],
+    });
+    await harness.run.interrupt();
+  });
+
+  it('gives the dispatch MCP server no run token, only its file', async () => {
+    const process = scriptedProcess();
+    const harness = startHarness(process);
+    await waitFor(() =>
+      process.requests.some((request) => request.method === 'thread/start')
+    );
+    const start = process.requests.find(
+      (request) => request.method === 'thread/start'
+    );
+    const config = start?.params?.config as {
+      mcp_servers: { dispatch: { env: Record<string, string> } };
+    };
+    expect(config.mcp_servers.dispatch.env.DISPATCH_RUN_TOKEN_FILE).toBe(
+      'C:\\runs\\r-codex.token'
+    );
+    expect(config.mcp_servers.dispatch.env.DISPATCH_RUN_TOKEN).toBeUndefined();
+    await harness.run.interrupt();
+  });
+
+  // Codex rejects an unlisted MCP tool under untrusted: it elicits approval,
+  // and the transport answers requests it does not know with -32601.
+  it('pre-approves every tool the dispatch MCP server registers', async () => {
+    const registered = await registeredDispatchTools();
+    expect(registered).toContain('msg_send');
+    const fake = scriptedProcess();
+    const harness = startHarness(fake);
+    await waitFor(() =>
+      fake.requests.some((request) => request.method === 'thread/start')
+    );
+    const start = fake.requests.find(
+      (request) => request.method === 'thread/start'
+    );
+    const config = start?.params?.config as {
+      mcp_servers: {
+        dispatch: { tools: Record<string, { approval_mode?: string }> };
+      };
+    };
+    const approved = Object.entries(config.mcp_servers.dispatch.tools)
+      .filter(([, tool]) => tool.approval_mode === 'approve')
+      .map(([name]) => name)
+      .sort();
+    expect(approved).toEqual(registered);
+    expect(approved).toEqual(
+      expect.arrayContaining([
+        'msg_send',
+        'msg_reply',
+        'inbox_read',
+        'thread_read',
+        'channel_join',
+        'channel_leave',
+        'channel_list',
+      ])
+    );
+    for (const retired of [
+      'ask_user',
+      'request_scope',
+      'agent_message',
+      'message_user',
+    ]) {
+      expect(approved).not.toContain(retired);
+    }
+    await harness.run.interrupt();
+  }, 20_000);
+
+  it('notify after finish is a no-op', async () => {
+    const process = scriptedProcess({
+      afterTurn(fake) {
+        fake.notify('turn/completed', {
+          threadId: 'thread-new',
+          turn: { id: 'turn-1', status: 'completed', error: null },
+        });
+      },
+    });
+    const harness = startHarness(process);
+    await waitFor(() => harness.finishes.length === 1);
+
+    expect(() => harness.run.notify('📬 late')).not.toThrow();
+    // Give any (wrongly) fired async request a chance to land before asserting.
+    await Bun.sleep(10);
+    expect(
+      process.requests.some((request) => request.method === 'turn/steer')
+    ).toBe(false);
   });
 
   it("switches off the user's own MCP servers for the run and says so", async () => {
@@ -690,15 +873,11 @@ describe('CodexExecutor', () => {
               env: expect.objectContaining({
                 DISPATCH_PROJECT_ROOT: 'C:\\project',
                 DISPATCH_RUN_ID: 'r-codex',
+                DISPATCH_RUN_TOKEN_FILE: 'C:\\runs\\r-codex.token',
               }),
               required: true,
               tool_timeout_sec: 1860,
-              tools: {
-                task_comment: { approval_mode: 'approve' },
-                record_evidence: { approval_mode: 'approve' },
-                record_mutation: { approval_mode: 'approve' },
-                ask_user: { approval_mode: 'approve' },
-              },
+              tools: APPROVE_EVERY_DISPATCH_TOOL,
             },
           },
         },
@@ -756,15 +935,11 @@ describe('CodexExecutor', () => {
           env: expect.objectContaining({
             DISPATCH_PROJECT_ROOT: 'C:\\project',
             DISPATCH_RUN_ID: 'r-codex',
+            DISPATCH_RUN_TOKEN_FILE: 'C:\\runs\\r-codex.token',
           }),
           required: true,
           tool_timeout_sec: 1860,
-          tools: {
-            task_comment: { approval_mode: 'approve' },
-            record_evidence: { approval_mode: 'approve' },
-            record_mutation: { approval_mode: 'approve' },
-            ask_user: { approval_mode: 'approve' },
-          },
+          tools: APPROVE_EVERY_DISPATCH_TOOL,
         },
       },
     });
@@ -993,6 +1168,9 @@ describe('CodexExecutor', () => {
         afterTurn(fake) {
           fake.serverRequest(method, `session-${toolName}`, {
             reason: 'needs broader access',
+            ...(toolName === 'codex.commandExecution'
+              ? { command: "/bin/zsh -lc 'pnpm test'" }
+              : {}),
           });
         },
       });
@@ -1254,7 +1432,7 @@ function answerTo(
 // A command item's item/completed as codex-cli 0.153 sends it.
 function commandCompleted(
   id: string,
-  command: string,
+  command: unknown,
   status: 'completed' | 'failed' | 'declined'
 ): Record<string, unknown> {
   return {
@@ -1659,5 +1837,317 @@ describe('the irreversibility floor for Codex runs', () => {
     expect(harness.entries.some((entry) => entry.kind === 'system')).toBe(
       false
     );
+  });
+});
+
+describe('what a Codex run command really runs', () => {
+  // Codex runs nearly every command as `/bin/zsh -lc '<script>'`.
+  const wrapped = (script: string) => `/bin/zsh -lc '${script}'`;
+  const ask = (command: unknown, itemId = 'call-1') => ({
+    ...FORCE_PUSH_ASK,
+    itemId,
+    command,
+  });
+
+  it('asks about a command that still hides what runs instead of allowing it under bypassPermissions', async () => {
+    const hidden: Record<string, unknown> = {
+      substitution: wrapped('$(echo gh) release create v1'),
+      backticks: wrapped('`echo gh` release create v1'),
+      eval: wrapped('eval "gh release create v1"'),
+      variable: wrapped('$CMD release create v1'),
+      wrapper: wrapped('env gh release create v1'),
+      argv: ['/bin/zsh', '-lc', 'gh release create v1'],
+      caseFolded: wrapped('GIT push --force origin main'),
+      gitInCompound: wrapped('cd sub && git push origin main'),
+      spelledPublish: wrapped('pnpm $(echo publish)'),
+    };
+    const process = scriptedProcess({
+      afterTurn(fake) {
+        fake.serverRequest(
+          'item/commandExecution/requestApproval',
+          'plain',
+          ask(wrapped('pnpm test'), 'plain')
+        );
+        for (const [id, command] of Object.entries(hidden)) {
+          fake.serverRequest(
+            'item/commandExecution/requestApproval',
+            id,
+            ask(command, id)
+          );
+        }
+      },
+    });
+    const harness = startHarness(process, undefined, undefined, {
+      permissionMode: 'bypassPermissions',
+    });
+    await waitFor(
+      () =>
+        harness.approvals.length === Object.keys(hidden).length &&
+        answerTo(process, 'plain') !== undefined
+    );
+    expect(answerTo(process, 'plain')).toEqual({ decision: 'accept' });
+    for (const id of Object.keys(hidden)) {
+      expect(answerTo(process, id)).toBeUndefined();
+    }
+    await harness.run.interrupt();
+  });
+
+  // Runs work in their own worktree, so shell syntax alone does not stop them;
+  // only a part that could reach a floor act does.
+  it('lets a non-simple command with nothing floor-relevant proceed under bypassPermissions', async () => {
+    const proceeds: Record<string, unknown> = {
+      assignment: wrapped('FOO=$(date) pnpm test'),
+      compound: wrapped('pnpm build && pnpm test'),
+      pipe: wrapped('ls | wc -l'),
+      nested: `bash -c "sh -c 'zsh -c \\"bash -c \\\\\\"sh -c ls\\\\\\"\\"'"`,
+    };
+    const process = scriptedProcess({
+      afterTurn(fake) {
+        for (const [id, command] of Object.entries(proceeds)) {
+          fake.serverRequest(
+            'item/commandExecution/requestApproval',
+            id,
+            ask(command, id)
+          );
+        }
+      },
+    });
+    const harness = startHarness(process, undefined, undefined, {
+      permissionMode: 'bypassPermissions',
+    });
+    await waitFor(() =>
+      Object.keys(proceeds).every((id) => answerTo(process, id) !== undefined)
+    );
+    for (const id of Object.keys(proceeds)) {
+      expect(answerTo(process, id)).toEqual({ decision: 'accept' });
+    }
+    expect(harness.approvals).toEqual([]);
+    await harness.run.interrupt();
+  });
+
+  it('holds a wrapped floor command a human must decide even when its script is quoted apart', async () => {
+    const process = scriptedProcess({
+      afterTurn(fake) {
+        fake.serverRequest(
+          'item/commandExecution/requestApproval',
+          'release',
+          ask(`/bin/zsh -lc "g''h release create v1"`, 'release')
+        );
+        fake.serverRequest(
+          'item/commandExecution/requestApproval',
+          'argv',
+          ask(['/bin/zsh', '-lc', 'npm publish'], 'argv')
+        );
+      },
+    });
+    const harness = startHarness(process, undefined, undefined, {
+      permissionMode: 'bypassPermissions',
+    });
+    await waitFor(() => harness.approvals.length === 2);
+    expect(answerTo(process, 'release')).toBeUndefined();
+    expect(answerTo(process, 'argv')).toBeUndefined();
+    // Both asks carried a floor command, so running them is not a bypass.
+    for (const approval of harness.approvals) {
+      harness.run.approve(approval.requestId, { allow: true });
+    }
+    process.notify(
+      'item/completed',
+      commandCompleted(
+        'release',
+        `/bin/zsh -lc "g''h release create v1"`,
+        'completed'
+      )
+    );
+    process.notify(
+      'item/completed',
+      commandCompleted('argv', ['/bin/zsh', '-lc', 'npm publish'], 'completed')
+    );
+    process.notify('turn/completed', TURN_COMPLETED);
+    await waitFor(() => harness.finishes.length === 1);
+    expect(harness.finishes[0]?.state).toBe('finished');
+  });
+
+  it('stops a run whose wrapped argv floor command ran without asking Dispatch', async () => {
+    const process = scriptedProcess({
+      afterTurn(fake) {
+        fake.notify(
+          'item/completed',
+          commandCompleted(
+            'call-9',
+            ['/bin/zsh', '-lc', 'gh release create v1'],
+            'completed'
+          )
+        );
+        fake.notify('turn/completed', TURN_COMPLETED);
+      },
+    });
+    const harness = startHarness(process);
+    await waitFor(() => harness.finishes.length === 1);
+    expect(harness.finishes[0]?.state).toBe('failed');
+    expect(harness.finishes[0]?.error).toContain('gh release create v1');
+  });
+
+  it('stops a run that types a quoted-apart floor command into a shell', async () => {
+    const process = scriptedProcess({
+      afterTurn(fake) {
+        fake.serverRequest(
+          'item/commandExecution/requestApproval',
+          'shell',
+          ask('/bin/zsh -lc bash', 'call-1')
+        );
+      },
+    });
+    const harness = startHarness(process);
+    await waitFor(() => harness.approvals.length === 1);
+    harness.run.approve(harness.approvals[0]?.requestId ?? '', { allow: true });
+    process.notify(
+      'item/commandExecution/terminalInteraction',
+      typed('g""h release create v1\n')
+    );
+    await waitFor(() => harness.finishes.length === 1);
+    expect(harness.finishes[0]?.state).toBe('failed');
+    expect(harness.finishes[0]?.error).toContain('publish');
+  });
+
+  it('never lets a session-wide answer cover a floor command or one it cannot read', async () => {
+    const process = scriptedProcess({
+      afterTurn(fake) {
+        fake.serverRequest(
+          'item/commandExecution/requestApproval',
+          'tests',
+          ask(wrapped('pnpm test'), 'tests')
+        );
+        fake.serverRequest(
+          'item/commandExecution/requestApproval',
+          'release',
+          ask(wrapped('gh release create v1'), 'release')
+        );
+        fake.serverRequest(
+          'item/commandExecution/requestApproval',
+          'hidden',
+          ask(wrapped('$(echo rm) -rf build'), 'hidden')
+        );
+        fake.serverRequest(
+          'item/commandExecution/requestApproval',
+          'blind',
+          ask(null, 'blind')
+        );
+      },
+    });
+    const harness = startHarness(process);
+    await waitFor(() => harness.approvals.length === 4);
+    for (const approval of harness.approvals) {
+      harness.run.approve(approval.requestId, {
+        allow: true,
+        scope: 'session',
+      });
+    }
+    await waitFor(() => answerTo(process, 'blind') !== undefined);
+    // Codex keeps a session answer for that exact command only.
+    expect(answerTo(process, 'tests')).toEqual({
+      decision: 'acceptForSession',
+    });
+    expect(answerTo(process, 'release')).toEqual({ decision: 'accept' });
+    expect(answerTo(process, 'hidden')).toEqual({ decision: 'accept' });
+    expect(answerTo(process, 'blind')).toEqual({ decision: 'accept' });
+    await harness.run.interrupt();
+  });
+
+  it('still asks Dispatch about a different wrapped command after a session answer', async () => {
+    const process = scriptedProcess({
+      afterTurn(fake) {
+        fake.serverRequest(
+          'item/commandExecution/requestApproval',
+          'first',
+          ask(wrapped('ls'), 'first')
+        );
+      },
+    });
+    const harness = startHarness(process);
+    await waitFor(() => harness.approvals.length === 1);
+    harness.run.approve(harness.approvals[0]?.requestId ?? '', {
+      allow: true,
+      scope: 'session',
+    });
+    await waitFor(() => answerTo(process, 'first') !== undefined);
+    process.serverRequest(
+      'item/commandExecution/requestApproval',
+      'second',
+      ask(wrapped('rm -rf build'), 'second')
+    );
+    await waitFor(() => harness.approvals.length === 2);
+    expect(answerTo(process, 'second')).toBeUndefined();
+    await harness.run.interrupt();
+  });
+});
+
+describe('CodexExecutor approvals through the orchestrator', () => {
+  const project = useTempProject();
+
+  it('parks two concurrent asks on their own gates and answers each exactly', async () => {
+    const fake = scriptedProcess({
+      afterTurn(codex) {
+        codex.serverRequest('item/commandExecution/requestApproval', 'ask-1', {
+          command: 'ls',
+          itemId: 'item-1',
+        });
+        codex.serverRequest('item/commandExecution/requestApproval', 'ask-2', {
+          command: 'pwd',
+          itemId: 'item-2',
+        });
+      },
+    });
+    const { orchestrator, store } = makeOrchestrator(project.root());
+    writeFileSync(
+      join(project.root(), '.dispatch/config.yml'),
+      'orchestrator:\n  permissionMode: default\n'
+    );
+    orchestrator.registerExecutor(
+      'codex',
+      new CodexExecutor(() => fake, {
+        cartoSpec: () => null,
+        userMcpServers: () => [],
+        pricing: () => undefined,
+      })
+    );
+    const messaging = await openRecovered(project.root(), orchestrator, store);
+    const task = store.create({ title: 'Two asks' });
+    const meta = await orchestrator.dispatch(task.meta.id, 'codex', {});
+    await waitFor(() => messaging.engine.openBlocking().length === 2);
+    const gateFor = (command: string) => {
+      const gate = messaging.engine
+        .openBlocking()
+        .find(
+          (m) =>
+            (m.data as { input?: { command?: string } }).input?.command ===
+            command
+        );
+      if (gate === undefined) throw new Error(`no gate for ${command}`);
+      return gate;
+    };
+    const answerTo = (id: string) =>
+      fake.requests.find((m) => m.id === id && m.result !== undefined)?.result;
+
+    await messaging.engine.reply(
+      gateFor('pwd').id,
+      { body: '', choice: 'deny' },
+      HUMAN
+    );
+    await waitFor(() => answerTo('ask-2') !== undefined);
+    expect(answerTo('ask-2')).toEqual({ decision: 'decline' });
+    expect(answerTo('ask-1')).toBeUndefined();
+    expect(orchestrator.getRun(meta.id)?.meta.state).toBe('awaiting-approval');
+
+    await messaging.engine.reply(
+      gateFor('ls').id,
+      { body: '', choice: 'approve' },
+      HUMAN
+    );
+    await waitFor(() => answerTo('ask-1') !== undefined);
+    expect(answerTo('ask-1')).toEqual({ decision: 'accept' });
+    expect(orchestrator.getRun(meta.id)?.meta.state).toBe('running');
+    expect(messaging.engine.openBlocking()).toEqual([]);
+    await orchestrator.cancel(meta.id);
+    messaging.close();
   });
 });

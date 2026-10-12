@@ -17,6 +17,7 @@ export * from './configTypes.js';
 export * from './policy.js';
 export * from './linearMap.js';
 export * from './subagents.js';
+export * from './docs.js';
 export { runStepFromEntry } from './runStep.js';
 export type { RunStep, RunStepEntry } from './runStep.js';
 export type {
@@ -82,9 +83,32 @@ export type {
 } from './store.js';
 export {
   handleFromEmail,
+  MAX_HANDLE_BYTES,
   parseTeam,
+  parseTeamReport,
   serializeTeam,
   TeamParseError,
   upsertMember,
 } from './team.js';
-export type { TeamMember } from './team.js';
+export type { DroppedEntry, TeamMember } from './team.js';
+export { untrustedFenced } from './untrusted.js';
+export {
+  PROVIDERS,
+  providerById,
+  providerForBinary,
+  resolveInstallFix,
+} from './setup/providers.js';
+export type {
+  AuthState,
+  InstallMethod,
+  ProbeResult,
+  ProviderSpec,
+  ProviderState,
+  SetupFix,
+  SetupReport,
+  SetupStatus,
+  SetupStep,
+  SetupStepId,
+} from './setup/types.js';
+export { explainFailure } from './setup/failures.js';
+export type { FailureExplanation } from './setup/failures.js';

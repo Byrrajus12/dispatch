@@ -1,5 +1,5 @@
+import type { TaskDoc } from '@dispatch-foo/core/browser';
 import type { ApiClient } from '@dispatch/client';
-import type { TaskDoc, TaskListItem } from '@dispatch/core/browser';
 import { useQuery } from '@tanstack/react-query';
 
 /** The task list's query key. `taskDocKey` nests under it, so invalidating
@@ -30,16 +30,4 @@ export function useTaskDoc(
     enabled: client !== null && taskId !== null,
   });
   return taskId === null ? undefined : data;
-}
-
-/** The list's entry for `taskId` with `full`'s body — list meta, since the list is
- * what optimistic edits patch. `null` while the body loads or once the task is gone. */
-export function withBody(
-  tasks: readonly TaskListItem[],
-  taskId: string | null,
-  full: TaskDoc | undefined
-): TaskDoc | null {
-  if (taskId === null || full === undefined) return null;
-  const item = tasks.find((t) => t.meta.id === taskId);
-  return item === undefined ? null : { meta: item.meta, body: full.body };
 }

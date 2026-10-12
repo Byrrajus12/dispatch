@@ -1,5 +1,5 @@
-import { describeValue, PRIORITIES, TASK_RISKS } from '@dispatch/core';
-import type { Priority, TaskRisk } from '@dispatch/core';
+import { describeValue, PRIORITIES, TASK_RISKS } from '@dispatch-foo/core';
+import type { Priority, TaskRisk } from '@dispatch-foo/core';
 
 import { OrchestratorClientError } from './types.js';
 
@@ -63,6 +63,8 @@ export interface Planner {
     model?: string,
     mode?: PlannerMode
   ): Promise<PlannerTurn>;
+  /** Daemon stop: ends every turn in flight, so no planner process outlives it. */
+  shutdown?(): void;
 }
 
 // Validates and normalizes an arbitrary JSON value into a PlanProposal,

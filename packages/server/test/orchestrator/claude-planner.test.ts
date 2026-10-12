@@ -4,13 +4,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { CLAUDE_INSTALL_HINT } from '../../src/orchestrator/claudeCli.js';
+import {
+  CLAUDE_INSTALL_HINT,
+  withAutoMemoryOff,
+} from '../../src/orchestrator/claudeCli.js';
 import { floorGuard } from '../../src/orchestrator/floorHook.js';
 import type { PlanProposal } from '../../src/orchestrator/planner.js';
-import {
-  ClaudePlanner,
-  EMPTY_TURN_MESSAGE,
-} from '../../src/orchestrator/planners/claude.js';
+import { ClaudePlanner } from '../../src/orchestrator/planners/claude.js';
+import { EMPTY_TURN_MESSAGE } from '../../src/orchestrator/planners/prompts.js';
 import { floorDecision } from './helpers.js';
 
 // The exact text the Agent SDK throws when it can't resolve its own bundled
@@ -101,7 +102,10 @@ describe('ClaudePlanner.start', () => {
     expect(
       await floorDecision(captured?.hooks, 'Bash', { command: 'npm publish' })
     ).toBe('deny');
-    expect(captured?.settings).toEqual(floorGuard('deny').settings);
+    // Auto memory stays off: a plan session never loads the owner's notes.
+    expect(captured?.settings).toEqual(
+      withAutoMemoryOff(floorGuard('deny')).settings
+    );
     expect(
       await floorDecision(captured?.hooks, 'Bash', { command: 'git log -1' })
     ).toBeUndefined();
@@ -172,6 +176,29 @@ describe('ClaudePlanner.start', () => {
       EMPTY_TURN_MESSAGE
     );
     expect(calls).toBe(2);
+  });
+
+  it('rejects with the CLI text when a signed-out turn reports an error success', async () => {
+    let calls = 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    function* fakeMessages(): Generator<any> {
+      yield {
+        type: 'result',
+        subtype: 'success',
+        is_error: true,
+        result: 'Not logged in · Please run /login',
+      };
+    }
+    const fakeQueryFn = () => {
+      calls += 1;
+      return fakeMessages() as unknown as Query;
+    };
+    const planner = new ClaudePlanner('/tmp/does-not-matter', fakeQueryFn);
+
+    await expect(planner.start('build the thing')).rejects.toThrow(
+      'Not logged in · Please run /login'
+    );
+    expect(calls).toBe(1);
   });
 
   it('rejects when the stream ends with no result message at all', async () => {

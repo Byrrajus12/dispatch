@@ -1,4 +1,4 @@
-import type { EffortLevel } from '@dispatch/core';
+import type { EffortLevel } from '@dispatch-foo/core';
 import type { z } from 'zod';
 
 import type { OverseerAction } from './overseerTools.js';
@@ -81,6 +81,8 @@ export interface OverseerToolRequest {
   requestId: string;
   toolName: string;
   input: unknown;
+  /** Set when the pre-tool hook held the call: a floor check or an Overseer hold. */
+  check?: string;
 }
 
 /** Per-turn knobs the manager resolves from config and hands to a backend. */
@@ -114,6 +116,8 @@ export interface OverseerTurnOptions {
    * only the calls that did not go through it.
    */
   onToolUse?: (toolName: string, input: unknown) => void;
+  /** Fired by Stop; the backend ends the turn as soon as it can. */
+  abortController?: AbortController;
 }
 
 /** One settled assistant turn: the text reply, and the handle to resume from. */
@@ -125,6 +129,19 @@ export interface OverseerTurn {
    * the prior turns — including the tool calls they made — in context.
    */
   sessionId?: string;
+  /** What the turn cost, when the backend reports it. */
+  costUsd?: number;
+  /** How full the session's context is after the turn, in tokens. */
+  contextTokens?: number;
+  /** The slash commands the session offers, when the backend reports them. */
+  commands?: OverseerCommand[];
+}
+
+/** One slash command a session accepts: `/name`, with what it does. */
+export interface OverseerCommand {
+  name: string;
+  description: string;
+  argumentHint: string;
 }
 
 export interface OverseerBackend {
@@ -139,4 +156,13 @@ export interface OverseerBackend {
     toolset: OverseerToolset,
     options?: OverseerTurnOptions
   ): Promise<OverseerTurn>;
+}
+
+/** A tool's description as the model reads it: a mutating tool says it only queues. */
+export function toolDescriptionForModel(
+  descriptor: OverseerToolDescriptor
+): string {
+  return descriptor.mutating
+    ? `${descriptor.description} QUEUES this action for human confirmation — calling it does not perform it.`
+    : descriptor.description;
 }

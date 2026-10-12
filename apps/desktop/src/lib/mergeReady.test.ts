@@ -1,6 +1,6 @@
+import type { TaskDoc } from '@dispatch-foo/core/browser';
+import { defaultTaskFields } from '@dispatch-foo/core/browser';
 import type { RunMeta } from '@dispatch/client';
-import type { TaskDoc } from '@dispatch/core/browser';
-import { defaultTaskFields } from '@dispatch/core/browser';
 import { describe, expect, test } from 'bun:test';
 
 import { countMergeReady } from './mergeReady';
@@ -140,6 +140,16 @@ describe('countMergeReady', () => {
     const runs = [
       run({ id: 'r1', taskId: 't1' }),
       run({ id: 'r2', taskId: 't2' }),
+    ];
+    const tasks = [makeTask('t1', 'review'), makeTask('t2', 'review')];
+    expect(countMergeReady(runs, tasks, new Set())).toBe(2);
+  });
+
+  test('several finished runs of one task count once, as the server lands one', () => {
+    const runs = [
+      run({ id: 'r1', taskId: 't1' }),
+      run({ id: 'r2', taskId: 't1' }),
+      run({ id: 'r3', taskId: 't2' }),
     ];
     const tasks = [makeTask('t1', 'review'), makeTask('t2', 'review')];
     expect(countMergeReady(runs, tasks, new Set())).toBe(2);

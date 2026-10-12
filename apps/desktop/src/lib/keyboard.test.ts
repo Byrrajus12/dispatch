@@ -9,7 +9,6 @@ import type {
 import {
   isInteractiveControlTagName,
   isTypingTagName,
-  resolveCardKeyAction,
   resolveChordPrefix,
   resolveGitKeyCommand,
   resolveGlobalKeyCommand,
@@ -141,6 +140,7 @@ describe('resolveGlobalKeyCommand', () => {
     expect(resolveGlobalKeyCommand(key('f'), armed)).toBe('goto-live');
     expect(resolveGlobalKeyCommand(key('c'), armed)).toBe('goto-control-room');
     expect(resolveGlobalKeyCommand(key('a'), armed)).toBe('goto-overseer');
+    expect(resolveGlobalKeyCommand(key('m'), armed)).toBe('goto-threads');
     // A miss is nothing — not the key's own bare meaning.
     expect(resolveGlobalKeyCommand(key('['), armed)).toBeNull();
     expect(resolveGlobalKeyCommand(key('z'), armed)).toBeNull();
@@ -348,37 +348,17 @@ describe('isTypingTagName', () => {
 describe('isInteractiveControlTagName', () => {
   // The Board track wraps an epic card's Work/Stop <button>s and a card's inline
   // "Dispatch →" button. A keydown on one of those must NOT be hijacked for board
-  // navigation — Enter should activate the button. Cards themselves are role="button"
-  // DIVs, so they must fall through (return false) to keep j/k/Enter roving navigation.
+  // navigation — Enter should activate the button. Non-controls fall through (return
+  // false) to roving navigation.
   test('is true for click-style and form controls', () => {
     for (const tag of ['BUTTON', 'A', 'SELECT', 'INPUT', 'TEXTAREA']) {
       expect(isInteractiveControlTagName(tag)).toBe(true);
     }
   });
 
-  test('is false for a card DIV (role=button) and other non-controls', () => {
+  test('is false for a DIV and other non-controls', () => {
     expect(isInteractiveControlTagName('DIV')).toBe(false);
     expect(isInteractiveControlTagName('SPAN')).toBe(false);
-  });
-});
-
-describe('resolveCardKeyAction', () => {
-  // A Board card (TaskCardTile) wraps its inline "Dispatch →" button — a native keydown on
-  // that button still bubbles up through the card's own onKeyDown. Without this guard,
-  // pressing Enter/Space to activate the button also opened the card's peek panel.
-  test('activates on Enter/Space when the keydown originated directly on the card', () => {
-    expect(resolveCardKeyAction('Enter', true)).toBe('activate');
-    expect(resolveCardKeyAction(' ', true)).toBe('activate');
-  });
-
-  test('a keydown bubbled up from a nested interactive child never activates the card', () => {
-    expect(resolveCardKeyAction('Enter', false)).toBeNull();
-    expect(resolveCardKeyAction(' ', false)).toBeNull();
-  });
-
-  test('unrelated keys never activate, even directly on the card', () => {
-    expect(resolveCardKeyAction('a', true)).toBeNull();
-    expect(resolveCardKeyAction('Tab', true)).toBeNull();
   });
 });
 
@@ -521,5 +501,24 @@ describe('resolveGitKeyCommand', () => {
   test('unrelated keys resolve to null', () => {
     expect(resolveGitKeyCommand(key('x'), baseGitCtx)).toBeNull();
     expect(resolveGitKeyCommand(key('Tab'), baseGitCtx)).toBeNull();
+  });
+});
+
+describe('Two views shortcuts', () => {
+  test('⌘, opens Settings, even while typing', () => {
+    expect(
+      resolveGlobalKeyCommand(key(',', { metaKey: true }), baseGlobalCtx)
+    ).toBe('goto-settings');
+    expect(
+      resolveGlobalKeyCommand(key(',', { metaKey: true }), {
+        ...baseGlobalCtx,
+        isTyping: true,
+      })
+    ).toBe('goto-settings');
+  });
+
+  test('g o goes to Overseer, like g a', () => {
+    const armed = { ...baseGlobalCtx, pendingPrefix: 'g' as const };
+    expect(resolveGlobalKeyCommand(key('o'), armed)).toBe('goto-overseer');
   });
 });

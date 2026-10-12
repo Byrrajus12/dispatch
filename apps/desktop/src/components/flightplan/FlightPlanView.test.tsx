@@ -1,6 +1,6 @@
+import type { TaskListItem } from '@dispatch-foo/core/browser';
+import { statusModelOf } from '@dispatch-foo/core/browser';
 import type { EpicProgress, RunMeta } from '@dispatch/client';
-import type { TaskListItem } from '@dispatch/core/browser';
-import { statusModelOf } from '@dispatch/core/browser';
 import {
   act,
   cleanup,
@@ -515,5 +515,33 @@ describe('FlightPlan', () => {
     expect(document.querySelectorAll('[data-slot=flight-node]')).toHaveLength(
       6
     );
+  });
+
+  test('a send-agents ask from the host opens Send agents once, on its container only', () => {
+    const served: number[] = [];
+    const host = (epicId: string) => ({
+      data: dataWith(plan()),
+      dispatchTask: () => Promise.resolve(),
+      onDispatchFailed: () => {},
+      onOpenTask: () => {},
+      onPeekTask: () => {},
+      sendAgents: { epicId, nonce: 7 },
+      onSendAgentsServed: (nonce: number) => served.push(nonce),
+    });
+    const { unmount } = render(
+      <FlightPlanHostContext.Provider value={host('e-other')}>
+        <ContainerFlightPlanSection containerId="e-1" />
+      </FlightPlanHostContext.Provider>
+    );
+    expect(served).toEqual([]);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    unmount();
+    render(
+      <FlightPlanHostContext.Provider value={host('e-1')}>
+        <ContainerFlightPlanSection containerId="e-1" />
+      </FlightPlanHostContext.Provider>
+    );
+    expect(served).toEqual([7]);
+    expect(screen.getByRole('dialog').textContent).toContain('Send agents');
   });
 });

@@ -1,8 +1,8 @@
 // The Claude models a run can be dispatched with. localStorage here holds only
 // a per-device override of the project's `.dispatch/config.yml` default.
 
-import { EFFORT_LEVELS, isEffortLevel } from '@dispatch/core/browser';
-import type { EffortLevel } from '@dispatch/core/browser';
+import { EFFORT_LEVELS, isEffortLevel } from '@dispatch-foo/core/browser';
+import type { EffortLevel } from '@dispatch-foo/core/browser';
 
 export interface ModelOption {
   /** SDK model id passed straight through to the Agent SDK's `query({ options: { model } })`. */
@@ -15,7 +15,7 @@ export interface ModelOption {
 export const MODELS: ModelOption[] = [
   { id: 'claude-opus-5-5', label: 'Opus 5.5' },
   { id: 'claude-fable-5-1', label: 'Fable 5.1' },
-  { id: 'claude-sonnet-5', label: 'Sonnet 5' },
+  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
   { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
 ];
 
@@ -105,6 +105,7 @@ export function modelLabel(id: string | undefined): string | undefined {
 // one file, per the parser's "map raw ids to display names in one place" note.
 const HISTORICAL_MODEL_LABELS: Record<string, string> = {
   'claude-opus-5': 'Opus 5',
+  'claude-sonnet-5': 'Sonnet 5',
   'claude-fable-5': 'Fable 5',
   'claude-opus-4-8': 'Opus 4.8',
   'claude-opus-4-7': 'Opus 4.7',

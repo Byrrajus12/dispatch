@@ -1,4 +1,5 @@
-import type { EffortLevel } from '@dispatch/core/browser';
+import type { EffortLevel } from '@dispatch-foo/core/browser';
+import type { ReactNode } from 'react';
 import { createContext, useContext } from 'react';
 
 import type { DispatchProjectData } from '../../../hooks/useDispatchProject';
@@ -12,6 +13,7 @@ export type TaskPageProject = Pick<
   | 'port'
   | 'daemonBaseUrl'
   | 'me'
+  | 'messageAccess'
   | 'config'
   | 'executors'
   | 'health'
@@ -36,12 +38,14 @@ export type TaskPageProject = Pick<
   | 'handleEnrichTask'
   | 'handleDismissEnrich'
   | 'handleApprove'
+  | 'fetchApprovalInput'
   | 'handleSendMessage'
   | 'handleAnswerQuestion'
   | 'handleDecideScopeRequest'
   | 'handleRestartDaemon'
   | 'handleRequestChanges'
   | 'handleReview'
+  | 'handlePublishRun'
   | 'handleOpenPr'
   | 'handleEnqueueMerge'
   | 'handleEnqueueMergeStack'
@@ -75,6 +79,22 @@ export interface TaskPageHost {
   /** Opens a run's pull request on the PR review page. */
   openPr: (runId: string) => void;
   openImpact: (subject: ImpactSubjectRef) => void;
+  /** Opens a linked doc in the Docs view; absent hides the spec's Docs block, for a
+   * window that cannot read docs. */
+  openDoc?: (docId: string, anchor: string | null) => void;
+  /** The task's message threads, which the Thread toggle shows; absent hides it. */
+  threadView?: (taskId: string) => ReactNode;
+  /** A run's worktree as files and as a shell; without them the page has no such tabs. */
+  filesView?: (runId: string) => ReactNode;
+  /** Summary lists the memory this task's runs wrote (Two views). */
+  showLessons?: boolean;
+  /** A milestone's plan opens a task as its own page, not a pane beside the plan (Two views). */
+  planOpensPages?: boolean;
+  /** Two views' page: properties as chips under the title, the column on demand, "‹ tasks" back. */
+  compactPage?: boolean;
+  /** A run's pull request reviewed in place; without it "Review PR" leaves for the PR page. */
+  prView?: (runId: string, onClose: () => void) => ReactNode;
+  terminalView?: (runId: string) => ReactNode;
 }
 
 export const TaskPageHostContext = createContext<TaskPageHost | null>(null);

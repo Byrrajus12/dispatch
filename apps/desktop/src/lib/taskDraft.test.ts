@@ -56,22 +56,19 @@ describe('editableDraftToCreateInput', () => {
     expect(input.parent).toBe('e-1');
   });
 
-  test('folds the acceptance criteria into the description as a bullet block', () => {
+  test('puts the acceptance criteria in their own section, not the description', () => {
     const input = editableDraftToCreateInput(editable());
-    expect(input.description).toContain(PLANNED.description);
-    expect(input.description).toContain('- Retries three times');
-    expect(input.description).toContain('- Backs off exponentially');
+    expect(input.description).toBe(PLANNED.description);
+    expect(input.acceptanceCriteria).toBe(
+      '- Retries three times\n- Backs off exponentially'
+    );
   });
 
   test('drops blank criteria rows left behind by an unfilled "Add criterion"', () => {
     const input = editableDraftToCreateInput(
       editable({ acceptanceCriteria: ['Retries three times', '', '   '] })
     );
-    expect(input.description).toContain('- Retries three times');
-    expect(input.description).not.toContain('- \n');
-    expect(input.description?.trimEnd().endsWith('- Retries three times')).toBe(
-      true
-    );
+    expect(input.acceptanceCriteria).toBe('- Retries three times');
   });
 
   test('omits the criteria block entirely when every row is blank', () => {
@@ -79,6 +76,7 @@ describe('editableDraftToCreateInput', () => {
       editable({ acceptanceCriteria: ['', '  '] })
     );
     expect(input.description).toBe(PLANNED.description);
+    expect(input.acceptanceCriteria).toBeUndefined();
   });
 
   test('trims a title padded by inline editing', () => {

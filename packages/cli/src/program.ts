@@ -7,12 +7,15 @@ import {
   TaskStore,
   upsertRegisteredProject,
   writeProjectBackend,
-} from '@dispatch/core';
-import { cartoInit, discoverCarto } from '@dispatch/core/carto';
+} from '@dispatch-foo/core';
+import { cartoInit, discoverCarto } from '@dispatch-foo/core/carto';
 import { Command } from 'commander';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
+import packageJson from '../package.json';
+import { registerA2ACommands } from './commands/a2a.js';
+import { registerApprovalsCommands } from './commands/approvals.js';
 import { registerBoardSyncCommands } from './commands/boardSync.js';
 import { registerBrowserCommands } from './commands/browser.js';
 import {
@@ -20,9 +23,11 @@ import {
   openDesktopOrBrowser,
   registerDaemonCommands,
 } from './commands/daemon.js';
+import { registerDocsCommands } from './commands/docs.js';
 import { registerDoctorCommand } from './commands/doctor.js';
 import { registerFanoutCommand } from './commands/fanout.js';
 import { registerLicenseCommands } from './commands/license.js';
+import { registerMemoryCommands } from './commands/memory.js';
 import { registerMergeTaskCommand } from './commands/mergeTask.js';
 import { registerMergeTeamCommand } from './commands/mergeTeam.js';
 import { registerMigrateCommand } from './commands/migrate.js';
@@ -44,18 +49,90 @@ import {
 } from './mergeDriver.js';
 import { projectRoot } from './projectRoot.js';
 
-// Scaffolds `.dispatch/` for `ctx.cwd` if it isn't there yet, and (re-)
-// registers the merge drivers unconditionally. Shared by `dispatch init`
-// (explicit, always reports what happened) and the bare default action
-// (implicit) so the check-then-scaffold logic lives in exactly one place.
-// Driver registration runs on every call, not just a fresh scaffold — a
-// project initialized before the drivers existed, or whose local git config
-// lost them (e.g. a fresh clone), only ever gets repaired if something
-// unconditional touches it, and the bare `dispatch` command is by far the
-// most common path back into an existing project. Returns whether it
-// actually scaffolded — callers use that to decide what to log and whether
-// to also register the MCP server.
-function initIfMissing(ctx: CliContext): boolean {
+// The `.dispatch/` entries init reports on. Init only ever adds to these: an
+// existing file is never rewritten or removed, only topped up (.gitignore).
+const INIT_ENTRIES = ['config.yml', 'team.yml', '.gitignore', 'tasks'];
+
+type DispatchSnapshot = Map<string, string | null>;
+
+// Each entry's content (a directory reads as ''), or null when absent.
+function snapshotDispatchDir(rootDir: string): DispatchSnapshot {
+  const dir = join(rootDir, DISPATCH_DIR);
+  return new Map(
+    INIT_ENTRIES.map((name) => {
+      const path = join(dir, name);
+      if (!existsSync(path)) return [name, null];
+      return [
+        name,
+        statSync(path).isDirectory() ? '' : readFileSync(path, 'utf8'),
+      ];
+    })
+  );
+}
+
+interface InitReport {
+  /** Whether this call created the markdown board. */
+  scaffolded: boolean;
+  /** Whether `.dispatch/` held none of the reported entries beforehand. */
+  fresh: boolean;
+  /** Whether init created or changed anything at all. */
+  changed: boolean;
+  /** One line naming what was kept, created and topped up, for `fresh: false`. */
+  summary: string;
+}
+
+// Compares two snapshots so init can say exactly what it touched.
+function describeInit(
+  before: DispatchSnapshot,
+  after: DispatchSnapshot
+): Omit<InitReport, 'scaffolded'> {
+  const kept: string[] = [];
+  const created: string[] = [];
+  const updated: string[] = [];
+  for (const [name, prior] of before) {
+    const now = after.get(name) ?? null;
+    const label = name === 'tasks' ? 'tasks/' : name;
+    if (prior === null) {
+      if (now !== null) created.push(label);
+    } else if (prior === now) kept.push(label);
+    else updated.push(label);
+  }
+  const parts = [
+    kept.length > 0 ? `kept ${kept.join(', ')}` : null,
+    created.length > 0 ? `created ${created.join(', ')}` : null,
+    updated.length > 0
+      ? `added missing ignore rules to ${updated.join(', ')}`
+      : null,
+  ].filter((part) => part !== null);
+  return {
+    fresh: kept.length + updated.length === 0,
+    changed: created.length + updated.length > 0,
+    summary: `${DISPATCH_DIR}/: ${parts.join('; ')}`,
+  };
+}
+
+// Refuses before writing anything when the existing config.yml cannot be
+// read: init never rewrites it, so the user has to fix it.
+function assertConfigReadable(rootDir: string): void {
+  if (!existsSync(join(rootDir, DISPATCH_DIR, 'config.yml'))) return;
+  try {
+    loadConfig(rootDir);
+  } catch (err) {
+    throw new CliError(
+      `${DISPATCH_DIR}/config.yml exists but cannot be read (${(err as Error).message}). init never rewrites it — fix it, then run init again.`
+    );
+  }
+}
+
+// Scaffolds `.dispatch/` for `ctx.cwd` where it is missing pieces, and (re-)
+// registers the merge drivers unconditionally. Shared by `dispatch init` and
+// the bare default action. Never overwrites or removes an existing file: a
+// teammate's clone arrives with a committed config.yml and team.yml, and
+// those are the team's, not init's. Driver registration runs on every call
+// because a fresh clone's local git config never has them.
+function initIfMissing(ctx: CliContext): InitReport {
+  assertConfigReadable(ctx.cwd);
+  const before = snapshotDispatchDir(ctx.cwd);
   const backend = readProjectBackend(ctx.cwd) ?? 'files';
   // A database-backed project counts as initialized even though it has no
   // `.dispatch/tasks`, because it is not supposed to have one. Testing only
@@ -68,14 +145,15 @@ function initIfMissing(ctx: CliContext): boolean {
   if (!alreadyInitialized) TaskStore.init(ctx.cwd);
   // Unconditional, for the same reason the merge drivers below are: a project
   // initialized before these rules existed only ever gets them if something
-  // that runs on an EXISTING project writes them. That is the case that
-  // matters most here — a long-lived project is exactly the one that will
-  // later run `dispatch migrate` and start producing a dispatch.db to commit.
+  // that runs on an EXISTING project writes them. Additive only.
   ensureProjectGitignore(ctx.cwd, backend);
   writeGitAttributes(ctx.cwd);
   registerMergeDriverGitConfig(ctx.cwd);
   registerTeamMergeDriverGitConfig(ctx.cwd);
-  return !alreadyInitialized;
+  return {
+    scaffolded: !alreadyInitialized,
+    ...describeInit(before, snapshotDispatchDir(ctx.cwd)),
+  };
 }
 
 /**
@@ -98,11 +176,13 @@ function initDatabaseBacked(ctx: CliContext): void {
     ctx.log('already initialized (this project is database-backed)');
     return;
   }
+  assertConfigReadable(ctx.cwd);
   if (existsSync(join(ctx.cwd, DISPATCH_DIR, 'tasks'))) {
     throw new CliError(
       `${ctx.cwd} already has a markdown task board. Those files are its tasks, so this will not initialize a second, empty one beside them. Move them into the database instead: dispatch migrate`
     );
   }
+  const before = snapshotDispatchDir(ctx.cwd);
   initProjectStores({ rootDir: ctx.cwd, backend: 'sqlite' }).close();
   if (readProjectBackend(ctx.cwd) !== 'sqlite') {
     writeProjectBackend(ctx.cwd, 'sqlite');
@@ -113,6 +193,8 @@ function initDatabaseBacked(ctx: CliContext): void {
   ctx.log(
     `Initialized ${DISPATCH_DIR}/ with a daemon-owned database. Your repo holds the config; the tasks live in dispatch.db and reach git as receipts.`
   );
+  const report = describeInit(before, snapshotDispatchDir(ctx.cwd));
+  if (!report.fresh) ctx.log(report.summary);
   ctx.log(
     'dispatchd is the only process that may open it, so start it before creating tasks: dispatch serve'
   );
@@ -126,6 +208,9 @@ export function makeProgram(ctx: CliContext): Command {
         'project, and opens the dispatch UI (the desktop app if installed, ' +
         'otherwise a browser tab).'
     )
+    // Inlined at build time (tsdown and `bun build --compile` both bundle
+    // JSON), so the compiled CLI reads no package.json at runtime.
+    .version(packageJson.version, '-V, --version', 'print the CLI version')
     .exitOverride();
 
   program
@@ -140,12 +225,17 @@ export function makeProgram(ctx: CliContext): Command {
     .action((opts: { mcp: boolean; db: boolean }) => {
       if (opts.db) {
         initDatabaseBacked(ctx);
-      } else if (initIfMissing(ctx)) {
-        ctx.log(
-          `Initialized ${DISPATCH_DIR}/ — create your first task with: dispatch task create "<title>"`
-        );
       } else {
-        ctx.log('already initialized (.dispatch exists)');
+        const report = initIfMissing(ctx);
+        if (report.fresh) {
+          ctx.log(
+            `Initialized ${DISPATCH_DIR}/ — create your first task with: dispatch task create "<title>"`
+          );
+        } else if (report.changed) {
+          ctx.log(`Found an existing ${report.summary}`);
+        } else {
+          ctx.log(`already initialized — ${report.summary}`);
+        }
       }
       if (opts.mcp !== false) {
         registerMcpServer(ctx.cwd);
@@ -189,15 +279,21 @@ export function makeProgram(ctx: CliContext): Command {
   // already-running desktop instance — but the registry entry makes the
   // project appear in its switcher immediately.
   program.action(async () => {
-    if (initIfMissing(ctx)) {
-      registerMcpServer(ctx.cwd);
-      ctx.log(`Initialized ${DISPATCH_DIR}/`);
-    }
+    const report = initIfMissing(ctx);
+    if (report.scaffolded) registerMcpServer(ctx.cwd);
+    if (report.fresh) ctx.log(`Initialized ${DISPATCH_DIR}/`);
+    else if (report.changed) ctx.log(`Found an existing ${report.summary}`);
     // The registry names projects, and a worktree or subdirectory is not
     // one — same root ensureDaemon keys its daemon on.
-    upsertRegisteredProject(projectRoot(ctx.cwd));
+    const root = projectRoot(ctx.cwd);
+    upsertRegisteredProject(root);
     const { port } = await ensureDaemon(ctx);
-    openDesktopOrBrowser(ctx, port);
+    // Said aloud: an app that is already open may not switch projects.
+    ctx.log(
+      openDesktopOrBrowser(ctx, port) === 'app'
+        ? `Opening ${root} in the Dispatch app; if it was already open, pick it in the project switcher.`
+        : `Opened http://127.0.0.1:${port} for ${root} in your browser.`
+    );
   });
 
   program
@@ -213,14 +309,17 @@ export function makeProgram(ctx: CliContext): Command {
       // Dynamic import keeps `@modelcontextprotocol/sdk` and its transitive
       // deps out of the CLI's startup path — every other command pays
       // nothing for this one existing.
-      const { runStdioServer } = await import('@dispatch/mcp');
+      const { runStdioServer } = await import('@dispatch-foo/mcp');
       // A background daemon exits after it sits unused, so a quiet agent
       // session can outlive it; this lets the task tools start a fresh one
       // the same way every other command does. `ensureDaemon` keys on the
       // project root itself, so the root the tool passes is used as its cwd.
       await runStdioServer(ctx.cwd, {
         startDaemon: async (rootDir) => {
-          await ensureDaemon({ ...ctx, cwd: rootDir });
+          await ensureDaemon(
+            { ...ctx, cwd: rootDir },
+            { startedBy: `dispatch mcp (pid ${process.pid})` }
+          );
         },
       });
     });
@@ -233,6 +332,8 @@ export function makeProgram(ctx: CliContext): Command {
   registerMergeTaskCommand(program, ctx);
   registerMergeTeamCommand(program, ctx);
   registerScopeCommands(program, ctx);
+  registerApprovalsCommands(program, ctx);
+  registerMemoryCommands(program, ctx);
   registerBrowserCommands(program, ctx);
   registerFanoutCommand(program, ctx);
   registerRemoteCommands(program, ctx);
@@ -241,8 +342,10 @@ export function makeProgram(ctx: CliContext): Command {
   registerTeamCommands(program, ctx);
   registerBoardSyncCommands(program, ctx);
   registerReceiptsCommands(program, ctx);
+  registerDocsCommands(program, ctx);
   registerLicenseCommands(program, ctx);
   registerMigrateCommand(program, ctx);
+  registerA2ACommands(program, ctx);
 
   return program;
 }

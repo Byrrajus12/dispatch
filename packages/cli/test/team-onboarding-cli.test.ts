@@ -1,0 +1,405 @@
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { daemonFilePath } from '../src/commands/daemon.js';
+import type { CliContext } from '../src/context.js';
+import { makeProgram } from '../src/program.js';
+
+// Team setup from the CLI: start, invite, join, status, and a help that
+// reads as those five, with the older commands under host and advanced.
+
+const APP_TOKEN = 'app-token';
+let root: string;
+let fakeHome: string;
+let lines: string[];
+let asked: string[];
+let ctx: CliContext;
+// What the place prompt is answered with, in turn; null once empty.
+let answers: string[] = [];
+let server: ReturnType<typeof Bun.serve>;
+let posted: { path: string; body: unknown }[];
+let syncOn = true;
+let statusAuth: (string | null)[];
+// When set, a join without confirmRepo is held as the daemon holds a local repo.
+let holdRepo = false;
+const originalHome = process.env.DISPATCH_HOME;
+const originalToken = process.env.DISPATCH_APP_TOKEN;
+
+const run = (...argv: string[]) =>
+  makeProgram(ctx).parseAsync(argv, { from: 'user' });
+
+const STATUS = {
+  state: 'member',
+  line: "Team 'acme' · 2 of 3 seats · syncing via relay.dispatch.foo · last sync 4s ago",
+  team: { id: 'a'.repeat(32), name: 'acme' },
+  role: 'admin',
+  seats: { used: 2, total: 3 },
+  sync: { kind: 'relay', where: 'relay.dispatch.foo', lastSyncAt: null },
+  teammates: [
+    { handle: 'ada', device: 'laptop', role: 'admin', you: true, check: null },
+    {
+      handle: 'bob',
+      device: 'desk',
+      role: 'member',
+      you: false,
+      check: '123 456',
+    },
+  ],
+  check: null,
+  problems: [
+    { message: 'Can’t reach relay.dispatch.foo.', fix: 'dispatch sync now' },
+  ],
+};
+
+// What each POST answers, by path.
+const ANSWERS: Record<string, unknown> = {
+  '/api/team/start': {
+    teamId: 'a'.repeat(32),
+    name: 'acme',
+    recoveryCode: 'RECOVERY-CODE',
+    fingerprint: 'FP',
+    transport: { kind: 'relay', url: 'wss://relay.dispatch.foo' },
+    notice: null,
+  },
+  '/api/team/invite': {
+    code: 'di1.x',
+    expires: '2026-10-13T00:00:00.000Z',
+    handle: 'bob',
+    link: 'dispatch-team:LINK',
+    url: 'https://dispatch.foo/join#LINK',
+  },
+  '/api/team/join': {
+    ok: true,
+    team: { id: 'a'.repeat(32), name: 'acme' },
+    by: 'ada',
+    check: '123 456',
+  },
+  '/api/team/found': {
+    teamId: 'a'.repeat(32),
+    recoveryCode: 'RECOVERY-CODE',
+    fingerprint: 'FP',
+  },
+  '/api/team/tokens': {
+    handle: 'bob',
+    tier: 'request',
+    token: 'tok',
+    expiresAt: null,
+  },
+};
+
+beforeEach(async () => {
+  root = mkdtempSync(join(tmpdir(), 'dispatch-cli-team-'));
+  fakeHome = mkdtempSync(join(tmpdir(), 'dispatch-home-team-'));
+  process.env.DISPATCH_HOME = fakeHome;
+  process.env.DISPATCH_APP_TOKEN = APP_TOKEN;
+  lines = [];
+  asked = [];
+  posted = [];
+  answers = [];
+  syncOn = true;
+  holdRepo = false;
+  statusAuth = [];
+  ctx = {
+    cwd: root,
+    log: (l) => lines.push(l),
+    confirm: (question) => {
+      asked.push(question);
+      return Promise.resolve(true);
+    },
+    readSecret: (prompt) => {
+      asked.push(prompt);
+      return Promise.resolve('  dispatch-team:LINK \n');
+    },
+    ask: (question) => {
+      asked.push(question.split('\n')[0] ?? question);
+      return Promise.resolve(answers.shift() ?? null);
+    },
+  };
+  await run('init');
+  lines = [];
+  server = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const url = new URL(req.url);
+      if (url.pathname === '/api/health') return Response.json({ ok: true });
+      if (url.pathname === '/api/team/keys')
+        return Response.json({ relayDisclosure: 'The relay can read X.' });
+      if (url.pathname === '/api/team/status') {
+        const auth = req.headers.get('authorization');
+        statusAuth.push(auth);
+        // The agent token gets the server's reduced view.
+        return Response.json(
+          auth === 'Bearer agent'
+            ? { ...STATUS, teammates: [], problems: [], reduced: true }
+            : STATUS
+        );
+      }
+      if (url.pathname === '/api/board-sync')
+        return Response.json({ enabled: syncOn });
+      const body = (await req.json()) as Record<string, unknown>;
+      posted.push({ path: url.pathname, body });
+      if (
+        holdRepo &&
+        url.pathname === '/api/team/join' &&
+        body.confirmRepo !== true
+      )
+        return Response.json(
+          {
+            error:
+              "This invite keeps the team's board at /srv/board.git, a path on this machine.",
+            code: 'confirm_repo',
+          },
+          { status: 409 }
+        );
+      // Sync off: the first start or join turns it on and restarts.
+      if (
+        !syncOn &&
+        (url.pathname === '/api/team/start' ||
+          url.pathname === '/api/team/join')
+      ) {
+        syncOn = true;
+        return Response.json(
+          { restarting: true, code: 'restarting' },
+          { status: 202 }
+        );
+      }
+      return Response.json(ANSWERS[url.pathname] ?? { ok: true });
+    },
+  });
+  mkdirSync(join(fakeHome, '.dispatch', 'daemons'), { recursive: true });
+  writeFileSync(
+    daemonFilePath(root),
+    JSON.stringify({
+      port: server.port,
+      pid: process.pid,
+      rootDir: root,
+      startedAt: new Date().toISOString(),
+      agentToken: 'agent',
+    })
+  );
+});
+
+afterEach(() => {
+  void server.stop(true);
+  if (originalHome === undefined) delete process.env.DISPATCH_HOME;
+  else process.env.DISPATCH_HOME = originalHome;
+  if (originalToken === undefined) delete process.env.DISPATCH_APP_TOKEN;
+  else process.env.DISPATCH_APP_TOKEN = originalToken;
+});
+
+describe('team setup from the CLI', () => {
+  it('start asks where the board goes, shows the disclosure, and prints the recovery code', async () => {
+    answers = ['2'];
+    await run('team', 'start', '--name', 'acme');
+    expect(asked).toEqual([
+      "Where should the team's board be kept?",
+      'Sync this team through relay.dispatch.foo?',
+    ]);
+    expect(posted).toEqual([
+      {
+        path: '/api/team/start',
+        body: { name: 'acme', remote: 'origin', confirmed: true },
+      },
+    ]);
+    const text = lines.join('\n');
+    expect(text).toContain('The relay can read X.');
+    expect(text).toContain('Registering with relay.dispatch.foo…');
+    expect(text).toContain(
+      "Started team 'acme', syncing via relay.dispatch.foo."
+    );
+    expect(text).toContain('RECOVERY-CODE');
+  });
+
+  it('start --git asks only where the board goes: a separate repo', async () => {
+    answers = ['1', ' git@example.com:acme/board.git '];
+    await run('team', 'start', '--git');
+    expect(asked).toEqual([
+      "Where should the team's board be kept?",
+      'Board repo URL: ',
+    ]);
+    expect(posted).toEqual([
+      {
+        path: '/api/team/start',
+        body: { repo: 'git@example.com:acme/board.git', git: true },
+      },
+    ]);
+  });
+
+  it('start with nobody to ask and no place refuses with the flags', async () => {
+    await expect(run('team', 'start', '--git')).rejects.toThrow('--repo');
+    expect(posted).toEqual([]);
+  });
+
+  it('start --remote names where the board is kept', async () => {
+    await run('team', 'start', '--git', '--remote', 'origin');
+    expect(asked).toEqual([]);
+    expect(posted).toEqual([
+      { path: '/api/team/start', body: { remote: 'origin', git: true } },
+    ]);
+  });
+
+  it('invite prints one link, for an email or a handle', async () => {
+    await run('team', 'invite', 'bob@example.com');
+    expect(posted).toEqual([
+      { path: '/api/team/invite', body: { email: 'bob@example.com' } },
+    ]);
+    expect(lines).toContain('  dispatch-team:LINK');
+  });
+
+  it('invite with the old token options issues a shared-host token', async () => {
+    await run('team', 'invite', 'bob', '--tier', 'request');
+    expect(posted.map((p) => p.path)).toEqual(['/api/team/tokens']);
+  });
+
+  it('join reads the link from a prompt and prints the optional check', async () => {
+    await run('team', 'join');
+    expect(asked).toEqual(['Invite link: ']);
+    expect(posted).toEqual([
+      { path: '/api/team/join', body: { code: 'dispatch-team:LINK' } },
+    ]);
+    const text = lines.join('\n');
+    expect(text).toContain("Joined team 'acme'");
+    expect(text).toContain('123 456');
+  });
+
+  it('join says where an invite keeps a local board and asks before using it', async () => {
+    holdRepo = true;
+    await run('team', 'join');
+    expect(asked).toEqual(['Invite link: ', 'Join and sync with that repo?']);
+    expect(posted.map((p) => p.body)).toEqual([
+      { code: 'dispatch-team:LINK' },
+      { code: 'dispatch-team:LINK', confirmRepo: true },
+    ]);
+    expect(lines.join('\n')).toContain('/srv/board.git');
+  });
+
+  it('join refuses a held repo when the answer is no, and --accept-repo skips the question', async () => {
+    holdRepo = true;
+    ctx.confirm = (question) => {
+      asked.push(question);
+      return Promise.resolve(false);
+    };
+    const err = await run('team', 'join').catch((e: unknown) => e);
+    expect(String(err)).toContain('Not joined');
+    expect(posted).toHaveLength(1);
+
+    asked = [];
+    posted = [];
+    await run('team', 'join', '--accept-repo');
+    expect(asked).toEqual(['Invite link: ']);
+    expect(posted.at(-1)?.body).toEqual({
+      code: 'dispatch-team:LINK',
+      confirmRepo: true,
+    });
+  });
+
+  it('status prints the line, teammates with their checks, and each fix', async () => {
+    await run('team', 'status');
+    expect(lines[0]).toBe(STATUS.line);
+    const text = lines.join('\n');
+    expect(text).toContain('bob (desk) · member · check 123 456');
+    expect(text).toContain('fix: dispatch sync now');
+  });
+
+  it('status without an app token reads the reduced view on the agent token', async () => {
+    delete process.env.DISPATCH_APP_TOKEN;
+    await run('team', 'status');
+    expect(statusAuth).toEqual(['Bearer agent']);
+    expect(lines[0]).toBe(STATUS.line);
+    const text = lines.join('\n');
+    expect(text).not.toContain('bob (desk)');
+    expect(text).toContain('need the daemon app token');
+  });
+
+  it('join, advanced join and recover check the token before asking for a secret', async () => {
+    delete process.env.DISPATCH_APP_TOKEN;
+    for (const argv of [
+      ['team', 'join'],
+      ['team', 'advanced', 'join'],
+      ['team', 'advanced', 'recover'],
+    ]) {
+      const err = await run(...argv).catch((e: unknown) => e);
+      expect((err as Error).message).toContain(`pid ${process.pid}, port`);
+    }
+    expect(asked).toEqual([]);
+    expect(posted).toEqual([]);
+  });
+
+  it('names a background daemon, who started it, and the ways out', async () => {
+    delete process.env.DISPATCH_APP_TOKEN;
+    writeFileSync(
+      daemonFilePath(root),
+      JSON.stringify({
+        port: server.port,
+        pid: process.pid,
+        rootDir: root,
+        startedAt: new Date().toISOString(),
+        agentToken: 'agent',
+        background: true,
+        startedBy: 'dispatch mcp (pid 4120)',
+      })
+    );
+    const err = await run('team', 'join').catch((e: unknown) => e);
+    const message = (err as Error).message;
+    expect(message).toContain(
+      `(pid ${process.pid}, port ${server.port}) was started in the background by dispatch mcp (pid 4120)`
+    );
+    expect(message).toContain(
+      'Run `dispatch serve` in a terminal you keep open; it takes over the background daemon'
+    );
+  });
+
+  it('says an invite pasted as the app token is an invite, without echoing it', async () => {
+    process.env.DISPATCH_APP_TOKEN = 'dispatch-team:SECRET-LINK';
+    const err = await run('team', 'join').catch((e: unknown) => e);
+    const message = (err as Error).message;
+    expect(message).toStartWith('that is a team invite link');
+    expect(message).not.toContain('SECRET-LINK');
+    expect(asked).toEqual([]);
+  });
+
+  it('help lists start, invite, join, status and leave, and hides the old names', () => {
+    const team = makeProgram(ctx).commands.find((c) => c.name() === 'team');
+    const help = team?.helpInformation() ?? '';
+    for (const name of [
+      'start',
+      'invite',
+      'join',
+      'status',
+      'leave',
+      'host',
+      'advanced',
+    ])
+      expect(help).toMatch(new RegExp(`^  ${name}\\b`, 'm'));
+    for (const name of [
+      'found',
+      'keys',
+      'tokens',
+      'close-legacy',
+      'dismiss',
+      'trust',
+    ])
+      expect(help).not.toMatch(new RegExp(`^  ${name}\\b`, 'm'));
+  });
+
+  it('keeps the old names working, hidden, beside team advanced', async () => {
+    await run('team', 'found');
+    await run('team', 'advanced', 'found');
+    expect(posted.map((p) => p.path)).toEqual([
+      '/api/team/found',
+      '/api/team/found',
+    ]);
+  });
+
+  it('join with sync off waits out the restart and joins, in one command', async () => {
+    syncOn = false;
+    await run('team', 'join');
+    expect(posted.map((p) => p.path)).toEqual([
+      '/api/team/join',
+      '/api/team/join',
+    ]);
+    expect(lines.join('\n')).toContain("Joined team 'acme'");
+  });
+});

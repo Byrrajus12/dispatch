@@ -17,25 +17,33 @@ never change.
 ## The ready-work loop
 
 1. Call \`task_next\` to see tasks that are unblocked and ready to start (kind
-   \`task\`, status \`ready\`, every entry in \`blockedBy\` landed or dropped),
-   priority-ordered.
+   \`task\`, a status whose type is \`unstarted\`, every entry in
+   \`blockedBy\` in a completed or canceled status), priority-ordered. It
+   pages: pass \`offset: nextOffset\` for more, as with \`task_list\`.
 2. Pick one, do the work.
 3. Call \`task_comment\` as you make progress — it adds a comment to the
    task's thread, credited to you, so anyone (human or agent) can follow what
    happened. \`task_comments\` reads the thread back.
 4. Call \`task_save\` with the task's \`id\` and \`status\` to move it forward:
-   \`working\` while you are on it, \`review\` once the change is up for
-   review. \`landed\` means merged — when dispatchd runs the task, it sets
-   \`working\` through \`landed\` itself as the run and merge queue advance.
+   a started status while you are on it, the review status once the change is
+   up for review. When dispatchd runs the task, it writes those statuses
+   itself as the run and merge queue advance.
 
 ## Statuses are config-driven
 
-The built-in statuses are \`draft\`, \`ready\`, \`working\`, \`review\`,
-\`landing\`, \`landed\`, \`dropped\` (the old names — backlog, todo,
-in-progress, in-review, done, cancelled — are accepted as aliases), but a given
-repo's \`.dispatch/config.yml\` can define a different set — that file is
-always the source of truth. \`task_list\` and
-\`task_save\` validate \`status\` against it, not against this list.
+A repo's \`.dispatch/config.yml\` names its statuses, and that file is always
+the source of truth: \`task_list\` and \`task_save\` validate \`status\`
+against it. A board imported from Linear keeps Linear's names (Backlog, Todo,
+In Progress, In Review, Done, …). Each status has a workflow type — triage,
+backlog, unstarted, started, completed or canceled — and Dispatch keys off the
+type, never the name: unstarted is the ready queue, completed and canceled are
+done. \`statusRoles\` in the config names which status the machinery writes
+when a run is dispatched, goes to review, lands or is dropped.
+
+With no statuses configured, the built-ins apply: \`draft\` (backlog),
+\`ready\` (unstarted), \`working\`, \`review\`, \`landing\` (started),
+\`landed\` (completed) and \`dropped\` (canceled); the old names backlog,
+todo, in-progress, in-review, done and cancelled are accepted as aliases.
 
 ## Creating and updating tasks
 
@@ -56,25 +64,36 @@ valid fallback — just keep the YAML frontmatter's required fields (\`id\`,
 
 ## Talking to other agents and the human
 
-Other dispatch runs may be working in parallel, and a human may be watching
-this run's Session tab. Four channels cover every direction:
+Everything goes through one message bus. Addresses are \`human:<handle>\`,
+\`task:<id>\` (its live run, else its next one), \`run:<id>\` (that session only),
+\`agent:<owner>/<name>\` (a registered agent; \`agent_list\` lists them) and
+\`channel:<name>\`. To reach work on a teammate's machine, address its
+\`task:<id>\` or \`run:<id>\`: those cross machines.
 
-- **Agent -> agent**: call \`run_list\` to see who else is live right now
-  (id, task, state), then \`agent_message\` with exactly one of
-  \`runId\`/\`taskId\` to send that run a message. It's delivered prefixed
-  \`[message from <sender>]\` (your own task title + run id when this
-  server knows it) so the receiving agent can tell who's talking — both
-  your and their Session tabs show the exchange.
-- **App/user -> agent**: the human talks to you through this run's own
-  Session composer in the app — those messages just show up as your next
-  turn, no tool call needed on your end to receive them.
-- **Agent -> app/user**: call \`message_user\` with a short \`text\` to
-  flag a blocker or a notable update to the human beyond your normal
-  assistant output — it lands on your own Session tab, badged as coming
-  from you, and does not wait for a reply.
-- **Agent -> app/user, waiting for a reply**: call \`ask_user\` with a
-  \`question\` (and \`options\` for the answers you think likely) when a
-  decision would change the shape of your result and the task doesn't
-  specify it. Unlike \`message_user\` it blocks until the human answers and
-  returns their reply. Bundle everything you're unsure about into one call.
+- **Ask the human**: \`msg_send\` with \`kind: "question"\`, \`blocking: true\`
+  (and \`choices\` for a pick-one). It waits up to 30 minutes for the answer.
+  Inside a run, your human is named in your task prompt. Outside one, it is the
+  handle in your own address (\`agent:<handle>/<name>\` → \`human:<handle>\`).
+- **Ask for scope** (inside a dispatch run): \`msg_send(kind: "question",
+  blocking: true, choices: ["grant", "deny"], data: { type: "scope", paths,
+  reason })\`. Edit outside your fence only on \`grant\`. No decision in time
+  means denied.
+- **Tell someone**: \`kind: "notice"\` (FYI) or \`"message"\`, no blocking.
+- **Hear back**: messages arrive in your session. Answer with \`msg_reply\`,
+  catch up with \`inbox_read\`, and read a whole conversation with \`thread_read\`.
+
+## Memory
+
+Dispatch remembers lessons, conventions and preferences from earlier work. A
+dispatched run's prompt carries the top ones as a \`## Memory\` index, one line
+each with a \`#handle\`. Open one with \`memory_read("#handle")\` for its body,
+author and revisions, and use \`memory_search\` to find entries the index left
+out. A line marked \`unreviewed\` was written by an agent and no human has
+checked it yet.
+
+To remember something for later work, call \`memory_save\`: the title is the
+whole lesson in one line. \`scope: "personal"\` is your operator's own memory and
+saves at once; \`"project"\` and \`"team"\` become proposals a human approves,
+unless the project's autonomy policy accepts them. \`memory_forget\` retires an
+entry that is wrong or no longer true.
 `;

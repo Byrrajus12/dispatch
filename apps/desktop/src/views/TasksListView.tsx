@@ -1,5 +1,9 @@
-import type { Assignee, Priority, TaskListItem } from '@dispatch/core/browser';
-import { PRIORITY_ORDER } from '@dispatch/core/browser';
+import type {
+  Assignee,
+  Priority,
+  TaskListItem,
+} from '@dispatch-foo/core/browser';
+import { PRIORITY_ORDER } from '@dispatch-foo/core/browser';
 import {
   Archive,
   ArrowUpRight,
@@ -8,6 +12,7 @@ import {
   Copy,
   Eye,
   Link2,
+  ListTodo,
   Milestone,
   Play,
   SearchX,
@@ -91,6 +96,14 @@ interface TasksListViewProps {
   onRequestFilter?: () => void;
   /** `⇧V` on the list: the page header opens its Display popover. No-op until wired. */
   onRequestDisplay?: () => void;
+  /** Tasks with an ask of yours; without it, any task wanting attention reads "Needs you". */
+  needsYouIds?: ReadonlySet<string>;
+  /** Unread messages to me per task, for each row's speech cell. */
+  speechByTask?: ReadonlyMap<string, { count: number; mention: boolean }>;
+  /** Extra cells on a group's header row (Two views' milestone status). */
+  groupAccessory?: (group: ListGroup) => ReactNode;
+  /** Groups that are not task groups (notes, pull requests, docs), after the rows. */
+  footer?: ReactNode;
 }
 
 const PRIORITIES = Object.keys(PRIORITY_ORDER) as Priority[];
@@ -133,6 +146,10 @@ export function TasksListView({
   display,
   onRequestFilter,
   onRequestDisplay,
+  needsYouIds,
+  groupAccessory,
+  footer,
+  speechByTask,
 }: TasksListViewProps) {
   const shell = useShellActions();
   const model = useStatusModelOf(data.config);
@@ -398,12 +415,24 @@ export function TasksListView({
       {/* Keyed on the groups, not the visible rows: collapsing every group must leave the
           headers (and their chevrons) in place. */}
       {groups.length === 0 ? (
-        <EmptyState
-          icon={SearchX}
-          heading="No tasks match"
-          description="Nothing passes the current filter. Clear it to see the project's tasks."
-          className="flex-1"
-        />
+        <>
+          {data.tasks.length === 0 && data.epics.length === 0 ? (
+            <EmptyState
+              icon={ListTodo}
+              heading="No tasks yet"
+              description="Describe a change to the Overseer, or press New task."
+              className="flex-1"
+            />
+          ) : (
+            <EmptyState
+              icon={SearchX}
+              heading="No tasks match"
+              description="Nothing passes the current filter. Clear it to see the project's tasks."
+              className="flex-1"
+            />
+          )}
+          {footer}
+        </>
       ) : (
         <ContextMenu
           onOpenChange={(open) => {
@@ -437,6 +466,7 @@ export function TasksListView({
                   const group = row.header;
                   const knownEpic =
                     group.epicId !== null && epicById.has(group.epicId);
+                  const accessory = groupAccessory?.(group);
                   return (
                     <div data-group-key={group.key}>
                       <GroupHeader
@@ -453,17 +483,22 @@ export function TasksListView({
                         }
                         addLabel={`New task in ${group.label}`}
                         actions={
-                          knownEpic ? (
-                            <IconButton
-                              label={`Open the flight plan for ${group.label}`}
-                              onClick={() => {
-                                if (group.epicId !== null) {
-                                  shell.openTask(group.epicId, 'plan');
-                                }
-                              }}
-                            >
-                              <Waypoints aria-hidden />
-                            </IconButton>
+                          knownEpic || accessory !== undefined ? (
+                            <>
+                              {accessory}
+                              {knownEpic && (
+                                <IconButton
+                                  label={`Open the flight plan for ${group.label}`}
+                                  onClick={() => {
+                                    if (group.epicId !== null) {
+                                      shell.openTask(group.epicId, 'plan');
+                                    }
+                                  }}
+                                >
+                                  <Waypoints aria-hidden />
+                                </IconButton>
+                              )}
+                            </>
                           ) : undefined
                         }
                       />
@@ -480,7 +515,12 @@ export function TasksListView({
                     prefs={prefs}
                     run={data.latestRunByTaskId.get(id)}
                     live={data.liveRunStateByTaskId.has(id)}
-                    needsYou={data.attentionByTaskId.has(id)}
+                    needsYou={
+                      needsYouIds === undefined
+                        ? data.attentionByTaskId.has(id)
+                        : needsYouIds.has(id)
+                    }
+                    speech={speechByTask?.get(id)}
                     landing={landingByTaskId.get(id)}
                     statuses={statuses}
                     epics={data.epics}
@@ -511,6 +551,7 @@ export function TasksListView({
                 );
               }}
             />
+            {footer}
           </ContextMenuTrigger>
           {menuDoc !== undefined && (
             <ContextMenuContent className="min-w-[180px]">

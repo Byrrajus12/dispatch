@@ -3,6 +3,7 @@ mod cost;
 mod db;
 mod parser;
 mod registry;
+mod setup;
 mod sidecar;
 mod summarize;
 mod tags;
@@ -86,6 +87,12 @@ pub fn run() {
       Ok(())
     })
     .invoke_handler(tauri::generate_handler![
+      setup::git_setup_status,
+      setup::install_git,
+      setup::set_git_identity,
+      setup::project_folder_state,
+      setup::prepare_project_folder,
+      setup::install_cli_command,
       commands::list_projects,
       commands::list_sessions,
       commands::get_session_detail,
