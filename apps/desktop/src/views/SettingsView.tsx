@@ -101,7 +101,7 @@ interface SettingsViewProps {
 
 /** A page that is a whole view: full width, its own state, left out of search. */
 export interface HostedSettingsPage {
-  id: 'usage' | 'runs' | 'developer';
+  id: 'usage' | 'runs';
   label: string;
   icon: LucideIcon;
   intro: string;

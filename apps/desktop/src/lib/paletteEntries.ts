@@ -64,13 +64,8 @@ export interface PaletteEntriesContext {
 
 // The pages under Tasks with no other way in from the top bar.
 const TASKS_PAGES: PaletteView[] = [
-  { id: 'plans', label: 'Plans' },
-  { id: 'brain-dump', label: 'Notes' },
-  { id: 'branches', label: 'Git' },
   { id: 'files', label: 'Files' },
   { id: 'terminals', label: 'Terminals' },
-  { id: 'design', label: 'Design' },
-  { id: 'impact', label: 'Impact' },
 ];
 
 /** The rows the command menu offers right now: actions (a `Copy link` when a task is up),
@@ -104,7 +99,8 @@ export function buildPaletteEntries(
         label: 'Plan work…',
         kind: 'action',
         section: 'actions',
-        run: () => actions.setProjectView('plans'),
+        // Planning happens in the Overseer conversation.
+        run: () => actions.setGlobalView('overseer'),
       },
       {
         id: 'action-quick-capture',

@@ -1,5 +1,5 @@
 import type { MergeQueueEntry, RunMeta } from '@dispatch/client';
-import { Minus, NotebookPen, PowerOff } from 'lucide-react';
+import { Minus, PowerOff } from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 
 import { DockedConversation } from '../components/chat/DockedConversation';
@@ -57,8 +57,6 @@ export interface TwoViewOverseerProps {
 
   /** Opens one of the agent's "Show in tasks" doors. */
   onOpenDoor: (door: OverseerDoor) => void;
-  /** Opens the Plans page: plan history and the planner's editable proposals. */
-  onOpenPlans?: () => void;
   /** An empty project's first-run prompt, shown in place of a fresh conversation. */
   firstRun?: ReactNode;
 }
@@ -95,7 +93,6 @@ export function TwoViewOverseer({
   onFocus = () => {},
   renderFocus,
   onOpenDoor,
-  onOpenPlans,
   firstRun,
 }: TwoViewOverseerProps) {
   // Whatever a side column opened takes the middle; Esc hands it back to the talk.
@@ -255,40 +252,25 @@ export function TwoViewOverseer({
           focused !== null && 'hidden'
         )}
       >
-        {(open !== null || onOpenPlans !== undefined) && (
-          // Pinned to the top, even while a fresh composer sits at the bottom.
-          <div
-            className={cn('flex justify-end gap-1', open === null && 'mb-auto')}
-          >
-            {onOpenPlans !== undefined && (
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={onOpenPlans}
-                data-testid="overseer-open-plans"
+        {open !== null && (
+          <div className="flex justify-end gap-1">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={minimize}
+                    data-testid="overseer-minimize"
+                  />
+                }
               >
-                <NotebookPen /> Plans
-              </Button>
-            )}
-            {open !== null && (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      onClick={minimize}
-                      data-testid="overseer-minimize"
-                    />
-                  }
-                >
-                  <Minus /> Set aside
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  Set this conversation aside and start another
-                </TooltipContent>
-              </Tooltip>
-            )}
+                <Minus /> Set aside
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                Set this conversation aside and start another
+              </TooltipContent>
+            </Tooltip>
           </div>
         )}
         {setAside !== null && (

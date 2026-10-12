@@ -22,6 +22,7 @@ export type ProjectView =
   | 'live'
   /** retired — normalized to 'inbox' */
   | 'runs'
+  /** retired — normalized to 'cockpit' */
   | 'branches'
   /** retired — normalized to 'landing' */
   | 'landed'
@@ -36,8 +37,9 @@ export type ProjectView =
   /** Conversations on the message bus: Needs you, Channels, Direct.
    * `threadFocus` says which thread is open. */
   | 'threads'
+  /** retired — normalized to 'cockpit' */
   | 'brain-dump'
-  /** Point at an element in a live browser and hand it to an agent. */
+  /** retired — normalized to 'cockpit' */
   | 'design'
   /** Browse and edit the checkout, with previews and quick open. */
   | 'files'
@@ -45,13 +47,13 @@ export type ProjectView =
   | 'docs'
   /** Shells on the repo or a run's worktree, split any number of ways. */
   | 'terminals'
+  /** retired — normalized to 'cockpit' */
   | 'plans'
   /** A single AI task draft's review page — `activeDraftId` says which one. */
   | 'draft'
   /** One repo pull request, full-window — `activePrNumber` says which. */
   | 'pr'
-  /** The blast-radius browser — `impactSubject` says which file/run/task, or
-   * `null` for the picker with nothing preselected. */
+  /** retired — normalized to 'cockpit' */
   | 'impact'
   /** One task, full-window, on a mode that follows its state — `activeTaskId` says which. */
   | 'task'
@@ -60,10 +62,7 @@ export type ProjectView =
 /** Views that act on the host machine as the person running the daemon — a
  * shell, and a browser carrying their cookies. The daemon holds both to the
  * operator tier, so a teammate below it is not shown doors that only 403. */
-export const HOST_VIEWS: ReadonlySet<ProjectView> = new Set([
-  'terminals',
-  'design',
-]);
+export const HOST_VIEWS: ReadonlySet<ProjectView> = new Set(['terminals']);
 
 /** Which mode the task page shows: `auto` follows the task's state (see
  * defaultTaskPageMode); `thread` is the task's message threads; `preview` is the
@@ -87,15 +86,8 @@ export interface ImpactSubjectRef {
 /** Global, not-project-scoped views living below the primary nav in the sidebar.
  * `overseer` is the chat assistant for the active project — it lives in this section
  * (not `ProjectView`) so it stays reachable from any view, but its conversation is
- * still scoped to whichever project is active. `gallery` is dev-only — see the
- * `import.meta.env.DEV` gates in App.tsx/Sidebar.tsx — but stays in this union
- * unconditionally so the type checker covers it like any other view. */
-export type GlobalView =
-  | 'all-agents'
-  | 'sessions'
-  | 'overseer'
-  | 'settings'
-  | 'gallery';
+ * still scoped to whichever project is active. */
+export type GlobalView = 'all-agents' | 'sessions' | 'overseer' | 'settings';
 
 /** The pages of the Settings view, in its nav order. Lives here rather than in
  * `SettingsView` so a `setGlobalView('settings', { page })` can name one — the rail's
@@ -191,9 +183,19 @@ interface NavEntry {
 }
 
 /** Retired page ids survive so stored nav state and deep links land somewhere
- * real: Runs/Review folded into the Inbox, Landed into the Landing table. */
+ * real: Runs/Review folded into the Inbox, Landed into the Landing table, and
+ * the pruned pages (Plans, Notes, Git, Impact, Design) onto the cockpit. */
+const RETIRED_TO_COCKPIT: ReadonlySet<ProjectView> = new Set([
+  'plans',
+  'brain-dump',
+  'branches',
+  'impact',
+  'design',
+]);
+
 function normalizeProjectView(view: ProjectView): ProjectView {
   if (view === 'runs' || view === 'review') return 'inbox';
+  if (RETIRED_TO_COCKPIT.has(view)) return 'cockpit';
   return view === 'landed' ? 'landing' : view;
 }
 

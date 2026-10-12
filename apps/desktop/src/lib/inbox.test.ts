@@ -301,10 +301,10 @@ describe('projectViewForInboxTarget', () => {
     expect(projectViewForInboxTarget({ kind: 'runs-page' })).toBe('landing');
   });
 
-  test('a plan target opens the Plans view', () => {
-    expect(projectViewForInboxTarget({ kind: 'plan', planId: 'p-1' })).toBe(
-      'plans'
-    );
+  test('a plan target has no project page: the shell opens the Overseer', () => {
+    expect(
+      projectViewForInboxTarget({ kind: 'plan', planId: 'p-1' })
+    ).toBeNull();
   });
 
   // These three carry an id, so App.tsx routes them to one record rather than

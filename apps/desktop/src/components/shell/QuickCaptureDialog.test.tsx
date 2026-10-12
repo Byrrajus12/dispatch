@@ -20,10 +20,8 @@ beforeEach(() => {
 // `open` is controlled by App in production (⌘D and the rail row drive it); the harness
 // plays App's role with a button standing in for both.
 function Harness({
-  onOpenBrainDump = () => {},
   onCapture = () => Promise.resolve(),
 }: {
-  onOpenBrainDump?: () => void;
   onCapture?: (text: string) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
@@ -36,17 +34,15 @@ function Harness({
         open={open}
         onOpenChange={setOpen}
         onCapture={onCapture}
-        onOpenBrainDump={onOpenBrainDump}
       />
     </>
   );
 }
 
 function mount(
-  overrides: { onOpenBrainDump?: () => void } = {},
   onCapture: (text: string) => Promise<void> = () => Promise.resolve()
 ) {
-  return render(<Harness {...overrides} onCapture={onCapture} />);
+  return render(<Harness onCapture={onCapture} />);
 }
 
 function openPanel() {
@@ -68,7 +64,7 @@ test('the dialog stays closed until opened, and there is no floating button', ()
 
 test('capturing hands the draft to onCapture, then clears and closes', async () => {
   const captured: string[] = [];
-  mount({}, (text) => {
+  mount((text) => {
     captured.push(text);
     return Promise.resolve();
   });
@@ -86,7 +82,7 @@ test('capturing hands the draft to onCapture, then clears and closes', async () 
 
 test('⌘⏎ commits the draft from the textarea', async () => {
   const captured: string[] = [];
-  mount({}, (text) => {
+  mount((text) => {
     captured.push(text);
     return Promise.resolve();
   });
@@ -99,7 +95,7 @@ test('⌘⏎ commits the draft from the textarea', async () => {
 test('a second ⌘⏎ while a capture is in flight does not double-capture', async () => {
   let release: () => void = () => {};
   const captured: string[] = [];
-  mount({}, (text) => {
+  mount((text) => {
     captured.push(text);
     return new Promise<void>((resolve) => {
       release = resolve;
@@ -116,7 +112,7 @@ test('a second ⌘⏎ while a capture is in flight does not double-capture', asy
 });
 
 test('a failed capture keeps the draft and shows the error inline', async () => {
-  mount({}, () => Promise.reject(new Error('daemon said no')));
+  mount(() => Promise.reject(new Error('daemon said no')));
   const textarea = openPanel();
   fireEvent.change(textarea, { target: { value: 'do not lose me' } });
   fireEvent.click(screen.getByRole('button', { name: 'Drop it' }));
@@ -131,15 +127,6 @@ test('the Drop it button is disabled while the draft is blank', () => {
   expect(
     screen.getByRole<HTMLButtonElement>('button', { name: 'Drop it' }).disabled
   ).toBe(true);
-});
-
-test('Open Notes navigates and closes the dialog', () => {
-  let opened = 0;
-  mount({ onOpenBrainDump: () => opened++ });
-  openPanel();
-  fireEvent.click(screen.getByRole('button', { name: 'Open Notes' }));
-  expect(opened).toBe(1);
-  expect(screen.queryByRole('dialog')).toBeNull();
 });
 
 test('Escape closes the dialog', () => {

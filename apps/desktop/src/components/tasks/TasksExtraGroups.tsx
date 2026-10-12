@@ -52,14 +52,11 @@ export function TasksExtraGroups({
   onOpenPr,
   onOpenDoc,
   onOpenAllDocs,
-  onOpenNotes,
 }: {
   data: DispatchProjectData;
   onOpenPr: (number: number) => void;
   onOpenDoc: (docId: string) => void;
   onOpenAllDocs: () => void;
-  /** The full Notes page: capture, triage and planning from notes. */
-  onOpenNotes: () => void;
 }) {
   const notes = data.inbox.filter((item) => !item.done);
   const claimed = new Set(data.runs.flatMap((r) => (r.prUrl ? [r.prUrl] : [])));
@@ -73,16 +70,7 @@ export function TasksExtraGroups({
 
   return (
     <div data-testid="tasks-extra-groups" className="pt-2">
-      <Section
-        name="Notes"
-        count={notes.length}
-        testId="tasks-group-notes"
-        extra={
-          <Button variant="link" size="xs" onClick={onOpenNotes}>
-            All notes →
-          </Button>
-        }
-      >
+      <Section name="Notes" count={notes.length} testId="tasks-group-notes">
         {notes.map((note) => (
           <ListRow
             key={note.id}

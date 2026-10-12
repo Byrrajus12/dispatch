@@ -4,7 +4,6 @@ import {
   FolderGit2,
   LifeBuoy,
   LogOut,
-  Palette,
   Plus,
   Repeat2,
 } from 'lucide-react';
@@ -45,8 +44,6 @@ interface ProjectSwitcherProps {
   onSelectProject: (path: string) => void;
   onAddProject: () => void;
   onOpenSettings: () => void;
-  /** Dev-only; omitted in a production build. */
-  onOpenGallery?: () => void;
   /** Help: brings the first-task guide back for this project. */
   onRestartGuide?: () => void;
   /** Set only for a teammate on a team-local daemon: who they are signed in
@@ -74,7 +71,6 @@ export function ProjectSwitcher({
   onSelectProject,
   onAddProject,
   onOpenSettings,
-  onOpenGallery,
   onRestartGuide,
   teamSession,
 }: ProjectSwitcherProps) {
@@ -156,15 +152,6 @@ export function ProjectSwitcher({
             )}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
-        {onOpenGallery !== undefined && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={onOpenGallery}>
-              <Palette />
-              Gallery
-            </DropdownMenuItem>
-          </>
-        )}
         {onRestartGuide !== undefined && (
           <>
             <DropdownMenuSeparator />

@@ -76,25 +76,15 @@ describe('projectViewDestination', () => {
     expect(projectViewDestination('docs')).toEqual({ kind: 'docs' });
   });
 
-  test.each([
-    'branches',
-    'files',
-    'terminals',
-    'design',
-    'brain-dump',
-  ] as const)('%p is a page under Tasks', (view) => {
-    expect(projectViewDestination(view)).toEqual({
-      kind: 'page',
-      page: { kind: 'view', view },
-    });
-  });
-
-  test('impact is an empty Impact page under Tasks', () => {
-    expect(projectViewDestination('impact')).toEqual({
-      kind: 'page',
-      page: { kind: 'impact', subject: null },
-    });
-  });
+  test.each(['files', 'terminals'] as const)(
+    '%p is a page under Tasks',
+    (view) => {
+      expect(projectViewDestination(view)).toEqual({
+        kind: 'page',
+        page: { kind: 'view', view },
+      });
+    }
+  );
 
   test('threads is a page under Tasks, reached from the top bar', () => {
     expect(projectViewDestination('threads')).toEqual({
@@ -103,11 +93,16 @@ describe('projectViewDestination', () => {
     });
   });
 
-  test('plans is a page under Tasks: history, the proposal, send agents', () => {
-    expect(projectViewDestination('plans')).toEqual({
-      kind: 'page',
-      page: { kind: 'view', view: 'plans' },
-    });
+  test('plans and brain dump land on the Overseer, where plans and notes now live', () => {
+    for (const view of ['plans', 'brain-dump'] as const) {
+      expect(projectViewDestination(view)).toEqual({ kind: 'overseer' });
+    }
+  });
+
+  test('branches, impact and design land on Tasks', () => {
+    for (const view of ['branches', 'impact', 'design'] as const) {
+      expect(projectViewDestination(view)).toEqual({ kind: 'tasks' });
+    }
   });
 
   test.each(['task', 'pr', 'draft', 'new-task'] as const)(
@@ -124,7 +119,6 @@ describe('globalViewDestination', () => {
     ['settings', { kind: 'settings', page: 'general' }],
     ['sessions', { kind: 'settings', page: 'usage' }],
     ['all-agents', { kind: 'settings', page: 'runs' }],
-    ['gallery', { kind: 'settings', page: 'developer' }],
   ];
   test.each(cases)('%p', (view, expected) => {
     expect(globalViewDestination(view)).toEqual(expected);
@@ -174,9 +168,9 @@ describe('twoViewsReducer', () => {
   });
 
   test('a hosted view opens as a page under Tasks', () => {
-    const state = run([{ type: 'setProjectView', view: 'branches' }]);
+    const state = run([{ type: 'setProjectView', view: 'files' }]);
     expect(state.mainView).toBe('tasks');
-    expect(state.tasksPage).toEqual({ kind: 'view', view: 'branches' });
+    expect(state.tasksPage).toEqual({ kind: 'view', view: 'files' });
   });
 
   test('a row click in Tasks opens the task beside the list', () => {

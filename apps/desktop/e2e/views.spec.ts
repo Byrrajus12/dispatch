@@ -9,11 +9,7 @@ import { APP_TOKEN } from './paths';
 const VIEWS: { name: string; open: (page: Page) => Promise<void> }[] = [
   { name: 'tasks', open: (page) => clickTopBar(page, 'two-views-tasks') },
   { name: 'threads', open: (page) => clickTopBar(page, 'two-views-threads') },
-  { name: 'plans', open: (page) => openFromPalette(page, 'Open Plans') },
-  { name: 'braindump', open: (page) => openFromPalette(page, 'Open Notes') },
-  { name: 'git', open: (page) => openFromPalette(page, 'Open Git') },
   { name: 'files', open: (page) => openFromPalette(page, 'Open Files') },
-  { name: 'impact', open: (page) => openFromPalette(page, 'Open Impact') },
 ];
 
 async function clickTopBar(page: Page, testId: string): Promise<void> {

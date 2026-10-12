@@ -9,7 +9,7 @@ describe('navReducer', () => {
       ...initialNavState,
       section: 'global',
       globalView: 'settings',
-      projectView: 'plans',
+      projectView: 'docs',
       peekTaskId: 'task-1',
       activeRunId: 'run-1',
     };
@@ -237,20 +237,20 @@ describe('navReducer', () => {
   });
 
   test('openNewTask opens the full-page creator and remembers where it came from', () => {
-    const state: NavState = { ...initialNavState, projectView: 'branches' };
+    const state: NavState = { ...initialNavState, projectView: 'files' };
     const next = navReducer(state, { type: 'openNewTask' });
     expect(next.section).toBe('project');
     expect(next.projectView).toBe('new-task');
-    expect(next.newTaskReturnView).toBe('branches');
+    expect(next.newTaskReturnView).toBe('files');
   });
 
   test('closeNewTask returns to the view the creator was opened from', () => {
     let state = navReducer(
-      { ...initialNavState, projectView: 'plans' },
+      { ...initialNavState, projectView: 'docs' },
       { type: 'openNewTask' }
     );
     state = navReducer(state, { type: 'closeNewTask' });
-    expect(state.projectView).toBe('plans');
+    expect(state.projectView).toBe('docs');
   });
 
   test('closeNewTask is a no-op when the creator is not the current view', () => {
@@ -260,21 +260,21 @@ describe('navReducer', () => {
 
   test('opening the creator twice keeps the original return view', () => {
     let state = navReducer(
-      { ...initialNavState, projectView: 'brain-dump' },
+      { ...initialNavState, projectView: 'threads' },
       { type: 'openNewTask' }
     );
     state = navReducer(state, { type: 'openNewTask' });
-    expect(state.newTaskReturnView).toBe('brain-dump');
+    expect(state.newTaskReturnView).toBe('threads');
   });
 
   test('opening the creator from a global view keeps the last project view as the way back', () => {
     let state = navReducer(
-      { ...initialNavState, projectView: 'plans' },
+      { ...initialNavState, projectView: 'docs' },
       { type: 'setGlobalView', view: 'settings' }
     );
     state = navReducer(state, { type: 'openNewTask' });
     expect(state.section).toBe('project');
-    expect(state.newTaskReturnView).toBe('plans');
+    expect(state.newTaskReturnView).toBe('docs');
   });
 
   test('escape closes the full-page creator once palette and peek are closed', () => {
@@ -350,8 +350,8 @@ describe('history', () => {
   test('back returns to where you came from, not a fixed destination', () => {
     let state = initialNavState; // cockpit
     state = navReducer(state, { type: 'setProjectView', view: 'inbox' });
-    state = navReducer(state, { type: 'setProjectView', view: 'branches' });
-    expect(view(state)).toBe('project:branches');
+    state = navReducer(state, { type: 'setProjectView', view: 'files' });
+    expect(view(state)).toBe('project:files');
 
     state = navReducer(state, { type: 'back' });
     expect(view(state)).toBe('project:inbox');
@@ -375,12 +375,12 @@ describe('history', () => {
       type: 'setProjectView',
       view: 'inbox',
     });
-    state = navReducer(state, { type: 'setProjectView', view: 'branches' });
+    state = navReducer(state, { type: 'setProjectView', view: 'files' });
     state = navReducer(state, { type: 'back' }); // on inbox
-    state = navReducer(state, { type: 'setProjectView', view: 'plans' });
-    // Git is gone from the future; forward must not resurrect it.
+    state = navReducer(state, { type: 'setProjectView', view: 'docs' });
+    // Files is gone from the future; forward must not resurrect it.
     state = navReducer(state, { type: 'forward' });
-    expect(view(state)).toBe('project:plans');
+    expect(view(state)).toBe('project:docs');
   });
 
   test('back at the start of history is a no-op', () => {
@@ -402,7 +402,7 @@ describe('history', () => {
       view: 'task',
     });
     state = navReducer(state, { type: 'openRun', runId: 'r-1' });
-    state = navReducer(state, { type: 'setProjectView', view: 'plans' });
+    state = navReducer(state, { type: 'setProjectView', view: 'docs' });
     state = navReducer(state, { type: 'back' });
     expect(state.activeRunId).toBe('r-1');
   });
@@ -497,6 +497,22 @@ describe('draft page navigation', () => {
 });
 
 describe('retired views', () => {
+  test('the retired plans, brain-dump, branches, impact and design views normalize to cockpit', () => {
+    for (const view of [
+      'plans',
+      'brain-dump',
+      'branches',
+      'impact',
+      'design',
+    ] as const) {
+      const next = navReducer(initialNavState, {
+        type: 'setProjectView',
+        view,
+      });
+      expect(next.projectView).toBe('cockpit');
+    }
+  });
+
   test("the retired 'runs' and 'review' views normalize to 'inbox'", () => {
     for (const view of ['runs', 'review'] as const) {
       const next = navReducer(initialNavState, {

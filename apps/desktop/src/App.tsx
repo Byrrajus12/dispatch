@@ -5,7 +5,7 @@ import {
 } from '@dispatch-foo/core/browser';
 import type { DraftRecord } from '@dispatch/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, Coins, TriangleAlert, Wrench } from 'lucide-react';
+import { Bot, Coins, TriangleAlert } from 'lucide-react';
 import {
   type ReactNode,
   useCallback,
@@ -175,17 +175,12 @@ import {
 import { checkForUpdate, installUpdateAndRelaunch } from './lib/updater';
 import { applyZoomFactor, loadZoomFactor, stepZoomFactor } from './lib/zoom';
 import { AllAgentsView } from './views/AllAgentsView';
-import { BrainDumpView } from './views/BrainDumpView';
-import { BranchesView } from './views/BranchesView';
-import { DesignView } from './views/DesignView';
 import { DocsView } from './views/DocsView';
 import { DraftView } from './views/DraftView';
 import { FilesView } from './views/FilesView';
 import { FirstRunView } from './views/FirstRunView';
-import { GalleryView } from './views/GalleryView';
 import { ImpactView } from './views/ImpactView';
 import { OverseerFocusView } from './views/OverseerFocusView';
-import { PlansView } from './views/PlansView';
 import { PrReviewView } from './views/PrReviewView';
 import { SessionsHubView } from './views/SessionsHubView';
 import type { HostedSettingsPage } from './views/SettingsView';
@@ -1023,6 +1018,11 @@ function App() {
         markNotificationInboxRead();
         return;
       }
+      if (target.kind === 'plan') {
+        dispatchNav({ type: 'tv/showOverseer' });
+        markNotificationInboxRead();
+        return;
+      }
       // Everything left either names a page or names one run.
       const pageView = projectViewForInboxTarget(target);
       if (pageView !== null) {
@@ -1571,9 +1571,6 @@ function App() {
         setAddProjectOpen(true);
       }}
       onOpenSettings={() => setGlobalView('settings')}
-      onOpenGallery={
-        import.meta.env.DEV ? () => setGlobalView('gallery') : undefined
-      }
       onRestartGuide={activeProject === null ? undefined : restartGuide}
     />
   );
@@ -1608,29 +1605,16 @@ function App() {
           <EmptyState
             className="flex-1"
             heading="Only the operator can open this"
-            description="Terminals and Design act on the host machine as the person running Dispatch."
+            description="Terminals act on the host machine as the person running Dispatch."
           />
         </div>
       );
     }
     switch (view) {
-      case 'branches':
-        return (
-          <BranchesView
-            data={data}
-            onOpenRun={jumpToRun}
-            onOpenImpact={(subject) =>
-              dispatchNav({ type: 'openImpact', subject })
-            }
-            onBack={closeTwoViewsPage}
-          />
-        );
       case 'files':
         return <FilesView data={data} onBack={closeTwoViewsPage} />;
       case 'terminals':
         return <TerminalsView data={data} onBack={closeTwoViewsPage} />;
-      case 'design':
-        return <DesignView data={data} onBack={closeTwoViewsPage} />;
       case 'threads':
         return (
           <ThreadsView
@@ -1644,31 +1628,6 @@ function App() {
               busy: overseer.sending || overseer.record?.state === 'running',
               submit: overseer.reply,
               open: openOverseer,
-            }}
-            onBack={closeTwoViewsPage}
-          />
-        );
-      case 'brain-dump':
-        return (
-          <BrainDumpView
-            data={data}
-            onOpenTask={(taskId) => dispatchNav({ type: 'openPeek', taskId })}
-            onPlanText={openOverseer}
-            onBack={closeTwoViewsPage}
-          />
-        );
-      case 'plans':
-        return (
-          <PlansView
-            projectName={activeProject?.name}
-            data={data}
-            onGoToBoard={() => dispatchNav({ type: 'tv/showTasks' })}
-            // A milestone opens on its Plan tab, where Send agents lives.
-            onOpenMilestone={(epicId, opts) => {
-              if (opts?.dispatch === true) {
-                setSendAgents({ epicId, nonce: Date.now() });
-              }
-              openTaskView(epicId, 'plan');
             }}
             onBack={closeTwoViewsPage}
           />
@@ -1826,7 +1785,7 @@ function App() {
         }
       : null;
 
-  // Sessions, All agents and the Gallery as Settings pages in Two views.
+  // Sessions and All agents as Settings pages in Two views.
   const hostedSettingsPages: HostedSettingsPage[] = [
     {
       id: 'usage',
@@ -1859,17 +1818,6 @@ function App() {
         />
       ),
     },
-    ...(import.meta.env.DEV
-      ? [
-          {
-            id: 'developer' as const,
-            label: 'Developer',
-            icon: Wrench,
-            intro: 'The component gallery, in dev builds only.',
-            render: () => <GalleryView />,
-          },
-        ]
-      : []),
   ];
 
   // A link inside a peek closes it, so the peek never sits over where it led.
@@ -2198,11 +2146,6 @@ function App() {
             revoked={overseer.revoked}
             onShowAsks={() => dispatchNav({ type: 'tv/showTasks' })}
             onOpenDoor={openDoor}
-            onOpenPlans={
-              activeProject === null
-                ? undefined
-                : () => dispatchNav({ type: 'setProjectView', view: 'plans' })
-            }
             firstRun={
               showFirstRun ? (
                 <FirstRunView
@@ -2320,9 +2263,6 @@ function App() {
             onOpenAllDocs={() =>
               dispatchNav({ type: 'setProjectView', view: 'docs' })
             }
-            onOpenNotes={() =>
-              dispatchNav({ type: 'setProjectView', view: 'brain-dump' })
-            }
             renderPage={renderTwoViewsPage}
             composer={
               <TasksComposer
@@ -2381,7 +2321,6 @@ function App() {
                       open={quickCaptureOpen}
                       onOpenChange={setQuickCaptureOpen}
                       onCapture={rawData.handleCaptureInbox}
-                      onOpenBrainDump={() => selectProjectView('brain-dump')}
                     />
 
                     <ShortcutsDialog

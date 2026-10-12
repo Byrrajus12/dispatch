@@ -174,7 +174,6 @@ export interface TasksViewProps {
   onOpenPr: (number: number) => void;
   onOpenDoc: (docId: string) => void;
   onOpenAllDocs: () => void;
-  onOpenNotes: () => void;
   /** Keys per-project choices such as the graph's Milestones | Tasks. */
   projectKey: string;
   speechByTask: ReadonlyMap<string, { count: number; mention: boolean }>;
@@ -211,7 +210,6 @@ export function TasksView({
   onOpenPr,
   onOpenDoc,
   onOpenAllDocs,
-  onOpenNotes,
   projectKey,
   speechByTask,
   composer,
@@ -307,7 +305,6 @@ export function TasksView({
       onOpenPr={onOpenPr}
       onOpenDoc={onOpenDoc}
       onOpenAllDocs={onOpenAllDocs}
-      onOpenNotes={onOpenNotes}
     />
   );
   const model = useStatusModelOf(data.config);
