@@ -378,7 +378,7 @@ test('control sequences in daemon text never reach the terminal', async () => {
     messages: [
       {
         role: 'assistant',
-        text: 'safe\x1b]0;pwned\x07text\x1b[2J done',
+        text: 'safe \x1b]0;pwned\x07text\x1b[2J done',
         at: '2026-10-12T09:00:05Z',
       },
     ],
@@ -388,13 +388,13 @@ test('control sequences in daemon text never reach the terminal', async () => {
     getOverseer: () => Promise.resolve(hostile),
     fetchRuns: () =>
       Promise.resolve([
-        { ...runs[0], taskTitle: 'evil\x1b]52;c;ZXZpbA==\x07title' },
+        { ...runs[0], taskTitle: 'evil \x1b]52;c;ZXZpbA==\x07title' },
       ]),
   });
   const { frame } = await mount(120, 40, client);
   const f = await frame();
-  expect(f).toContain('safetext done');
-  expect(f).toContain('eviltitle');
+  expect(f).toContain('safe text done');
+  expect(f).toContain('evil title');
   expect(f).not.toContain('pwned');
   expect(f).not.toContain('ZXZpbA');
 });
