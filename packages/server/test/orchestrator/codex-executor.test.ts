@@ -1856,8 +1856,10 @@ describe('what a Codex run command really runs', () => {
       eval: wrapped('eval "gh release create v1"'),
       variable: wrapped('$CMD release create v1'),
       wrapper: wrapped('env gh release create v1'),
-      nested: `bash -c "sh -c 'zsh -c \\"bash -c \\\\\\"sh -c ls\\\\\\"\\"'"`,
       argv: ['/bin/zsh', '-lc', 'gh release create v1'],
+      caseFolded: wrapped('GIT push --force origin main'),
+      gitInCompound: wrapped('cd sub && git push origin main'),
+      spelledPublish: wrapped('pnpm $(echo publish)'),
     };
     const process = scriptedProcess({
       afterTurn(fake) {
@@ -1887,6 +1889,39 @@ describe('what a Codex run command really runs', () => {
     for (const id of Object.keys(hidden)) {
       expect(answerTo(process, id)).toBeUndefined();
     }
+    await harness.run.interrupt();
+  });
+
+  // Runs work in their own worktree, so shell syntax alone does not stop them;
+  // only a part that could reach a floor act does.
+  it('lets a non-simple command with nothing floor-relevant proceed under bypassPermissions', async () => {
+    const proceeds: Record<string, unknown> = {
+      assignment: wrapped('FOO=$(date) pnpm test'),
+      compound: wrapped('pnpm build && pnpm test'),
+      pipe: wrapped('ls | wc -l'),
+      nested: `bash -c "sh -c 'zsh -c \\"bash -c \\\\\\"sh -c ls\\\\\\"\\"'"`,
+    };
+    const process = scriptedProcess({
+      afterTurn(fake) {
+        for (const [id, command] of Object.entries(proceeds)) {
+          fake.serverRequest(
+            'item/commandExecution/requestApproval',
+            id,
+            ask(command, id)
+          );
+        }
+      },
+    });
+    const harness = startHarness(process, undefined, undefined, {
+      permissionMode: 'bypassPermissions',
+    });
+    await waitFor(() =>
+      Object.keys(proceeds).every((id) => answerTo(process, id) !== undefined)
+    );
+    for (const id of Object.keys(proceeds)) {
+      expect(answerTo(process, id)).toEqual({ decision: 'accept' });
+    }
+    expect(harness.approvals).toEqual([]);
     await harness.run.interrupt();
   });
 

@@ -1,6 +1,11 @@
 import { isAbsolute, normalize, relative, resolve, sep } from 'node:path';
 
-import { dequotedCommand } from '../floor.js';
+import {
+  commandTokens,
+  globMatches,
+  isSimpleCommand,
+  programName,
+} from './shellCommand.js';
 
 /**
  * Why the Overseer must ask before a call, beyond the irreversible floor: it would
@@ -21,20 +26,122 @@ export type OverseerHold =
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
-// `dispatch` as a command: at the start or after a separator, past env
-// assignments, prefix programs (`env`, `command`, `sudo`, …) and a runner, as
-// a bare name or a path ending in it.
-const DISPATCH_CLI =
-  /(?:^|[;&|`\n(]|\$\()\s*(?:(?:[A-Za-z_][A-Za-z0-9_]*=\S*|(?:\S*\/)?(?:sudo|doas|env|exec|command|builtin|nice|nohup|time|xargs|timeout|stdbuf|ionice)(?:\s+-\S+)*|\d[\w.]*)\s+)*(?:(?:bunx|npx|bun\s+x|pnpm(?:\s+exec)?|yarn)\s+)?(?:\S*\/)?dispatch(?=\s|$|[;&|)`])/;
+const DISPATCH_PROGRAMS = new Set(['dispatch', 'dispatch-cli']);
+const HTTP_CLIENTS = new Set([
+  'curl',
+  'wget',
+  'http',
+  'https',
+  'xh',
+  'httpie',
+  'nc',
+  'ncat',
+  'netcat',
+  'socat',
+  'telnet',
+  'fetch',
+  'aria2c',
+  'node',
+  'bun',
+  'deno',
+  'python',
+  'python3',
+  'ruby',
+  'perl',
+  'php',
+]);
+// Simple commands that only read, so naming a `.dispatch` path is not a write.
+const READ_ONLY_PROGRAMS = new Set([
+  'cat',
+  'less',
+  'more',
+  'head',
+  'tail',
+  'grep',
+  'rg',
+  'ls',
+  'wc',
+  'file',
+  'stat',
+  'diff',
+  'jq',
+  'yq',
+  'bat',
+]);
+// The `.dispatch` paths a token names, and whether one reaches the daemon files.
+function dispatchPathIn(token: string): 'daemon' | 'files' | null {
+  const segments = token.split('/');
+  const at = segments.findIndex((segment) => globMatches(segment, '.dispatch'));
+  if (at === -1) return null;
+  const next = segments[at + 1];
+  return next !== undefined && globMatches(next, 'daemons')
+    ? 'daemon'
+    : 'files';
+}
 
-const LOCAL_HOST =
-  /(?:127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\])(?::\d+)?\/api\b/;
-const HTTP_CLIENT = /\b(?:curl|wget|http|https|xh|nc|fetch)\b/;
-// Case-insensitive: on macOS `.DISPATCH/` is the same directory.
-const DAEMON_FILE = /\.dispatch\/daemons\//i;
-const DISPATCH_DIR = /(?:^|[\s'"=/])\.dispatch\//i;
-const SHELL_WRITE =
-  /(?:>>?|\b(?:rm|mv|cp|sed\s+-i|perl\s+-pi|tee|truncate|touch|chmod|ln)\b)/;
+// A loopback or any-address host, in the spellings a URL or curl accepts.
+function isLocalHost(host: string): boolean {
+  const bare = host.replace(/^\[|\]$/g, '');
+  return (
+    bare === 'localhost' ||
+    bare.endsWith('.localhost') ||
+    /^127(?:\.\d{1,10}){0,3}$/.test(bare) ||
+    /^0+(?:\.0+){0,3}$/.test(bare) ||
+    bare === '::1' ||
+    /^(?:0{0,4}:){2,7}0{0,3}1$/.test(bare) ||
+    /^::ffff:(?:127\.|7f)/.test(bare) ||
+    /^0x7f[0-9a-f]{0,6}$/.test(bare) ||
+    /^0+177(?:\.\d{1,10}){0,3}$/.test(bare) ||
+    /^21(?:3[0-9]|4[0-7])\d{6}$/.test(bare)
+  );
+}
+
+// The host a token names: past a scheme and user, up to a port or path.
+function hostOf(token: string): string {
+  const rest = token.toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
+  const slash = rest.indexOf('/');
+  const authority = slash === -1 ? rest : rest.slice(0, slash);
+  const host = authority.slice(authority.lastIndexOf('@') + 1);
+  if (host.startsWith('[')) {
+    const close = host.indexOf(']');
+    return close === -1 ? host : host.slice(0, close + 1);
+  }
+  // Two or more colons is a bare IPv6 address, not host:port.
+  return host.indexOf(':') !== host.lastIndexOf(':')
+    ? host
+    : host.split(':')[0];
+}
+
+// The hold a shell command needs, from its tokens as the shell spells them.
+function commandHold(command: string): OverseerHold | null {
+  const tokens = commandTokens(command);
+  const programs = tokens.map(programName);
+  // A glob only counts when it holds a literal letter: `*` alone matches anything.
+  if (
+    programs.some(
+      (program) =>
+        DISPATCH_PROGRAMS.has(program) ||
+        (/[a-z]/.test(program) &&
+          [...DISPATCH_PROGRAMS].some((name) => globMatches(program, name)))
+    )
+  ) {
+    return 'dispatch-cli';
+  }
+  const paths = tokens.map(dispatchPathIn);
+  if (paths.includes('daemon')) return 'daemon-api';
+  if (
+    programs.some((program) => HTTP_CLIENTS.has(program)) &&
+    tokens.some((token) => isLocalHost(hostOf(token)))
+  ) {
+    return 'daemon-api';
+  }
+  if (paths.includes('files')) {
+    const readOnly =
+      isSimpleCommand(command) && READ_ONLY_PROGRAMS.has(programs[0] ?? '');
+    return readOnly ? null : 'dispatch-files';
+  }
+  return null;
+}
 
 function commandOf(input: unknown): string | null {
   if (typeof input !== 'object' || input === null) return null;
@@ -106,19 +213,6 @@ function permissionWriteRoots(input: unknown): (string | null)[] {
   return roots;
 }
 
-// The hold a shell command needs, read as written.
-function commandHold(command: string): OverseerHold | null {
-  if (DISPATCH_CLI.test(command)) return 'dispatch-cli';
-  if (DAEMON_FILE.test(command)) return 'daemon-api';
-  if (HTTP_CLIENT.test(command) && LOCAL_HOST.test(command)) {
-    return 'daemon-api';
-  }
-  if (DISPATCH_DIR.test(command) && SHELL_WRITE.test(command)) {
-    return 'dispatch-files';
-  }
-  return null;
-}
-
 /** The hold one Overseer tool call needs, or null when its normal permission path applies. */
 export function overseerHoldFor(
   toolName: string,
@@ -147,6 +241,5 @@ export function overseerHoldFor(
   }
   const command = commandOf(input);
   if (command === null) return null;
-  // Quoting can split a name the patterns look for (`"dispatch"`, `.dis""patch/`).
-  return commandHold(command) ?? commandHold(dequotedCommand(command));
+  return commandHold(command);
 }

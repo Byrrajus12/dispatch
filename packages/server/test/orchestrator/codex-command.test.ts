@@ -10,14 +10,14 @@ describe('reading a Codex command', () => {
   it('reads the script a shell wrapper runs, from a string or an argv', () => {
     expect(readCodexCommand("/bin/zsh -lc 'pnpm test'")).toEqual({
       text: 'pnpm test',
-      known: true,
+      simple: true,
     });
     expect(readCodexCommand(['/bin/zsh', '-lc', 'pnpm test'])).toEqual({
       text: 'pnpm test',
-      known: true,
+      simple: true,
     });
     expect(readCodexCommand(null)).toBeUndefined();
-    expect(readCodexCommand("/bin/zsh -lc '$(echo gh) release'")?.known).toBe(
+    expect(readCodexCommand("/bin/zsh -lc '$(echo gh) release'")?.simple).toBe(
       false
     );
   });

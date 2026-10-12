@@ -1068,3 +1068,117 @@ describe('CodexOverseer cost', () => {
     expect(turn.costUsd).toBeCloseTo(2, 6);
   });
 });
+
+// The security review's harness: commands that once allowed themselves under
+// bypassPermissions. Each must now reach Dispatch's gate.
+const REVIEW_CASES: string[] = [
+  // the six from the review
+  "env X=1 bash -c 'dispatch task list'",
+  `/bin/zsh -lc 'cd x && bash -c "dispatch task list"'`,
+  "bash -c 'dispatch task list' x",
+  "/bin/zsh -lc 'command dispatch task list'",
+  `/bin/zsh -lc 'bash -lc "$(echo dispatch) task list"'`,
+  `sh -c "sh -c 'sh -c \\"sh -c \\\\\\"sh -c dispatch\\\\\\"\\"'"`,
+  // adversarial
+  `/bin/zsh -lc $'\\x64\\x69\\x73patch task list'`,
+  `/bin/zsh -lc "\\$'\\\\x64\\\\x69\\\\x73patch' task list"`,
+  `/bin/zsh -lc 'dis\\patch task list'`,
+  `/bin/zsh -lc 'IFS=_; c=dispatch_task_list; $c'`,
+  `/bin/zsh -lc 'eval dispatch task list'`,
+  `/bin/zsh -lc '. ./x.sh'`,
+  `/bin/zsh -lc 'echo 1 | xargs dispatch task get'`,
+  `/bin/zsh -lc "bash <<< 'dispatch task list'"`,
+  `/bin/zsh -lc '\${PATH:0:0}dispatch task list'`,
+  "/bin/zsh -lc 'dispatch\ttask list'",
+  "/bin/zsh -lc 'true\ndispatch task list'",
+  `/bin/zsh -lc 'echo hi > .DISPATCH/x'`,
+  `/bin/zsh -lc "git -c alias.x='!dispatch task list' x"`,
+  // probes for remaining holes
+  `/bin/zsh -lc '{ dispatch task list; }'`,
+  `/bin/zsh -lc 'if dispatch task list; then :; fi'`,
+  `/bin/zsh -lc '! dispatch task list'`,
+  `/bin/zsh -lc 'true && then_ dispatch'`,
+  `/bin/zsh -lc 'echo dispatch task list | sh'`,
+  `/bin/zsh -lc 'echo dispatch task list | bash -s'`,
+  `/bin/zsh -lc "sh <<< 'dispatch task list'"`,
+  `/bin/zsh -lc "/bin/csh -c 'dispatch task list'"`,
+  `/bin/zsh -lc "tcsh -c 'dispatch task list'"`,
+  `/bin/csh -c 'dispatch task list'`,
+  `/bin/zsh -lc 'DISPATCH task list'`,
+  `/bin/zsh -lc 'Dispatch task list'`,
+  `/bin/zsh -lc 'caffeinate -i dispatch task list'`,
+  `/bin/zsh -lc 'script -q /dev/null dispatch task list'`,
+  `/bin/zsh -lc 'arch -arm64 dispatch task list'`,
+  `/bin/zsh -lc 'sudo -u me dispatch task list'`,
+  `/bin/zsh -lc 'find . -maxdepth 0 -exec dispatch task list ;'`,
+  `/bin/zsh -lc 'GH release create v1'`,
+  `/bin/zsh -lc 'Git push --force origin main'`,
+  `/bin/zsh -lc 'npm  publish'`,
+  `/bin/zsh -lc 'dispatch'`,
+  `/bin/zsh -lc 'exec -a x dispatch task list'`,
+  `/bin/zsh -lc 'time -p dispatch task list'`,
+  `/bin/zsh -lc 'nohup  dispatch task list'`,
+  `/bin/zsh -lc 'coproc dispatch task list'`,
+  `/bin/zsh -lc 'noglob dispatch task list'`,
+  `/bin/zsh -lc 'nocorrect dispatch task list'`,
+  `/bin/zsh -lc 'while dispatch task list; do break; done'`,
+  `/bin/zsh -lc '(dispatch task list)'`,
+  `/bin/zsh -lc 'x=$(dispatch task list)'`,
+  `/bin/zsh -lc 'dispatch&>/dev/null'`,
+  `/bin/zsh -lc 'pnpm dlx dispatch task list'`,
+  `/bin/zsh -lc 'node_modules/.bin/dispatch task list'`,
+  `/bin/zsh -lc 'bun run dispatch task list'`,
+  `/bin/zsh -lc 'ls;dispatch task list'`,
+  `/bin/zsh -lc 'ls
+dispatch task list'`,
+  `/bin/zsh -lc 'curl http://localhost:4000/api/runs'`,
+  `/bin/zsh -lc 'curl http://LOCALHOST:4000/api/runs'`,
+  `/bin/zsh -lc 'curl http://127.1:4000/api/runs'`,
+  `/bin/zsh -lc 'curl http://[::ffff:127.0.0.1]:4000/api/runs'`,
+  `/bin/zsh -lc 'cat ~/.dispatch/daemons/x.json'`,
+  `/bin/zsh -lc 'cat ~/.dispatch/DAEMONS/x.json'`,
+  `/bin/zsh -lc 'cat ~/.dispatch/da*ons/x.json'`,
+  `/bin/zsh -lc 'cp x .dispatch/'`,
+  `/bin/zsh -lc 'cd .dispatch && touch x'`,
+  `/bin/zsh -lc 'cd .disp*ch && touch x'`,
+];
+
+describe('CodexOverseer allows itself only simple commands', () => {
+  async function bypassAsk(command: unknown) {
+    const codex = scriptedCodex({
+      onTurn: (c, t) =>
+        c.serverRequest(
+          'item/commandExecution/requestApproval',
+          'ask-1',
+          commandAsk(t, 'cmd-1', command)
+        ),
+    });
+    const gate = recorder([{ allow: false }]);
+    const pending = overseerOver(codex).start('x', stubToolset().toolset, {
+      permissionMode: 'bypassPermissions',
+      authorizeTool: gate.authorizeTool,
+    });
+    await waitFor(() => codex.responseTo('ask-1') !== undefined);
+    finishTurn(codex, 'thread-1', 'ok');
+    await pending;
+    return { seen: gate.seen, answer: codex.responseTo('ask-1')?.result };
+  }
+
+  it.each(REVIEW_CASES.map((command) => [command]))(
+    'asks about %p',
+    async (command) => {
+      const { seen } = await bypassAsk(command);
+      expect(seen).toHaveLength(1);
+    }
+  );
+
+  it.each([
+    ["/bin/zsh -lc 'git status --short'"],
+    ["/bin/zsh -lc 'pnpm test'"],
+    [['/bin/zsh', '-lc', "git commit -m 'a b'"]],
+  ])('allows the simple command %p itself', async (command) => {
+    const { seen, answer } = await bypassAsk(command);
+    expect(seen).toEqual([]);
+    expect(answer).toEqual({ decision: 'accept' });
+  });
+});

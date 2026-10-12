@@ -1,47 +1,7 @@
-import { dequotedCommand } from '../floor.js';
+import { isSimpleCommand, programName, shellWords } from './shellCommand.js';
 
 /** How long "Allow for this conversation" lasts at most. */
 export const GRANT_TTL_MS = 4 * 60 * 60 * 1000;
-
-// Shell syntax that lets one command line run more than its first program.
-const COMPOUND = /[;&|$`<>\n\r]/;
-
-// Programs that run another program, so their own name says nothing about what runs.
-const WRAPPER_PROGRAMS = new Set([
-  'env',
-  'exec',
-  'command',
-  'builtin',
-  'xargs',
-  'sudo',
-  'doas',
-  'su',
-  'nice',
-  'nohup',
-  'time',
-  'timeout',
-  'stdbuf',
-  'ionice',
-  'chroot',
-  'watch',
-  'eval',
-  'source',
-  '.',
-  'sh',
-  'bash',
-  'zsh',
-  'dash',
-  'ksh',
-  'fish',
-]);
-
-// The program a shell command runs, past env assignments and a path.
-function programOf(command: string): string | null {
-  const words = command.trim().split(/\s+/);
-  const first = words.find((w) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
-  if (first === undefined || first === '') return null;
-  return first.slice(first.lastIndexOf('/') + 1);
-}
 
 // Plain JSON with object keys sorted, so the same request always gives the same key.
 function stableJson(value: unknown): string {
@@ -56,10 +16,10 @@ function stableJson(value: unknown): string {
 }
 
 /**
- * What a grant covers. A simple shell command (Bash, a Codex command) grants
- * its program; one with operators, substitutions or a wrapper program grants
- * only that exact command line. A Codex permissions ask grants exactly what it
- * requested; any other tool's grant is the tool.
+ * What a grant covers. A simple shell command (isSimpleCommand: one program,
+ * plain arguments) grants its program; any other command line grants only that
+ * exact text, with runs of spaces and tabs (never newlines) folded. A Codex
+ * permissions ask grants exactly what it requested; any other tool's grant is the tool.
  */
 export function grantKey(toolName: string, input: unknown): string {
   if (toolName === 'codex.permissions') {
@@ -77,12 +37,9 @@ export function grantKey(toolName: string, input: unknown): string {
       ? (input as { command?: unknown }).command
       : undefined;
   if (typeof command !== 'string') return toolName;
-  const program = programOf(dequotedCommand(command));
-  if (program === null) return toolName;
-  if (COMPOUND.test(command) || WRAPPER_PROGRAMS.has(program)) {
-    return `${toolName}:${command.trim().replace(/\s+/g, ' ')}`;
-  }
-  return `${toolName}:${program}`;
+  const first = isSimpleCommand(command) ? shellWords(command)?.[0] : undefined;
+  if (first !== undefined) return `${toolName}:${programName(first)}`;
+  return `${toolName}:${command.replace(/[ \t]+/g, ' ').replace(/^ | $/g, '')}`;
 }
 
 interface Grant {

@@ -23,12 +23,20 @@ describe('the Dispatch CLI', () => {
     expect(bash(command)).toBe('dispatch-cli');
   });
 
+  // Any word naming the CLI holds: deciding which words run kept leaking
+  // (`eval`, `$(…)`, `xargs`, here-strings), so the hold no longer tries.
   test.each([
     'echo dispatch',
     'grep -rn dispatch src',
     'git log --grep dispatch',
+  ])('%p is held too, since only the word is read', (command) => {
+    expect(bash(command)).toBe('dispatch-cli');
+  });
+
+  test.each([
     'cat README.md',
     'ls packages/dispatch-ui',
+    'cat docs/dispatch.md',
   ])('%p runs', (command) => {
     expect(bash(command)).toBeNull();
   });
@@ -202,5 +210,59 @@ describe('Codex permission asks', () => {
   test('reads and writes inside the checkout are not held', () => {
     expect(ask({ read: ['/etc'], write: [`${ROOT}/build`] })).toBeNull();
     expect(ask(null)).toBeNull();
+  });
+});
+
+describe('token-scanned holds', () => {
+  test.each([
+    'DISPATCH task list',
+    'Dispatch task list',
+    "$'\\x64\\x69\\x73patch' task list",
+    'x=$(dispatch task list)',
+    "bash <<< 'dispatch task list'",
+    '${PATH:0:0}dispatch task list',
+    'pnpm dlx dispatch task list',
+    'npx dis*ch task list',
+    'dispatch&>/dev/null',
+    'find . -exec dispatch task list ;',
+  ])('%p is held', (command) => {
+    expect(bash(command)).toBe('dispatch-cli');
+  });
+
+  test.each([
+    'curl http://LOCALHOST:4000/api/runs',
+    'curl http://127.1:4000/api/runs',
+    'curl http://[::ffff:127.0.0.1]:4000/x',
+    'curl http://0.0.0.0:4000/',
+    'curl http://0x7f000001:4000/',
+    'curl http://2130706433:4000/',
+    'curl http://user@127.0.0.1:4000/',
+    'node -e "fetch(\'http://localhost:4321/api/runs\')"',
+    'cat ~/.dispatch/DAEMONS/x.json',
+    'cat ~/.dispatch/da*ons/x.json',
+    'cat ~/.Dispatch/daemons/x.json',
+  ])('%p is held as the daemon API', (command) => {
+    expect(bash(command)).toBe('daemon-api');
+  });
+
+  test('a dev server or a remote host is not the daemon', () => {
+    expect(bash('curl -s https://example.com/api/x')).toBeNull();
+    expect(bash('curl http://127.0.0.1.example.com/')).toBeNull();
+  });
+
+  test.each([
+    'cd .dispatch && touch x',
+    'cd .disp*ch && touch x',
+    'cp x .dispatch/',
+    'git checkout -- .dispatch/config.yml',
+    'echo x > ~/.dispatch/config.yml',
+    'rm -rf .d*',
+  ])('%p is held as a .dispatch write', (command) => {
+    expect(bash(command)).toBe('dispatch-files');
+  });
+
+  test('reading .dispatch with a plain read-only program runs, and `*` skips dot files', () => {
+    expect(bash('head -n 5 .dispatch/config.yml')).toBeNull();
+    expect(bash('rm -rf *')).toBeNull();
   });
 });

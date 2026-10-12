@@ -44,6 +44,7 @@ bunfig
 bunx
 bytewise
 cacheinfo
+caffeinate
 callsites
 capitalised
 capitalising
@@ -84,6 +85,7 @@ commonmark
 comparables
 conv
 cooldown
+coproc
 couldn
 coverable
 cpushed
@@ -150,10 +152,12 @@ enqueueable
 entr
 entrancy
 entrantly
+esac
 eventsource
 evictable
 evts
 excute
+execdir
 exfiltration
 expandables
 extglob
@@ -267,11 +271,13 @@ liveframe
 livefull
 liveiframe
 lostconn
+luajit
 macbook
 macrotask
 Mapbox
 materializer
 mathml
+mawk
 mdurl
 mdxjs
 Menlo
@@ -283,6 +289,7 @@ METACHARS
 Metas
 misdescribe
 mkfifo
+mksh
 mktemp
 modelcontextprotocol
 mojibake
@@ -294,11 +301,14 @@ msvc
 musleabihf
 myconstant
 napi
+nawk
 nbbbb
 ncarto
+ncat
 ncccc
 neighbour
 neighbours
+netcat
 neutralised
 neutralises
 newthing
@@ -306,7 +316,9 @@ nexttag
 Nimbalyst
 nixpacks
 nobase
+nocorrect
 nodelib
+noglob
 nohup
 nopath
 normalises
@@ -322,6 +334,7 @@ objectname
 obug
 octocat
 Okafor
+okdir
 Omnara
 oneline
 ONLCR
@@ -329,6 +342,7 @@ opencode
 openharmony
 opping
 organised
+osascript
 overcorrect
 oxfmtrc
 oxlint
@@ -367,6 +381,7 @@ PRRT
 ptys
 puppeted
 pycache
+pytest
 qfec
 qified
 quansync
@@ -440,12 +455,14 @@ riscv
 rkbeef
 rlib
 rollups
+rscript
 rsplit
 rusqlite
 rustls
 rustup
 sandboxing
 satteri
+subshell
 Sätteri
 scandir
 scannability
@@ -513,6 +530,8 @@ taskview
 tauri
 Tauri's
 tcgetattr
+tclsh
+tcsh
 Terragon
 TESTKEY
 testuser
@@ -540,6 +559,7 @@ typesafe
 uall
 unfetched
 urlmatch
+uudecode
 überblick
 ulid
 ulids

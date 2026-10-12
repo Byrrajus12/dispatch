@@ -1,77 +1,28 @@
 import type { FloorCheck } from '@dispatch-foo/core';
 import { basename } from 'node:path';
 
-import { dequotedCommand, floorCheckForToolInput } from '../floor.js';
+import { floorCheckForToolInput } from '../floor.js';
+import {
+  isSimpleCommand,
+  mayHideFloorAct,
+  shellWords,
+} from './shellCommand.js';
 
-const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
+// POSIX-family shells whose `-c` script the reader can parse with the same
+// rules; fish and csh quote differently, so they are never unwrapped.
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh']);
 // Short option clusters that take no argument (`-o`/`-O` take one); a long or
 // argument-taking option could change what runs, so it is never unwrapped.
 const SHELL_FLAG = /^-[a-np-zA-NP-Z]+$/;
 const COMMAND_FLAG = /^-[a-np-zA-NP-Z]*c[a-np-zA-NP-Z]*$/;
 const MAX_UNWRAP_DEPTH = 4;
-// What still hides the program that runs once the wrappers are off: a shell
-// `-c` anywhere, a substitution, a variable or a wrapper program in command position.
-const OPAQUE_COMMAND = [
-  /(?:^|[^\w.-])(?:sh|bash|zsh|dash|ksh|fish)(?:\s+\S+)*?\s+-[A-Za-z]*c[A-Za-z]*(?=\s|$)/,
-  /\$\(|`/,
-  /(?:^|[;&|(\n])\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:\$|(?:\S*\/)?(?:env|exec|command|builtin|xargs|sudo|doas|su|nice|nohup|time|timeout|stdbuf|ionice|chroot|watch|eval|source|\.)(?=\s|$))/,
-];
-const SHELL_OPERATOR = /[;&|<>()`$\n]/;
 const PLAIN_WORD = /^[\w@%+=:,./-]+$/;
-
-// A command line split into words, or undefined when it holds anything beyond
-// plain and quoted words (an operator, a substitution, an unclosed quote).
-function shellWords(command: string): string[] | undefined {
-  const words: string[] = [];
-  let word: string | undefined;
-  let i = 0;
-  while (i < command.length) {
-    const char = command[i];
-    if (char === ' ' || char === '\t') {
-      if (word !== undefined) words.push(word);
-      word = undefined;
-      i += 1;
-    } else if (char === "'") {
-      const close = command.indexOf("'", i + 1);
-      if (close === -1) return undefined;
-      word = (word ?? '') + command.slice(i + 1, close);
-      i = close + 1;
-    } else if (char === '"') {
-      let text = '';
-      i += 1;
-      while (i < command.length && command[i] !== '"') {
-        const next = command[i + 1] ?? '';
-        if (command[i] === '\\' && /["\\$`\n]/.test(next)) {
-          // A backslash-newline inside double quotes is a line continuation.
-          if (next !== '\n') text += next;
-          i += 2;
-          continue;
-        }
-        if (/[$`]/.test(command[i])) return undefined;
-        text += command[i];
-        i += 1;
-      }
-      if (i >= command.length) return undefined;
-      word = (word ?? '') + text;
-      i += 1;
-    } else if (char === '\\') {
-      if (i + 1 >= command.length) return undefined;
-      if (command[i + 1] !== '\n') word = (word ?? '') + command[i + 1];
-      i += 2;
-    } else if (SHELL_OPERATOR.test(char)) {
-      return undefined;
-    } else {
-      word = (word ?? '') + char;
-      i += 1;
-    }
-  }
-  if (word !== undefined) words.push(word);
-  return words;
-}
 
 // The script of `<shell> [-flags] -c '<script>'`, the form Codex runs nearly every command in.
 function shellScript(words: readonly string[]): string | undefined {
-  if (words.length < 3 || !SHELLS.has(basename(words[0]))) return undefined;
+  if (words.length < 3 || !SHELLS.has(basename(words[0]).toLowerCase())) {
+    return undefined;
+  }
   const flags = words.slice(1, -1);
   return flags.every((flag) => SHELL_FLAG.test(flag)) &&
     flags.some((flag) => COMMAND_FLAG.test(flag))
@@ -86,8 +37,11 @@ function quoted(word: string): string {
 /** A Codex command read for holds, floor checks and grants. */
 export interface CodexCommandReading {
   text: string;
-  /** False when the text may still hide what runs; such a command always asks. */
-  known: boolean;
+  /**
+   * True only for one program with plain arguments once the shell wrappers
+   * are off (isSimpleCommand); anything else may hide what runs and asks.
+   */
+  simple: boolean;
 }
 
 /**
@@ -120,12 +74,7 @@ export function readCodexCommand(
     current = script;
   }
   if (current.trim() === '') return undefined;
-  const text = current;
-  const plain = dequotedCommand(text);
-  const opaque = OPAQUE_COMMAND.some(
-    (pattern) => pattern.test(text) || pattern.test(plain)
-  );
-  return { text, known: !exhausted && !opaque };
+  return { text: current, simple: !exhausted && isSimpleCommand(current) };
 }
 
 /**
@@ -137,21 +86,27 @@ export function codexCommandFloor(command: unknown): FloorCheck | null {
     typeof command === 'string' ? floorCheckForToolInput({ command }) : null;
   if (asSent !== null) return asSent;
   const reading = readCodexCommand(command);
-  return reading === undefined
+  return reading === undefined || reading.text === command
     ? null
     : floorCheckForToolInput({ command: reading.text });
 }
 
 /**
- * True when a Codex command ask must reach a human however it is otherwise
- * answered: it trips the floor, or what it runs cannot be read.
+ * True when a run's Codex command ask must reach a human however it is
+ * otherwise answered: it is unreadable, trips the floor, or is not simple and
+ * may hide a floor act. Runs work in their own worktree, so a non-simple
+ * command with no floor-relevant part may proceed; the Overseer, in the main
+ * checkout, asks about every non-simple command instead.
  */
 export function codexCommandNeedsHuman(command: unknown): boolean {
   const reading = readCodexCommand(command);
+  if (reading === undefined || codexCommandFloor(command) !== null) return true;
+  if (reading.simple) return false;
   return (
-    reading === undefined ||
-    !reading.known ||
-    codexCommandFloor(command) !== null
+    mayHideFloorAct(reading.text) ||
+    (typeof command === 'string' &&
+      command !== reading.text &&
+      mayHideFloorAct(command))
   );
 }
 

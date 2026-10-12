@@ -20,8 +20,13 @@ describe('grantKey', () => {
     expect(grantKey('Bash', { command: 'moonx desktop:test' })).toBe(
       'Bash:moonx'
     );
+    // A leading assignment (`PATH=…`, `LD_PRELOAD=…`) can change what runs,
+    // so it is no longer simple and grants only its exact text.
     expect(
       grantKey('Bash', { command: 'FOO=1 ./node_modules/.bin/vitest run' })
+    ).toBe('Bash:FOO=1 ./node_modules/.bin/vitest run');
+    expect(
+      grantKey('Bash', { command: './node_modules/.bin/vitest run' })
     ).toBe('Bash:vitest');
     expect(grantKey('Bash', { command: '  git status' })).toBe('Bash:git');
   });
@@ -49,6 +54,35 @@ describe('grantKey', () => {
     expect(
       grantKey('codex.commandExecution', { command: 'cd app && moonx test' })
     ).toBe('codex.commandExecution:cd app && moonx test');
+  });
+
+  test('a program key needs a simple command: one program, plain arguments', () => {
+    expect(grantKey('Bash', { command: 'Git status' })).toBe('Bash:git');
+    for (const command of [
+      'find . -exec rm {} +',
+      'node -e "1"',
+      'python3 -c "print(1)"',
+      'git -c core.pager=x log',
+      'ls *(e:x:)',
+      'cat =(ls)',
+      '! rm -rf build',
+      'noglob rm -rf build',
+      'caffeinate -i make',
+      'dispatch\u00a0task list',
+    ]) {
+      expect(grantKey('Bash', { command })).toBe(
+        `Bash:${command.replace(/[ \t]+/g, ' ')}`
+      );
+    }
+  });
+
+  test('newlines stay distinct from spaces in an exact-text key', () => {
+    expect(
+      grantKey('Bash', { command: 'echo ok; echo\nrm -rf build' })
+    ).not.toBe(grantKey('Bash', { command: 'echo ok; echo rm -rf build' }));
+    expect(grantKey('Bash', { command: 'echo  ok;\techo x' })).toBe(
+      'Bash:echo ok; echo x'
+    );
   });
 
   test('quoting does not disguise a wrapper program', () => {

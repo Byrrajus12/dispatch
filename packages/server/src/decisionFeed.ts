@@ -4,11 +4,7 @@ import type { GateData, Message } from '@dispatch-foo/protocol';
 import { gateOf, SYSTEM_ADDRESS } from '@dispatch-foo/protocol';
 
 import type { EventBus, ServerEvent } from './events.js';
-import {
-  floorCheckForCommand,
-  floorCheckForToolInput,
-  isBudgetCapFailure,
-} from './floor.js';
+import { floorCheckForToolInput, isBudgetCapFailure } from './floor.js';
 import type { FixLoopState } from './orchestrator/fixLoop.js';
 import type { RunMeta } from './orchestrator/types.js';
 import { runKind } from './orchestrator/types.js';
@@ -560,7 +556,7 @@ export class DecisionFeed {
     return (
       floorCheckForToolInput(full ?? gate.input) ??
       (typeof gate.input === 'string'
-        ? floorCheckForCommand(gate.input)
+        ? floorCheckForToolInput({ command: gate.input })
         : null) ??
       'unknown'
     );

@@ -69,7 +69,10 @@ function dynamicTool(descriptor: OverseerToolDescriptor): CodexDynamicTool {
 /** What an approval shows the human and what the floor and hold checks read. */
 interface ApprovalView {
   input: Record<string, unknown>;
-  /** False when the ask names no command or no edited path: it must reach a human. */
+  /**
+   * False unless the ask is fully readable and, for a command, simple (one
+   * program, plain arguments); such an ask always reaches a human.
+   */
   known: boolean;
   /** False for a command ask with no command text at all. */
   readable: boolean;
@@ -90,7 +93,7 @@ function approvalView(
         cwd: params.cwd,
         ...reason,
       },
-      known: command?.known ?? false,
+      known: command?.simple ?? false,
       readable: command !== undefined,
     };
   }
