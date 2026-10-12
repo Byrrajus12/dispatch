@@ -17,12 +17,24 @@ import {
   parseCodexTurnOutput,
 } from './prompts.js';
 
-// Never asks and cannot write: the OS sandbox, not a missing tool, keeps a plan read-only.
+// Never asks and cannot write. The read-only sandbox stays as a second layer
+// under PLANNER_FEATURES, which takes the shell away entirely.
 const PLANNER_PERMISSION: CodexPermission = {
   approvalPolicy: 'never',
   approvalsReviewer: 'user',
   sandbox: 'read-only',
 };
+
+// No shell (as ClaudePlanner has no Bash) and no sub-agents that could have one.
+// apply_patch has no switch; Codex itself rejects it under read-only + never.
+export const PLANNER_FEATURES = {
+  shell_tool: false,
+  unified_exec: false,
+  multi_agent: false,
+} as const;
+
+// One planning attempt; a schema retry doubles it, so it stays under the runner's default.
+const PLANNER_TURN_TIMEOUT_MS = 5 * 60_000;
 
 interface CodexPlannerOptions {
   spawnProcess?: SpawnCodexAppServer;
@@ -101,7 +113,11 @@ export class CodexPlanner implements Planner {
       model,
       effort,
       permission: PLANNER_PERMISSION,
-      config: codexMcpConfig({}, userServers),
+      config: {
+        ...codexMcpConfig({}, userServers),
+        features: PLANNER_FEATURES,
+      },
+      timeoutMs: PLANNER_TURN_TIMEOUT_MS,
       outputSchema: CODEX_TURN_JSON_SCHEMA,
       spawnProcess: this.options.spawnProcess,
       env: this.options.env,

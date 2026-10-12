@@ -5,7 +5,10 @@ import { join } from 'node:path';
 
 import { codexPermission } from '../../src/orchestrator/executors/codex.js';
 import type { PlanProposal } from '../../src/orchestrator/planner.js';
-import { CodexPlanner } from '../../src/orchestrator/planners/codex.js';
+import {
+  CodexPlanner,
+  PLANNER_FEATURES,
+} from '../../src/orchestrator/planners/codex.js';
 import { EMPTY_TURN_MESSAGE } from '../../src/orchestrator/planners/prompts.js';
 import { FakeCodexProcess, finishTurn, scriptedCodex } from './fakeCodex.js';
 
@@ -76,7 +79,7 @@ describe('CodexPlanner', () => {
     });
   });
 
-  it('plans read-only with no tools, no user MCP servers and the strict schema', async () => {
+  it('plans read-only with no shell, no user MCP servers and the strict schema', async () => {
     const codex = answering({
       message: 'one question first',
       proposal: null,
@@ -101,6 +104,7 @@ describe('CodexPlanner', () => {
           stripe: { enabled: false },
           posthog: { enabled: false },
         },
+        features: { shell_tool: false, unified_exec: false },
       },
     });
     expect(start?.dynamicTools).toBeUndefined();
@@ -136,6 +140,18 @@ describe('CodexPlanner', () => {
 
     expect(refined.reply).toBe('v2');
     expect(first.paramsOf('thread/start')?.model).toBe('gpt-5.5');
+    // Resume re-sends the sandbox and the shell-off features, so a resumed
+    // thread can't pick up a shell or a looser sandbox from the user's config.
+    for (const params of [
+      first.paramsOf('thread/start'),
+      second.paramsOf('thread/resume'),
+    ]) {
+      expect(params).toMatchObject({
+        sandbox: 'read-only',
+        approvalPolicy: 'never',
+        config: { features: PLANNER_FEATURES },
+      });
+    }
     expect(second.paramsOf('thread/resume')).toMatchObject({
       threadId: 'thread-1',
     });
@@ -188,17 +204,17 @@ describe('CodexPlanner', () => {
     ).rejects.toThrow(EMPTY_TURN_MESSAGE);
   });
 
-  it('declines any approval Codex asks for', async () => {
-    const codex = scriptedCodex({
+  // A turn that asks one approval of `method`, then finishes with a plan.
+  function asking(
+    method: string,
+    params: Record<string, unknown>
+  ): FakeCodexProcess {
+    return scriptedCodex({
       onTurn: (c, t) => {
-        c.serverRequest('item/commandExecution/requestApproval', 'ask-1', {
+        c.serverRequest(method, 'ask-1', {
           threadId: t,
           turnId: 'turn-1',
-          itemId: 'c1',
-          startedAtMs: 0,
-          environmentId: null,
-          command: 'touch x',
-          cwd: '/work/shop',
+          ...params,
         });
         setTimeout(
           () =>
@@ -215,7 +231,42 @@ describe('CodexPlanner', () => {
         );
       },
     });
+  }
+
+  it('declines a command approval', async () => {
+    const codex = asking('item/commandExecution/requestApproval', {
+      itemId: 'c1',
+      startedAtMs: 0,
+      environmentId: null,
+      command: 'touch x',
+      cwd: '/work/shop',
+    });
     await plannerOver([codex]).start('plan it');
     expect(codex.responseTo('ask-1')?.result).toEqual({ decision: 'decline' });
+  });
+
+  it('declines a file-change approval', async () => {
+    const codex = asking('item/fileChange/requestApproval', {
+      itemId: 'p1',
+      startedAtMs: 0,
+      reason: null,
+      grantRoot: null,
+    });
+    await plannerOver([codex]).start('plan it');
+    expect(codex.responseTo('ask-1')?.result).toEqual({ decision: 'decline' });
+  });
+
+  it('grants no permissions when Codex asks for more', async () => {
+    const codex = asking('item/permissions/requestApproval', {
+      itemId: 'r1',
+      startedAtMs: 0,
+      reason: 'write the repo',
+      permissions: { fileSystem: { write: ['/work/shop'] } },
+    });
+    await plannerOver([codex]).start('plan it');
+    expect(codex.responseTo('ask-1')?.result).toEqual({
+      permissions: {},
+      scope: 'turn',
+    });
   });
 });
