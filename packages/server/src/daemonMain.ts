@@ -34,6 +34,7 @@ import type {
   FakeOverseerTurn,
 } from './orchestrator/overseers/fake.js';
 import { FakeOverseer } from './orchestrator/overseers/fake.js';
+import { shareCargoBuildDir } from './orchestrator/paths.js';
 import type { PlanProposal } from './orchestrator/planner.js';
 import { ClaudePlanner } from './orchestrator/planners/claude.js';
 import { FakePlanner } from './orchestrator/planners/fake.js';
@@ -408,6 +409,8 @@ function readFlag(args: string[], name: string): string | undefined {
 
 const args = process.argv.slice(2);
 const rootDir = resolve(readFlag(args, '--root') ?? process.cwd());
+// Before anything spawns, so every run and verify step inherits it.
+shareCargoBuildDir(rootDir);
 const portArg = readFlag(args, '--port');
 const port = portArg !== undefined ? Number(portArg) : 0;
 
