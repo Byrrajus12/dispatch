@@ -92,7 +92,7 @@ const curve = (x1: number, y1: number, x2: number, y2: number) =>
     animation: flow 2.2s linear infinite var(--d);
   }
   .wire.out {
-    stroke: rgb(63 207 142 / 45%);
+    stroke: var(--ink-3);
     stroke-dasharray: 1 2.5;
     animation: flow 2.6s linear infinite var(--d);
   }
@@ -111,11 +111,21 @@ const curve = (x1: number, y1: number, x2: number, y2: number) =>
   .agents li {
     padding: 0.55rem 1rem;
     margin: auto 0 auto auto;
-    border: 1px solid var(--line-2);
-    border-radius: 999px;
-    background: var(--panel);
-    font-size: 0.95rem;
-    font-weight: 500;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    transition:
+      background 0.15s ease,
+      color 0.15s ease;
+  }
+  .agents li:hover {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--on-accent);
   }
   .agents li:last-child {
     border-style: dashed;
@@ -128,29 +138,30 @@ const curve = (x1: number, y1: number, x2: number, y2: number) =>
     align-self: center;
     gap: 0.2rem;
     margin: 0 auto;
-    padding: 1.6rem 2rem 1.3rem;
-    border: 1px solid rgb(139 143 248 / 40%);
-    border-radius: 20px;
-    background: radial-gradient(circle at 50% 0%, rgb(91 95 214 / 35%), var(--panel) 70%);
-    box-shadow: 0 0 80px -10px rgb(91 95 214 / 60%);
+    padding: 1.6rem 2.2rem 1.3rem;
+    border: 2px solid var(--accent);
+    background-color: var(--bg);
+    background-image: var(--hatching);
   }
   .core-orb {
-    width: 2.4rem;
-    height: 2.4rem;
-    margin-bottom: 0.6rem;
-    border: 3px solid var(--accent);
-    border-radius: 50%;
-    background: radial-gradient(circle, var(--accent) 45%, transparent 48%);
-    box-shadow: 0 0 30px var(--accent);
+    width: 1.6rem;
+    height: 1.6rem;
+    margin-bottom: 0.7rem;
+    background: var(--accent);
   }
   .core b {
-    font-size: 1.25rem;
-    font-weight: 750;
-    letter-spacing: -0.03em;
+    font-family: var(--mono);
+    font-size: 1.2rem;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
   }
   .core span:last-child {
     color: var(--ink-2);
-    font-size: 0.85rem;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
   }
   .tools {
     position: relative;
@@ -160,13 +171,15 @@ const curve = (x1: number, y1: number, x2: number, y2: number) =>
   .tools div {
     margin: auto 0;
     padding: 0.6rem 0.9rem;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    background: var(--panel);
+    border: 1px solid var(--border);
+    background: var(--bg);
   }
   .tools dt {
-    font-size: 0.9rem;
-    font-weight: 600;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
   }
   .tools code {
     color: var(--ink-3);

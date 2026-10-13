@@ -52,17 +52,31 @@ const features: [string, string][] = [
   .demo {
     margin: clamp(3rem, 6vw, 4.5rem) 0 0;
   }
+  /* Three ruled cells hung off the demo's bottom edge. */
   .callouts {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
-    gap: 1.25rem 2.5rem;
-    margin: 2rem 0 0;
+    margin: -1px 0 0;
+    padding-left: 1px;
+  }
+  .callouts div {
+    margin-left: -1px;
+    padding: 1.25rem 1.4rem 1.5rem;
+    border: 1px solid var(--border);
   }
   .callouts dt {
-    font-weight: 600;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .callouts dt::before {
+    content: '→ ';
+    color: var(--accent);
   }
   .callouts dd {
-    margin-top: 0.3rem;
+    margin-top: 0.5rem;
     color: var(--ink-2);
     font-size: 0.95rem;
   }

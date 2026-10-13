@@ -9,7 +9,7 @@
   // this config newly covers. Same settings as every other package here.
   //
   // Covers the real TypeScript in the app: the container entrypoint and its
-  // path helper, src/lib, the .ts endpoints, and the tests. NOT
+  // path helper, src/data, src/lib, the .ts endpoints, and the tests. NOT
   // src/content.config.ts (it imports the generated astro:content module) or
   // the .astro components — typechecking those needs
   // `astro check` (@astrojs/check plus a language server), a separate tool and
@@ -19,6 +19,7 @@
   "include": [
     "server.ts",
     "serverPaths.ts",
+    "src/data/**/*.ts",
     "src/lib/**/*.ts",
     "src/pages/**/*.ts",
     "test/**/*.ts"

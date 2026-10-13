@@ -95,7 +95,7 @@ const scenes: Scene[] = [
             <h3>{s.title}</h3>
             <div class="pair">
               <div class="before">
-                <p class="label">Before</p>
+                <p class="label"><span class="stamp">Before</span></p>
                 <div class="dm">
                   {s.before.map((m, i) => (
                     <div class="dm-line" data-seq style={`--i:${i}`}>
@@ -111,7 +111,7 @@ const scenes: Scene[] = [
                 </div>
               </div>
               <div class="now">
-                <p class="label">Now</p>
+                <p class="label"><span class="stamp">Now</span></p>
                 <div class="agents">
                   {s.now.map((m, i) => (
                     <div
@@ -130,7 +130,7 @@ const scenes: Scene[] = [
                   {s.proposal && (
                     <div class="proposal" data-seq style={`--i:${s.before.length + 0.5}`}>
                       <p class="p-head">
-                        <span class="tag">proposal</span>
+                        <span class="stamp">proposal</span>
                         <code>agent:dami</code>
                         <span class="via">via A2A</span>
                       </p>
@@ -163,17 +163,21 @@ const scenes: Scene[] = [
 <style>
   .scenes {
     display: grid;
-    gap: clamp(2.5rem, 5vw, 3.5rem);
+    gap: clamp(3rem, 6vw, 4.5rem);
     margin: clamp(3rem, 6vw, 4.5rem) 0 0;
   }
   .scene {
     --step: 900ms;
   }
   .scene h3 {
-    margin-bottom: 0.9rem;
-    font-size: 1.15rem;
-    font-weight: 650;
-    letter-spacing: -0.02em;
+    margin-bottom: 1rem;
+    padding-bottom: 0.7rem;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
   }
   .pair {
     display: grid;
@@ -181,13 +185,13 @@ const scenes: Scene[] = [
     gap: 1rem;
   }
   .label {
-    margin-bottom: 0.5rem;
-    color: var(--ink-3);
-    font-size: 0.8rem;
-    font-weight: 600;
+    margin-bottom: 0.6rem;
+    color: var(--ink-2);
   }
-  .now .label {
-    color: var(--accent);
+  .now .label .stamp {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--on-accent);
   }
 
   /* Before: a plain DM, people relaying for their agents. */
@@ -198,9 +202,9 @@ const scenes: Scene[] = [
     height: 100%;
     min-height: 9rem;
     padding: 1rem;
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    background: #0c0c0e;
+    border: 1px solid var(--line-2);
+    background: var(--bg);
+    font-weight: 400;
   }
   .dm-line {
     display: flex;
@@ -222,7 +226,6 @@ const scenes: Scene[] = [
     place-items: center;
     width: 1.7rem;
     height: 1.7rem;
-    border-radius: 6px;
     color: #111;
     font-size: 0.75rem;
     font-weight: 700;
@@ -236,18 +239,16 @@ const scenes: Scene[] = [
     height: 100%;
     min-height: 9rem;
     padding: 1rem;
-    border: 1px solid rgb(139 143 248 / 30%);
-    border-radius: 14px;
-    background:
-      radial-gradient(120% 80% at 100% 0%, rgb(91 95 214 / 16%), transparent 60%),
-      #0f0f13;
+    border: 1px solid var(--border);
+    background-color: var(--panel);
+    background-image: var(--hatching);
+    font-weight: 400;
   }
   .msg {
     max-width: 92%;
     padding: 0.7rem 0.85rem;
     border: 1px solid var(--line-2);
-    border-radius: 11px;
-    background: #16161a;
+    background: var(--bg);
   }
   .msg.mine {
     justify-self: end;
@@ -273,15 +274,12 @@ const scenes: Scene[] = [
   .dot {
     width: 0.45rem;
     height: 0.45rem;
-    border-radius: 50%;
   }
   .mine .dot {
     background: var(--accent);
-    box-shadow: 0 0 8px var(--accent);
   }
   .theirs .dot {
     background: var(--review);
-    box-shadow: 0 0 8px var(--review);
   }
   .text {
     margin-top: 0.3rem;
@@ -291,9 +289,8 @@ const scenes: Scene[] = [
 
   .proposal {
     padding: 0.85rem 0.95rem;
-    border: 1px solid rgb(240 138 60 / 40%);
-    border-radius: 11px;
-    background: rgb(240 138 60 / 7%);
+    border: 1px solid rgb(240 138 60 / 55%);
+    background: var(--bg);
   }
   .p-head {
     display: flex;
@@ -302,10 +299,7 @@ const scenes: Scene[] = [
     gap: 0.5rem;
     font-size: 0.8rem;
   }
-  .tag {
-    padding: 0.05rem 0.45rem;
-    border-radius: 999px;
-    background: rgb(240 138 60 / 20%);
+  .proposal .stamp {
     color: #f0a060;
   }
   .via {
@@ -332,11 +326,11 @@ const scenes: Scene[] = [
   .p-actions span:not(.then) {
     padding: 0.2rem 0.65rem;
     border: 1px solid var(--line-2);
-    border-radius: 6px;
   }
   .p-actions span.ok {
-    border-color: transparent;
-    background: var(--accent-strong);
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--on-accent);
   }
   .then {
     margin-left: 0.3rem;
@@ -345,8 +339,10 @@ const scenes: Scene[] = [
 
   .spec {
     margin: 2.5rem 0 0;
+    padding-top: 1rem;
+    border-top: 1px solid var(--line-2);
     color: var(--ink-3);
-    font-size: 0.9rem;
+    font-size: 0.95rem;
   }
   .spec a {
     color: var(--ink);

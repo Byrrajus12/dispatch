@@ -31,7 +31,7 @@ const figs = [
 
     <div class="figs">
       {
-        figs.map((f) => (
+        figs.map((f, i) => (
           <figure class="fig">
             <div class="art" aria-hidden="true">
               {f.kind === 'task' && (
@@ -85,7 +85,7 @@ const figs = [
               )}
             </div>
             <figcaption>
-              <b>{f.title}</b>
+              <b><span class="n">{`0${i + 1}`}</span>{f.title}</b>
               <span>{f.text}</span>
             </figcaption>
           </figure>
@@ -97,15 +97,15 @@ const figs = [
 
 <style>
   .principles {
-    padding: clamp(5rem, 11vw, 9rem) 0 0;
-    border-top: 1px solid var(--line);
+    padding: clamp(5rem, 10vw, 8rem) 0;
+    border-top: 1px solid var(--border);
   }
   .statement {
     max-width: 30ch;
     font-size: clamp(1.8rem, 3.6vw, 2.9rem);
-    font-weight: 560;
-    line-height: 1.15;
-    letter-spacing: -0.03em;
+    font-weight: 600;
+    line-height: 1.12;
+    letter-spacing: -0.035em;
     text-wrap: pretty;
   }
   .statement span {
@@ -115,24 +115,26 @@ const figs = [
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     margin-top: clamp(4rem, 8vw, 6rem);
-    border-top: 1px solid var(--line);
   }
+  /* Three ruled cells whose shared edges collapse into one line. */
   .fig {
     display: flex;
     flex-direction: column;
-    padding: 1rem 2rem 3.5rem;
+    border: 1px solid var(--border);
+    transition: background 0.2s ease;
   }
   .fig + .fig {
-    border-left: 1px solid var(--line);
+    margin-left: -1px;
   }
-  .fig:first-child {
-    padding-left: 0;
+  .fig:hover {
+    background: var(--tint);
   }
   .art {
     display: grid;
     place-items: center;
-    height: 16rem;
-    margin: 1.5rem 0 2rem;
+    height: 17rem;
+    border-bottom: 1px solid var(--border);
+    background-image: var(--hatching);
   }
 
   /* A task card that steps through working, review and landed on a loop. */
@@ -140,9 +142,9 @@ const figs = [
     width: min(100%, 15rem);
     padding: 0.8rem 0.9rem;
     border: 1px solid var(--line-2);
-    border-radius: 10px;
-    background: #111113;
+    background: var(--bg);
     font-size: 0.8rem;
+    font-weight: 400;
     animation: card 6s infinite;
   }
   .task-top {
@@ -210,8 +212,8 @@ const figs = [
     }
     75%,
     100% {
-      border-color: var(--line-2);
-      box-shadow: 0 0 40px -10px rgb(139 143 248 / 50%);
+      border-color: var(--accent);
+      box-shadow: inset 3px 0 0 var(--accent);
     }
   }
   @keyframes glyph {
@@ -275,14 +277,13 @@ const figs = [
   .core {
     position: absolute;
     inset: 41%;
-    border: 3px solid var(--accent);
-    border-radius: 50%;
-    background: radial-gradient(circle, var(--accent) 42%, transparent 46%);
-    box-shadow: 0 0 40px 4px rgb(139 143 248 / 45%);
+    border: 2px solid var(--accent);
+    background: var(--bg);
+    box-shadow: inset 0 0 0 5px var(--bg), inset 0 0 0 20px var(--accent);
   }
   .ring {
     position: absolute;
-    border: 1px dashed rgb(255 255 255 / 14%);
+    border: 1px dashed var(--line-2);
     border-radius: 50%;
     animation: turn linear infinite;
   }
@@ -307,10 +308,8 @@ const figs = [
     place-items: center;
     width: 1.4rem;
     height: 1.4rem;
-    border-radius: 50%;
     background: var(--c);
-    box-shadow: 0 0 14px var(--c);
-    color: #050506;
+    color: var(--on-accent);
     font-size: 0.65rem;
     font-style: normal;
     font-weight: 700;
@@ -331,8 +330,7 @@ const figs = [
     width: min(100%, 15rem);
     padding: 0.8rem 0.9rem;
     border: 1px solid var(--line-2);
-    border-radius: 10px;
-    background: #0d0d10;
+    background: var(--bg);
     font-family: var(--mono);
     font-size: 0.72rem;
   }
@@ -344,7 +342,6 @@ const figs = [
     display: flex;
     gap: 0.5rem;
     padding: 0.3rem 0.35rem;
-    border-radius: 5px;
     color: var(--ink-2);
     white-space: nowrap;
     animation: push 5s var(--ease) infinite;
@@ -400,28 +397,33 @@ const figs = [
   }
   figcaption {
     display: grid;
-    gap: 0.4rem;
+    gap: 0.6rem;
+    padding: 1.5rem 1.75rem 2rem;
   }
   figcaption b {
-    font-weight: 560;
+    display: flex;
+    gap: 0.8rem;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
   }
-  figcaption span {
+  .n {
+    color: var(--accent);
+  }
+  figcaption > span {
     max-width: 22rem;
     color: var(--ink-2);
-    font-size: 0.95rem;
+    font-size: 0.98rem;
   }
 
   @media (max-width: 820px) {
     .figs {
       grid-template-columns: minmax(0, 1fr);
     }
-    .fig,
-    .fig:first-child {
-      padding: 1.5rem 0 2.5rem;
-    }
     .fig + .fig {
-      border-top: 1px solid var(--line);
-      border-left: 0;
+      margin: -1px 0 0;
     }
   }
 </style>

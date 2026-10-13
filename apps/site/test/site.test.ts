@@ -221,3 +221,68 @@ test('the landing page offers the DMG beside the brew command', () => {
   );
   expect(html).toContain('Dispatch_x64.dmg');
 });
+
+// Every page's JSON-LD graph, parsed: a syntax error fails here, not in a
+// search console weeks later.
+const graphOf = (page: string): { '@type': string }[] => {
+  const raw = page.match(
+    /<script type="application\/ld\+json">([\s\S]*?)<\/script>/
+  )?.[1];
+  expect(raw).toBeDefined();
+  return (JSON.parse(raw ?? '{}') as { '@graph': { '@type': string }[] })[
+    '@graph'
+  ];
+};
+
+test('the home page describes the app and answers its FAQ as structured data', () => {
+  const types = graphOf(html).map((n) => n['@type']);
+  expect(types).toEqual([
+    'Organization',
+    'WebSite',
+    'SoftwareApplication',
+    'FAQPage',
+  ]);
+  expect(html).toContain('id="faq"');
+});
+
+test('robots.txt allows every crawler and points at the sitemap', async () => {
+  const robots = await page('/robots.txt');
+  expect(robots).toContain('User-agent: *\nAllow: /');
+  expect(robots).not.toContain('Disallow');
+  expect(robots).toContain('User-agent: ClaudeBot');
+  expect(robots).toContain('Sitemap: https://dispatch.foo/sitemap.xml');
+});
+
+test('every sitemap URL is a built page whose canonical is that URL', async () => {
+  const sitemap = await page('/sitemap.xml');
+  const locs = [
+    ...sitemap.matchAll(/<loc>https:\/\/dispatch\.foo([^<]*)<\/loc>/g),
+  ].map((m) => m[1] ?? '');
+  expect(locs.length).toBeGreaterThan(8);
+  for (const loc of locs) {
+    const file = loc.endsWith('/') ? `${loc}index.html` : `${loc}/index.html`;
+    const built = await page(file);
+    expect({
+      loc,
+      canonical: built.match(/rel="canonical" href="([^"]+)"/)?.[1],
+    }).toEqual({
+      loc,
+      canonical: `https://dispatch.foo${loc}`,
+    });
+    graphOf(built);
+  }
+});
+
+test('llms.txt briefs AI answer engines with the FAQ and the shipping version', async () => {
+  const llms = await page('/llms.txt');
+  expect(llms.startsWith('# Dispatch\n\n> ')).toBe(true);
+  expect(llms).toContain('### What is Dispatch?');
+  expect(llms).toContain('brew install --cask wsoule/tap/dispatch');
+  const conf = JSON.parse(
+    readFileSync(
+      new URL('../../desktop/src-tauri/tauri.conf.json', import.meta.url),
+      'utf8'
+    )
+  ) as { version: string };
+  expect(llms).toContain(`Current version: ${conf.version}.`);
+});
