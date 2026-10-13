@@ -16,7 +16,7 @@ import type {
   MemoryStore,
 } from '@dispatch/memory';
 import { createHash } from 'node:crypto';
-import { lstatSync, readdirSync, realpathSync } from 'node:fs';
+import { lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
@@ -132,9 +132,10 @@ export function mainCheckoutOf(rootDir: string): string {
   return result.exitCode === 0 && common !== '' ? dirname(common) : rootDir;
 }
 
+// Follows a link: Claude Code reads a memory directory linked elsewhere.
 function isDirectory(path: string): boolean {
   try {
-    return lstatSync(path).isDirectory();
+    return statSync(path).isDirectory();
   } catch {
     return false;
   }
@@ -627,7 +628,8 @@ function importNow(input: ImportInput): ClaudeImportReport {
     report.candidates = source.candidates;
     return finish();
   } else {
-    dir = source.found.dir;
+    // The tree scan refuses links, so a linked memory directory is read at its target.
+    dir = realOrSelf(source.found.dir);
   }
   report.source = dir;
   const tree = readMemoryTree(dir);

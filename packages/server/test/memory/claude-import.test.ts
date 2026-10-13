@@ -293,6 +293,49 @@ describe('importClaudeNotes', () => {
     rmSync(at, { recursive: true, force: true });
   });
 
+  // Claude Code follows a memory directory linked to a synced folder; so does the import.
+  it('imports a memory directory that is itself a symlink', async () => {
+    const synced = join(home, 'Sync', 'claude-memory');
+    mkdirSync(join(home, 'Sync'), { recursive: true });
+    renameSync(memoryDir, synced);
+    symlinkSync(synced, memoryDir);
+    const report = await run(
+      await findClaudeMemorySource({
+        rootDir: checkout,
+        mainCheckout: checkout,
+        env: {},
+        home,
+      })
+    );
+    expect(report).toMatchObject({
+      state: 'complete',
+      imported: 3,
+      problems: [],
+    });
+  });
+
+  it('offers a symlinked memory directory as a candidate', async () => {
+    const synced = join(home, 'Sync', 'old-memory');
+    mkdirSync(synced, { recursive: true });
+    writeFileSync(join(synced, 'note.md'), 'a note');
+    const old = join(
+      home,
+      '.claude',
+      'projects',
+      `-old-${sanitizeProjectDirName(basename(checkout))}`
+    );
+    mkdirSync(old, { recursive: true });
+    symlinkSync(synced, join(old, 'memory'));
+    rmSync(memoryDir, { recursive: true, force: true });
+    const search = await findClaudeMemorySource({
+      rootDir: checkout,
+      mainCheckout: checkout,
+      env: {},
+      home,
+    });
+    expect(search.candidates).toEqual([synced]);
+  });
+
   it('looks in CLAUDE_CONFIG_DIR under CLAUDE_CODE_PROJECT_DIR_NAME when they are set', async () => {
     const config = join(home, 'elsewhere');
     const named = join(config, 'projects', 'my-project', 'memory');
