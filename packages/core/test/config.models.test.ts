@@ -9,6 +9,7 @@ import {
   loadConfig,
   updateConfig,
 } from '../src/config.js';
+import { MODEL_ROLES } from '../src/configTypes.js';
 
 function root(contents?: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'dispatch-models-'));
@@ -37,9 +38,22 @@ describe('models config', () => {
     expect(cfg.models.plan).toBe(DEFAULT_MODELS.plan);
     expect(cfg.models.draft).toBe(DEFAULT_MODELS.draft);
     expect(cfg.models.enrich).toBe(DEFAULT_MODELS.enrich);
-    expect(cfg.models.cluster).toBe(DEFAULT_MODELS.cluster);
     expect(cfg.models.summarize).toBe(DEFAULT_MODELS.summarize);
     expect(cfg.models.judge).toBe('jev-latest');
+  });
+
+  it('still loads a config naming the retired cluster role, and ignores it', () => {
+    // Inbox grouping is gone; a config.yml written before must keep loading.
+    const dir = root(
+      'models:\n  cluster: claude-sonnet-5\n  plan: claude-opus-4-8\n'
+    );
+    const cfg = loadConfig(dir);
+    expect(cfg.models.plan).toBe('claude-opus-4-8');
+    expect('cluster' in cfg.models).toBe(false);
+  });
+
+  it('no longer offers the cluster role', () => {
+    expect(MODEL_ROLES as readonly string[]).not.toContain('cluster');
   });
 
   it('throws a ConfigError on an unknown role key', () => {
@@ -81,7 +95,6 @@ describe('models config', () => {
     // ...but every other role — set explicitly or left at its default — survived untouched.
     expect(cfg.models.execute).toBe('claude-opus-4-8');
     expect(cfg.models.draft).toBe(DEFAULT_MODELS.draft);
-    expect(cfg.models.cluster).toBe(DEFAULT_MODELS.cluster);
 
     const text = read(dir);
     expect(text).toContain('# how this project routes agent work');

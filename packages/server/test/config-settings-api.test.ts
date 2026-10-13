@@ -91,8 +91,8 @@ describe('who may change settings', () => {
   });
 
   // These push with the owner's own git credentials to a remote nobody may
-  // have chosen for them (sync defaults to origin), which is POST
-  // /api/git/push's authority. Off is gated too, like clearing a remote.
+  // have chosen for them (sync defaults to origin). Off is gated too, like
+  // clearing a remote.
   it('a decide-tier teammate cannot switch pushing on or off, or point it at another branch', async () => {
     const lead = handle.team.teammates.issue('ada', 'decide');
     // TaskStore.init writes autoCommit: true, so the refusals are checked

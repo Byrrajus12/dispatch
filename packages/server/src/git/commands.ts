@@ -1,19 +1,10 @@
-import { childEnv } from '@dispatch-foo/core';
 import { lstatSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
 import type { CommandResult, CommandRunner } from '../orchestrator/pr.js';
 import { defaultCommandRunner } from '../orchestrator/pr.js';
-import {
-  BRANCH_FORMAT,
-  LOG_FORMAT,
-  parseBranchLines,
-  parseLogLines,
-  parsePorcelainV2,
-  parseStashList,
-  STASH_FORMAT,
-} from './parse.js';
-import type { GitBranch, GitLogEntry, GitStash, GitStatus } from './parse.js';
+import { LOG_FORMAT, parseLogLines, parsePorcelainV2 } from './parse.js';
+import type { GitLogEntry, GitStatus } from './parse.js';
 
 // Every read/mutation below resolves to this instead of throwing on a
 // non-zero git exit; `T` carries whatever extra fields a success returns.
@@ -21,15 +12,11 @@ export type GitOutcome<T extends object = object> =
   | ({ ok: true } & T)
   | { ok: false; stderr: string };
 
-// Exported so api.ts can tell a pre-flight rejection (git never ran) apart
-// from a real git failure, for its `alwaysBroadcast` decision.
+// Pre-flight rejections: git never ran. Exported so tests can tell them apart.
 export const PATH_ESCAPE_ERROR = 'path escapes the repository root';
 export const INVALID_REF_ERROR = 'invalid ref: must not start with "-"';
-export const INVALID_REMOTE_ERROR =
-  'invalid remote: expected a plain remote name';
-export const CONFIRM_REQUIRED_ERROR =
+const CONFIRM_REQUIRED_ERROR =
   'this operation is destructive and requires confirm: true';
-export const INVALID_STASH_INDEX_ERROR = 'invalid stash index';
 // `.`, `./` and `src/..` all name the whole checkout while reading like an
 // ordinary relative path — discard takes the paths the caller meant to name.
 export const WHOLE_TREE_DISCARD_ERROR =
@@ -38,7 +25,7 @@ export const WHOLE_TREE_DISCARD_ERROR =
 export const STAGED_DISCARD_PREFIX =
   'unstage before discarding (discard restores the working tree, not the index): ';
 // Prefix only — marks a commit that landed but whose sha couldn't be confirmed.
-export const COMMIT_SHA_UNRESOLVED_PREFIX =
+const COMMIT_SHA_UNRESOLVED_PREFIX =
   'commit succeeded but could not resolve its sha: ';
 
 /** One path's index entry: the file mode and blob sha git has staged for it. */
@@ -46,9 +33,6 @@ export interface GitIndexEntry {
   mode: string;
   sha: string;
 }
-
-// A plain remote name only — never a URL or transport spec (see fetch() below).
-const REMOTE_NAME_PATTERN = /^[A-Za-z0-9._][A-Za-z0-9._-]*$/;
 
 // Falls back to the plain path when there's nothing on disk to resolve
 // (e.g. a deleted parent, or the repo root itself).
@@ -145,7 +129,7 @@ function isSafeRef(name: string): boolean {
   return name.trim() !== '' && !name.startsWith('-');
 }
 
-// Every git operation the Git page needs, via the injected `CommandRunner`
+// The git reads and writes the daemon needs, via the injected `CommandRunner`
 // — distinct from `WorktreeManager`'s dispatch-worktree lifecycle.
 export class GitRepo {
   constructor(
@@ -254,17 +238,6 @@ export class GitRepo {
     return { ok: true, commits: parseLogLines(result.stdout) };
   }
 
-  async branches(): Promise<GitOutcome<{ branches: GitBranch[] }>> {
-    const result = await this.runGit([
-      'for-each-ref',
-      `--format=${BRANCH_FORMAT}`,
-      'refs/heads',
-      'refs/remotes',
-    ]);
-    if (!result.ok) return { ok: false, stderr: commandErrorText(result) };
-    return { ok: true, branches: parseBranchLines(result.stdout) };
-  }
-
   async diff(
     opts: { staged?: boolean; path?: string } = {}
   ): Promise<GitOutcome<{ patch: string }>> {
@@ -276,13 +249,6 @@ export class GitRepo {
       args.push('--', safePath);
     }
     const result = await this.runGit(args);
-    if (!result.ok) return { ok: false, stderr: commandErrorText(result) };
-    return { ok: true, patch: result.stdout };
-  }
-
-  async diffCommit(sha: string): Promise<GitOutcome<{ patch: string }>> {
-    if (!isSafeRef(sha)) return { ok: false, stderr: INVALID_REF_ERROR };
-    const result = await this.runGit(['show', sha]);
     if (!result.ok) return { ok: false, stderr: commandErrorText(result) };
     return { ok: true, patch: result.stdout };
   }
@@ -348,61 +314,6 @@ export class GitRepo {
             '--cacheinfo',
             `${entry.mode},${entry.sha},${safe}`,
           ]
-    );
-    return result.ok
-      ? { ok: true }
-      : { ok: false, stderr: commandErrorText(result) };
-  }
-
-  // `git reset` rather than `git restore --staged`: the latter fails on an
-  // unborn branch, which a repo's very first staged file is in.
-  async unstage(paths: string[]): Promise<GitOutcome> {
-    const safe = this.safePaths(paths);
-    if (safe === null) return { ok: false, stderr: PATH_ESCAPE_ERROR };
-    const result = await this.runGit(['reset', 'HEAD', '--', ...safe]);
-    return result.ok
-      ? { ok: true }
-      : { ok: false, stderr: commandErrorText(result) };
-  }
-
-  // Bypasses `this.run` on purpose — see the class doc comment. `-` as the
-  // last argument tells `git apply` to read the patch from stdin.
-  private async applyPatch(
-    args: string[],
-    patch: string
-  ): Promise<CommandResult> {
-    try {
-      const proc = Bun.spawn(['git', '--literal-pathspecs', ...args, '-'], {
-        cwd: this.cwd,
-        env: childEnv(),
-        stdin: 'pipe',
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      await proc.stdin.write(patch);
-      await proc.stdin.end();
-      const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ]);
-      return { ok: exitCode === 0, stdout, stderr };
-    } catch (err) {
-      return { ok: false, stdout: '', stderr: (err as Error).message };
-    }
-  }
-
-  async stageHunk(patch: string): Promise<GitOutcome> {
-    const result = await this.applyPatch(['apply', '--cached'], patch);
-    return result.ok
-      ? { ok: true }
-      : { ok: false, stderr: commandErrorText(result) };
-  }
-
-  async unstageHunk(patch: string): Promise<GitOutcome> {
-    const result = await this.applyPatch(
-      ['apply', '--cached', '--reverse'],
-      patch
     );
     return result.ok
       ? { ok: true }
@@ -495,89 +406,11 @@ export class GitRepo {
     return { ok: true, sha: head.stdout.trim() };
   }
 
-  // `--` disambiguates a branch from a pathspec — without it, an invalid ref
-  // silently falls back to restoring paths under that name instead.
-  async checkout(branch: string): Promise<GitOutcome> {
-    if (!isSafeRef(branch)) return { ok: false, stderr: INVALID_REF_ERROR };
-    const result = await this.runGit(['checkout', branch, '--']);
-    return result.ok
-      ? { ok: true }
-      : { ok: false, stderr: commandErrorText(result) };
-  }
-
   async createBranch(name: string, from?: string): Promise<GitOutcome> {
     if (!isSafeRef(name) || (from !== undefined && !isSafeRef(from))) {
       return { ok: false, stderr: INVALID_REF_ERROR };
     }
     const args = from !== undefined ? ['branch', name, from] : ['branch', name];
-    const result = await this.runGit(args);
-    return result.ok
-      ? { ok: true }
-      : { ok: false, stderr: commandErrorText(result) };
-  }
-
-  // `force` selects `-D` over `-d`; `confirm` gates `-D` independently of the
-  // HTTP route, so an in-process caller can't reach it by accident.
-  async deleteBranch(
-    name: string,
-    force: boolean,
-    confirm = false
-  ): Promise<GitOutcome> {
-    if (!isSafeRef(name)) return { ok: false, stderr: INVALID_REF_ERROR };
-    if (force && !confirm) return { ok: false, stderr: CONFIRM_REQUIRED_ERROR };
-    const result = await this.runGit(['branch', force ? '-D' : '-d', name]);
-    return result.ok
-      ? { ok: true }
-      : { ok: false, stderr: commandErrorText(result) };
-  }
-
-  async stashPush(message?: string): Promise<GitOutcome> {
-    const args = ['stash', 'push'];
-    if (message !== undefined && message !== '') args.push('-m', message);
-    const result = await this.runGit(args);
-    return result.ok
-      ? { ok: true }
-      : { ok: false, stderr: commandErrorText(result) };
-  }
-
-  async stashList(): Promise<GitOutcome<{ stashes: GitStash[] }>> {
-    const result = await this.runGit([
-      'stash',
-      'list',
-      `--format=${STASH_FORMAT}`,
-    ]);
-    if (!result.ok) return { ok: false, stderr: commandErrorText(result) };
-    return { ok: true, stashes: parseStashList(result.stdout) };
-  }
-
-  async stashPop(index: number): Promise<GitOutcome> {
-    if (!Number.isInteger(index) || index < 0) {
-      return { ok: false, stderr: INVALID_STASH_INDEX_ERROR };
-    }
-    const result = await this.runGit(['stash', 'pop', `stash@{${index}}`]);
-    return result.ok
-      ? { ok: true }
-      : { ok: false, stderr: commandErrorText(result) };
-  }
-
-  async stashDrop(index: number, confirm: boolean): Promise<GitOutcome> {
-    if (!confirm) return { ok: false, stderr: CONFIRM_REQUIRED_ERROR };
-    if (!Number.isInteger(index) || index < 0) {
-      return { ok: false, stderr: INVALID_STASH_INDEX_ERROR };
-    }
-    const result = await this.runGit(['stash', 'drop', `stash@{${index}}`]);
-    return result.ok
-      ? { ok: true }
-      : { ok: false, stderr: commandErrorText(result) };
-  }
-
-  // `git fetch <repository>` accepts a URL or transport spec too — rejecting
-  // anything but a plain name keeps this from reaching an attacker's host.
-  async fetch(remote?: string): Promise<GitOutcome> {
-    if (remote !== undefined && !REMOTE_NAME_PATTERN.test(remote)) {
-      return { ok: false, stderr: INVALID_REMOTE_ERROR };
-    }
-    const args = remote !== undefined ? ['fetch', remote] : ['fetch'];
     const result = await this.runGit(args);
     return result.ok
       ? { ok: true }
@@ -596,14 +429,6 @@ export class GitRepo {
     const args =
       opts.setUpstream === true ? ['push', '-u', 'origin', 'HEAD'] : ['push'];
     const result = await this.runGit(args);
-    return result.ok
-      ? { ok: true }
-      : { ok: false, stderr: commandErrorText(result) };
-  }
-
-  async cherryPick(sha: string): Promise<GitOutcome> {
-    if (!isSafeRef(sha)) return { ok: false, stderr: INVALID_REF_ERROR };
-    const result = await this.runGit(['cherry-pick', sha]);
     return result.ok
       ? { ok: true }
       : { ok: false, stderr: commandErrorText(result) };

@@ -146,8 +146,8 @@ the obvious fields (`status`, `priority`, `assignee`, `blockedBy`, `labels`,
 
 ## The daemon
 
-`packages/server/src/api.ts` (~6.2k lines) serves roughly 91 REST routes.
-Grouped by what they're for:
+`packages/server/src/api.ts` serves the daemon's REST routes. Grouped by what
+they're for:
 
 - **Tasks and planning** — `/api/tasks/*`, `/api/plan/*`, `/api/tasks/draft*`
 - **Runs** — dispatch, resume, stop, archive, edits, comments, send-back,
@@ -158,8 +158,8 @@ Grouped by what they're for:
   requests and tool approvals are gates
 - **Review** — `/api/prs/*` (comments, diff, findings, review agent, submit),
   `/api/runs/:id/review*`
-- **Merge** — `/api/merge-queue/*`, `/api/epics/:id/land`, `/api/branches/*`
-- **Repo** — `/api/git/*`, `/api/impact`, `/api/landing`
+- **Merge** — `/api/merge-queue/*`, `/api/epics/:id/land`, `/api/branches`
+- **Repo** — `/api/impact`, `/api/landing`
 - **Capture** — `/api/inbox/*`, `/api/notes/*`, `/api/conversations`
 - **Overseer** — `/api/overseer`, `/api/overseer/:id/message`; its action
   confirmations and built-in tool-call approvals are gates on the message bus

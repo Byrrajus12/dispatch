@@ -12,8 +12,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { ClaudeAiTaskFilter } from '../../src/aiTaskFilter.js';
-import { CommitMessageGenerator } from '../../src/git/commitMessage.js';
-import { InboxClusterer } from '../../src/inboxClusterer.js';
 import {
   openClaudeQuery,
   resolveClaudeCli,
@@ -101,7 +99,7 @@ describe('auto memory off by default', () => {
     }
   });
 
-  it('covers the repo digest, AI filter, inbox clusterer and commit-message sessions', async () => {
+  it('covers the repo digest and AI filter sessions', async () => {
     const root = process.cwd();
     for (const run of [
       (fn: never) => generateRepoDigest(root, fn),
@@ -113,15 +111,6 @@ describe('auto memory off by default', () => {
           epics: [],
           runStates: [],
         }),
-      (fn: never) =>
-        new InboxClusterer(root, fn).cluster(
-          Array.from(
-            { length: 6 },
-            (_, i) => ({ id: `i${i}`, text: `note ${i}`, done: false }) as never
-          )
-        ),
-      (fn: never) =>
-        new CommitMessageGenerator(root, fn).generate('diff --git a/x b/x'),
     ]) {
       const c = capture();
       await run(c.fn).catch(() => {});

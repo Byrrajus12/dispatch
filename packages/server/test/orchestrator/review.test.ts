@@ -458,7 +458,6 @@ describe('reviewModelForRisk', () => {
     plan: 'sonnet',
     draft: 'haiku',
     enrich: 'haiku',
-    cluster: 'haiku',
     summarize: 'haiku',
     judge: 'jev',
   };

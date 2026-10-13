@@ -395,68 +395,6 @@ export interface DiffResult {
   files: DiffFile[];
 }
 
-// The Git page (`/api/git/*`) — mirrors packages/server/src/git/*.ts. `ok:
-// false` is a normal git result, not a `request()`-thrown HTTP error.
-export type GitOutcome<T extends object = object> =
-  | ({ ok: true } & T)
-  | { ok: false; stderr: string };
-
-export interface GitFileChange {
-  path: string;
-  status: string;
-  origPath?: string;
-}
-
-export interface GitStatus {
-  branch: string | null;
-  upstream: string | null;
-  ahead: number;
-  behind: number;
-  staged: GitFileChange[];
-  unstaged: GitFileChange[];
-  untracked: string[];
-  conflicted: string[];
-}
-
-export interface GitLogEntry {
-  sha: string;
-  shortSha: string;
-  subject: string;
-  author: string;
-  date: string;
-  parents: string[];
-}
-
-export interface GitBranch {
-  name: string;
-  isRemote: boolean;
-  isCurrent: boolean;
-  isDispatchBranch: boolean;
-  sha: string;
-  shortSha: string;
-  subject: string;
-  date: string;
-  upstream?: string;
-  ahead: number;
-  behind: number;
-}
-
-// `GitBranch` joined with whatever dispatch run claims that branch name, when
-// one does — mirrors GitBranchWithRun in packages/server/src/api.ts.
-export interface GitBranchWithRun extends GitBranch {
-  runId?: string;
-  taskId?: string;
-  taskTitle?: string;
-}
-
-export interface GitStash {
-  index: number;
-  ref: string;
-  sha: string;
-  message: string;
-  date: string;
-}
-
 // Mirrors PrCheckRun in packages/server/src/orchestrator/pr.ts — one named
 // check from GitHub's rollup, normalized to a single verdict string.
 export interface PrCheckRun {
@@ -547,36 +485,6 @@ export interface PrWorktreeState {
   headOid: string;
   dirty: boolean;
   behind: boolean;
-}
-
-// The notes/triage hub — mirrors Note / NoteKind in packages/server/src/notes.ts. A
-// lightweight item (triage an agent found, a follow-up, a free note, a personal todo) that
-// can later be promoted into a real task.
-export type NoteKind = 'note' | 'triage' | 'followup' | 'todo';
-
-export interface Note {
-  id: string;
-  kind: NoteKind;
-  title: string;
-  body: string;
-  done: boolean;
-  linkedTaskId: string | null;
-  createdByRunId: string | null;
-  created: string;
-  updated: string;
-}
-
-export interface CreateNoteInput {
-  kind: NoteKind;
-  title: string;
-  body?: string;
-}
-
-export interface UpdateNotePatch {
-  title?: string;
-  body?: string;
-  kind?: NoteKind;
-  done?: boolean;
 }
 
 // The findings/ledger carry-forward surface — mirrors
@@ -1288,9 +1196,6 @@ export type ServerEvent =
   | { type: 'config.changed' }
   // A task draft changed state or was dismissed — no id, refetch the list.
   | { type: 'draft.changed' }
-  // The repo's git state changed via one of the `/api/git/*` mutation
-  // routes. Mirrors packages/server/src/events.ts.
-  | { type: 'git.changed' }
   // A finding's verdict/ruling changed, or a review run raised a new one.
   | { type: 'finding.changed' }
   // A decision, hazard or constraint was added to the ledger.
@@ -1533,15 +1438,6 @@ export interface A2APeerInput {
   apiKeyHeader?: string;
   allowHttp?: boolean;
   allowOrigin?: boolean;
-}
-
-// The body of `GET /api/runs/claims` — one entry per live run.
-export interface RunClaim {
-  runId: string;
-  taskId: string;
-  claims: string[];
-  /** ActorRef of who dispatched the run holding these claims, when anyone did. */
-  dispatchedBy?: string;
 }
 
 // Mirrors PlannedTask in packages/server/src/orchestrator/planner.ts.
@@ -2139,22 +2035,6 @@ export interface AiTaskFilterResult {
   join: 'and' | 'or';
 }
 
-/** One model-proposed grouping of related captures, ready to become an epic. */
-export interface InboxClusterGroup {
-  epicTitle: string;
-  reason: string;
-  itemIds: string[];
-}
-
-/** The persisted last clustering pass — mirrors InboxClusterSnapshot in
- * packages/server/src/inboxClusterer.ts. */
-export interface InboxClusterSnapshot {
-  groups: InboxClusterGroup[];
-  /** The open item ids the pass covered, for judging staleness client-side. */
-  itemIds: string[];
-  updatedAt: string;
-}
-
 /** How completely a task spec says what done looks like — mirrors
  * ReadinessReading in packages/server/src/judgments/readiness.ts. */
 export interface ReadinessReading {
@@ -2188,12 +2068,6 @@ export interface InboxTriage {
   epicConfidence: number;
   /** Tasks or other captures this looks like a duplicate of, strongest first. */
   duplicates: { id: string; probability: number }[];
-}
-
-/** The persisted last triage pass, keyed by item id. */
-export interface InboxTriageSnapshot {
-  items: Record<string, InboxTriage>;
-  updatedAt: string;
 }
 
 export interface InboxConvertResponse {
@@ -3567,12 +3441,8 @@ export interface ApiClient {
   /** The retry for a run merged locally that never reached origin: replays
    *  its squash onto origin's tip. Returns the run with its new merge commit. */
   publishRun(runId: string): Promise<RunMeta>;
-  // The Branches surface: every `dispatch/*` ref that exists in git right now,
-  // joined with whatever run claims it. `freeBranchDisk` reclaims the working
-  // copy but keeps the ref (recoverable); `deleteBranch` removes both, and
-  // needs `force` for a branch whose commits have not landed on its base.
-  // Discarding a run is deliberately NOT here — that's `reviewRun(id,
-  // 'discard')`, the path that already does the full bookkeeping.
+  // Every `dispatch/*` ref that exists in git right now, joined with whatever
+  // run claims it. Discarding a run is `reviewRun(id, 'discard')`.
   fetchBranches(): Promise<BranchEntry[]>;
   // GitHub PR review surface (items 3+4): read a run's PR status + conversation,
   // submit a review verdict (approve/request-changes/comment), or add a
@@ -3734,16 +3604,6 @@ export interface ApiClient {
   // Creates local tasks for Linear issues that have none. An ordinary sync never
   // imports a backlog, so this is the explicit first-sync action.
   importLinearIssues(): Promise<LinearSyncSummary>;
-  fetchNotes(): Promise<Note[]>;
-  createNote(input: CreateNoteInput): Promise<Note>;
-  updateNote(id: string, patch: UpdateNotePatch): Promise<Note>;
-  deleteNote(id: string): Promise<void>;
-  /** Promote a note into a task; returns the new task. */
-  promoteNote(id: string): Promise<{ meta: { id: string } }>;
-  /** Start an AI draft of the task a note should become: returns a plan id to
-   * poll with `fetchPlan`, whose proposal is confirmed through the ordinary
-   * `confirmPlan` (which also links the note to the task it writes). */
-  enrichNote(id: string): Promise<{ planId: string }>;
   fetchPlan(planId: string): Promise<PlanRecord>;
   // Send a follow-up message on an existing plan conversation. Resolves (202)
   // with the record already back in `running` — poll `fetchPlan`/watch
@@ -4682,21 +4542,6 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
         method: 'POST',
         body: JSON.stringify({ archived }),
       }),
-    fetchNotes: () => request(target, '/api/notes'),
-    createNote: (input) =>
-      request(target, '/api/notes', { method: 'POST', ...jsonBody(input) }),
-    updateNote: (id, patch) =>
-      request(target, `/api/notes/${id}`, {
-        method: 'PATCH',
-        ...jsonBody(patch),
-      }),
-    deleteNote: async (id) => {
-      await request(target, `/api/notes/${id}`, { method: 'DELETE' });
-    },
-    promoteNote: (id) =>
-      request(target, `/api/notes/${id}/promote`, { method: 'POST' }),
-    enrichNote: (id) =>
-      request(target, `/api/notes/${id}/enrich`, { method: 'POST' }),
     fetchPlan: (planId) => request(target, `/api/plan/${planId}`),
     sendPlanMessage: (planId, text) =>
       request(target, `/api/plan/${planId}/message`, {

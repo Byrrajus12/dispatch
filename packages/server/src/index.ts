@@ -84,13 +84,11 @@ import type { SocketAudience } from './events.js';
 import { FindingStore } from './findings.js';
 import type { FindingStorePort } from './findings.js';
 import { floorCheckForToolInput } from './floor.js';
-import { GitRepo } from './git/commands.js';
 import { OriginWriter } from './git/originWriter.js';
 import { resolvePushTarget } from './gitTarget.js';
 import { sha256, TokenRegistry } from './identity.js';
 import { IdleShutdown } from './idleShutdown.js';
 import { InboxStore } from './inbox.js';
-import type { InboxClusterer } from './inboxClusterer.js';
 import { createJudgmentClient } from './judgments/client.js';
 import type { JudgmentClient } from './judgments/client.js';
 import {
@@ -345,9 +343,6 @@ export interface StartServerOptions {
   // Replaces TypeSafe key lookup with a ready-made judgment client (or null
   // to disable judgments outright), so no test ever reaches the API.
   judgments?: JudgmentClient | null;
-  // Replaces the inbox clusterer with one built on a stub query function, so
-  // a route test can see which items reach the model without a real session.
-  inboxClusterer?: InboxClusterer;
   // Fixed tokens instead of freshly minted ones, so a test can present a known
   // value. Production never passes this.
   tokens?: DaemonTokenPair;
@@ -2174,9 +2169,6 @@ async function bootServer(
   });
   linearSync.start();
 
-  // Shares PrManager/MergeQueue's command-runner seam (opts.prCommandRunner).
-  const gitRepo = new GitRepo(rootDir, opts.prCommandRunner);
-
   // Review dispatched as its own run kind. Built at boot because it subscribes
   // to the terminal hook that ingests a review's findings. `findingStore` is
   // the one built above, shared with the orchestrator's merge gate.
@@ -2359,7 +2351,6 @@ async function bootServer(
     rootDir,
     store,
     judgments,
-    inboxClusterer: opts.inboxClusterer,
     aiTaskFilter: opts.aiTaskFilter,
     cache,
     events,
@@ -2395,7 +2386,6 @@ async function bootServer(
     terminals,
     decisionFeed,
     linearSync,
-    gitRepo,
     actorContext,
     tokens,
     boardSyncScheduler,

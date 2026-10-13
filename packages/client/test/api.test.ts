@@ -200,9 +200,7 @@ describe('request() declares content-type on every state-changing request', () =
     ['POST /api/runs/:id/cancel', (c) => c.cancelRun('run-1')],
     ['POST /api/runs/:id/stop', (c) => c.stopRun('run-1')],
     ['POST /api/runs/:id/resume', (c) => c.resumeRun('run-1')],
-    ['POST /api/notes/:id/enrich', (c) => c.enrichNote('note-1')],
     ['POST /api/merge-queue/ready', (c) => c.enqueueMergeReady()],
-    ['DELETE /api/notes/:id', (c) => c.deleteNote('note-1')],
   ];
 
   for (const [label, call] of bodyless) {

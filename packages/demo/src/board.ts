@@ -410,7 +410,6 @@ models:
   plan: claude-opus-5
   draft: claude-sonnet-5
   enrich: claude-sonnet-5
-  cluster: claude-sonnet-5
   summarize: claude-sonnet-5
 
 fixLoop:

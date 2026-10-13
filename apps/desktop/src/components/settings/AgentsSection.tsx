@@ -53,13 +53,9 @@ const ROLE_INFO: Record<keyof ModelConfig, { label: string; hint: string }> = {
     label: 'Filling in details',
     hint: 'Writing descriptions and acceptance criteria.',
   },
-  cluster: {
-    label: 'Inbox grouping',
-    hint: 'Grouping inbox notes into suggested epics.',
-  },
   summarize: {
     label: 'Summaries',
-    hint: 'Titles, summaries and commit messages.',
+    hint: 'Titles and summaries.',
   },
   judge: {
     label: 'Judgments',

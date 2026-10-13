@@ -38,7 +38,6 @@ import type {
   LinearViewer,
   MergeQueueSnapshot,
   Message,
-  PlanProposal,
   PlanRecord,
   PresenceEntry,
   ReadinessReading,
@@ -318,12 +317,9 @@ function readStoredInbox(root: string | null): InboxState {
 }
 
 /**
- * `GET /api/plan/:id` as a reusable query, because this hook exposes two independent plan
- * slots: the AI task draft started off a note, and the "Add detail" draft on a task. They
- * poll identically, so the query is written once here and instantiated per slot.
- *
- * `retry: false`: a stale `planId` mid project-switch (cleared by an effect below, but not
- * instantly re-rendered) should never retry against the wrong daemon — see I5.
+ * `GET /api/plan/:id` as a query, polled until the plan settles — the "Add detail" draft on a
+ * task. `retry: false`: a stale `planId` mid project-switch should never retry against the
+ * wrong daemon — see I5.
  */
 function usePlanRecord(
   client: ApiClient | null,
@@ -629,23 +625,6 @@ export interface DispatchProjectData {
   handleConvertInbox: (
     ids: string[]
   ) => Promise<import('@dispatch/client').InboxConvertResponse>;
-  notes: import('@dispatch/client').Note[];
-  handleCreateNote: (
-    input: import('@dispatch/client').CreateNoteInput
-  ) => Promise<void>;
-  handleUpdateNote: (
-    id: string,
-    patch: import('@dispatch/client').UpdateNotePatch
-  ) => Promise<void>;
-  handleDeleteNote: (id: string) => Promise<void>;
-  handlePromoteNote: (id: string) => Promise<void>;
-  /** Starts an AI draft of the task a note should become; the proposal lands on
-   * `notePlanRecord`, and nothing is written until `handleConfirmNotePlan`. */
-  handleEnrichNote: (id: string) => Promise<void>;
-  handleConfirmNotePlan: (proposal: PlanProposal) => Promise<void>;
-  notePlanId: string | null;
-  setNotePlanId: (planId: string | null) => void;
-  notePlanRecord: PlanRecord | undefined;
   /** Run id -> each tool call it is parked on, oldest first, from the open gates. */
   pendingApprovals: Map<string, PendingApproval[]>;
   /** Run id -> the newest open scope gate its agent raised, live or ended. */
@@ -816,10 +795,7 @@ export function useDispatchProject(
   { selectedRunId, onRunDispatched }: UseDispatchProjectOptions
 ): DispatchProjectData {
   const queryClient = useQueryClient();
-  // The Notes hub's own plan slot: the AI task draft started off a single note.
-  const [notePlanId, setNotePlanId] = useState<string | null>(null);
-  // The "Add detail" slot, carrying the task it was started from. Separate from `notePlanId`
-  // because those proposals get confirmed into new tasks and these get patched onto one.
+  // The "Add detail" slot: an AI draft patched onto the task it was started from.
   const [enrichPlan, setEnrichPlan] = useState<{
     taskId: string;
     planId: string;
@@ -888,12 +864,6 @@ export function useDispatchProject(
     [updateNotificationInbox]
   );
 
-  // A note draft started against one project's dispatchd must never leak into another
-  // project: its id would be fetched against the new project's port and 404.
-  useEffect(() => {
-    setNotePlanId(null);
-  }, [projectPath]);
-
   const {
     data: connection,
     isLoading: portLoading,
@@ -933,7 +903,6 @@ export function useDispatchProject(
     [port, selectedRunId]
   );
   const healthQueryKey = useMemo(() => ['dispatch-health', port], [port]);
-  const notesQueryKey = useMemo(() => ['dispatch-notes', port], [port]);
   const inboxQueryKey = useMemo(() => ['dispatch-inbox', port], [port]);
   // The drafts list (`GET /api/tasks/drafts`) query key, invalidated below
   // on `draft.changed`.
@@ -1308,15 +1277,6 @@ export function useDispatchProject(
     refetchInterval: 60_000,
   });
 
-  const { data: notes } = useQuery({
-    queryKey: notesQueryKey,
-    queryFn: () => {
-      if (client === null) throw new Error('dispatchd client not ready');
-      return client.fetchNotes();
-    },
-    enabled: afterList,
-  });
-
   // Feeds the app-wide drafts tray; refetched on `draft.changed` regardless of whether the
   // composer that started a draft is still open.
   const { data: drafts } = useQuery({
@@ -1379,7 +1339,7 @@ export function useDispatchProject(
 
   // Every dispatch worktree/branch on disk. Each row costs several `git`
   // shell-outs on the server, so this deliberately has no `refetchInterval` —
-  // it refreshes on `run.changed` and `git.changed` (see the WS effect below).
+  // it refreshes on `run.changed` (see the WS effect below).
   const { data: branches } = useQuery({
     queryKey: branchesQueryKey,
     queryFn: () => {
@@ -1398,7 +1358,6 @@ export function useDispatchProject(
     enabled: afterList,
   });
 
-  const notePlanRecord = usePlanRecord(client, port, notePlanId);
   const enrichPlanRecord = usePlanRecord(
     client,
     port,
@@ -1774,8 +1733,6 @@ export function useDispatchProject(
           void queryClient.invalidateQueries({
             queryKey: agentSessionsQueryKey,
           });
-        } else if (event.type === 'note.changed') {
-          void queryClient.invalidateQueries({ queryKey: notesQueryKey });
         } else if (event.type === 'draft.changed') {
           void queryClient.invalidateQueries({ queryKey: draftsQueryKey });
           void queryClient.invalidateQueries({
@@ -1800,11 +1757,6 @@ export function useDispatchProject(
           });
         } else if (event.type === 'inbox.changed') {
           void queryClient.invalidateQueries({ queryKey: inboxQueryKey });
-        } else if (event.type === 'git.changed') {
-          // A git-level mutation can change dispatch's own worktree bookkeeping too.
-          void queryClient.invalidateQueries({ queryKey: branchesQueryKey });
-          // A pull can rewrite config.yml, which broadcasts no `config.changed`.
-          refetchConfig();
         } else if (event.type === 'merge-queue.changed') {
           void queryClient.invalidateQueries({
             queryKey: mergeQueueQueryKey,
@@ -2024,7 +1976,6 @@ export function useDispatchProject(
     runsQueryKey,
     presenceQueryKey,
     whoamiQueryKey,
-    notesQueryKey,
     draftsQueryKey,
     agentSessionsQueryKey,
     inboxQueryKey,
@@ -2222,75 +2173,6 @@ export function useDispatchProject(
       return record;
     },
     [client, queryClient, draftsQueryKey]
-  );
-
-  const handleCreateNote = useCallback(
-    async (
-      input: import('@dispatch/client').CreateNoteInput
-    ): Promise<void> => {
-      if (client === null) return;
-      await client.createNote(input);
-      void queryClient.invalidateQueries({ queryKey: notesQueryKey });
-    },
-    [client, queryClient, notesQueryKey]
-  );
-
-  const handleUpdateNote = useCallback(
-    async (
-      id: string,
-      patch: import('@dispatch/client').UpdateNotePatch
-    ): Promise<void> => {
-      if (client === null) return;
-      await client.updateNote(id, patch);
-      void queryClient.invalidateQueries({ queryKey: notesQueryKey });
-    },
-    [client, queryClient, notesQueryKey]
-  );
-
-  const handleDeleteNote = useCallback(
-    async (id: string): Promise<void> => {
-      if (client === null) return;
-      await client.deleteNote(id);
-      void queryClient.invalidateQueries({ queryKey: notesQueryKey });
-    },
-    [client, queryClient, notesQueryKey]
-  );
-
-  // Promoting a note into a task refetches the note (it gains its linked-task
-  // marker); the new task reaches the board through its `task.changed`.
-  const handlePromoteNote = useCallback(
-    async (id: string): Promise<void> => {
-      if (client === null) return;
-      await client.promoteNote(id);
-      void queryClient.invalidateQueries({ queryKey: notesQueryKey });
-    },
-    [client, queryClient, notesQueryKey]
-  );
-
-  // The AI half of promoting: asks the daemon to draft the task this note should become and
-  // parks the resulting plan in the notes slot, where `notePlanRecord` polls it to `ready`.
-  // Nothing is written until the draft is confirmed — see `handleConfirmNotePlan`.
-  const handleEnrichNote = useCallback(
-    async (id: string): Promise<void> => {
-      if (client === null) throw new Error('dispatchd client not ready');
-      const { planId: newPlanId } = await client.enrichNote(id);
-      setNotePlanId(newPlanId);
-    },
-    [client]
-  );
-
-  // Confirms the note draft: the same confirm endpoint the Plans view uses, so the proposal
-  // is re-validated server-side before any task exists. The note itself is refetched too —
-  // confirming links it to the task that was just created and ticks it done.
-  const handleConfirmNotePlan = useCallback(
-    async (proposal: PlanProposal): Promise<void> => {
-      if (client === null || notePlanId === null) return;
-      await client.confirmPlan(notePlanId, proposal);
-      setNotePlanId(null);
-      void queryClient.invalidateQueries({ queryKey: notesQueryKey });
-      void queryClient.invalidateQueries({ queryKey: tasksQueryKey });
-    },
-    [client, notePlanId, queryClient, notesQueryKey, tasksQueryKey]
   );
 
   const handleDispatch = useCallback(
@@ -3037,16 +2919,6 @@ export function useDispatchProject(
       diffLoading,
       diffError,
       branches: branches ?? [],
-      notes: notes ?? [],
-      handleCreateNote,
-      handleUpdateNote,
-      handleDeleteNote,
-      handlePromoteNote,
-      handleEnrichNote,
-      handleConfirmNotePlan,
-      notePlanId,
-      setNotePlanId,
-      notePlanRecord,
       pendingApprovals,
       pendingScopeRequests,
       handleDecideScopeRequest,
@@ -3170,16 +3042,6 @@ export function useDispatchProject(
       diffLoading,
       diffError,
       branches,
-      notes,
-      handleCreateNote,
-      handleUpdateNote,
-      handleDeleteNote,
-      handlePromoteNote,
-      handleEnrichNote,
-      handleConfirmNotePlan,
-      notePlanId,
-      setNotePlanId,
-      notePlanRecord,
       pendingApprovals,
       pendingScopeRequests,
       handleDecideScopeRequest,

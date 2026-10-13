@@ -56,6 +56,7 @@ import {
   MAX_CONCURRENCY_HARD_CAP,
   MODEL_ROLES,
   NOTIFICATION_KINDS,
+  RETIRED_MODEL_ROLES,
 } from './configTypes.js';
 import { describeValue } from './describe.js';
 import { labelDefinitionError, labelRef } from './labels.js';
@@ -1175,6 +1176,7 @@ function parseModelConfig(raw: unknown): ModelConfig {
   }
   const obj = raw as Record<string, unknown>;
   for (const key of Object.keys(obj)) {
+    if (RETIRED_MODEL_ROLES.includes(key)) continue;
     if (!MODEL_ROLES.includes(key as keyof ModelConfig)) {
       throw new ConfigError(
         `invalid .dispatch/config.yml: unknown models role "${key}" (expected ${MODEL_ROLES.join('|')})`

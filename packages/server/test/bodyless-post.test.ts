@@ -57,7 +57,6 @@ afterEach(async () => {
 // Each entry is the status the handler itself answers with — a 415 or a
 // "invalid JSON body" 400 would mean the request never reached it.
 const routes: Array<[string, string, number]> = [
-  ['POST', '/api/git/pull', 200],
   ['POST', '/api/merge-queue/recheck', 200],
   ['POST', '/api/runs/missing-run/cancel', 404],
   ['POST', '/api/runs/missing-run/resume', 404],

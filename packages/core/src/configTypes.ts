@@ -579,9 +579,7 @@ export interface ModelConfig {
   draft: string;
   /** Filling in description / acceptance criteria for a task or inbox item. */
   enrich: string;
-  /** Grouping inbox captures into suggested epics. */
-  cluster: string;
-  /** Short mechanical text: titles, summaries, commit messages. */
+  /** Short mechanical text: titles and summaries. */
   summarize: string;
   /** TypeSafe System One judgments — inbox triage, readiness, the landing
    *  checklist, run model tier. A Jev model id, not a Claude one. */
@@ -594,7 +592,6 @@ export const DEFAULT_MODELS: ModelConfig = {
   plan: 'claude-sonnet-5-5',
   draft: 'claude-haiku-4-5-20251001',
   enrich: 'claude-haiku-4-5-20251001',
-  cluster: 'claude-haiku-4-5-20251001',
   summarize: 'claude-haiku-4-5-20251001',
   judge: 'jev-latest',
 };
@@ -625,6 +622,9 @@ export const EFFORT_ROLES: readonly (keyof EffortConfig)[] = [
   'plan',
 ];
 
+/** Model roles that no longer exist; a config.yml still naming one loads, and the key is ignored. */
+export const RETIRED_MODEL_ROLES: readonly string[] = ['cluster'];
+
 /** Every valid key of `ModelConfig`, in the order the Settings UI renders them. */
 export const MODEL_ROLES: readonly (keyof ModelConfig)[] = [
   'execute',
@@ -632,7 +632,6 @@ export const MODEL_ROLES: readonly (keyof ModelConfig)[] = [
   'plan',
   'draft',
   'enrich',
-  'cluster',
   'summarize',
   'judge',
 ];

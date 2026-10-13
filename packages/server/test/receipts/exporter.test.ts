@@ -529,7 +529,6 @@ describe('isReceiptEvent', () => {
 
   it('ignores events that change nothing the log holds', () => {
     expect(isReceiptEvent({ type: 'run.changed' })).toBe(false);
-    expect(isReceiptEvent({ type: 'git.changed' })).toBe(false);
     expect(isReceiptEvent({ type: 'inbox.changed' })).toBe(false);
     expect(isReceiptEvent({ type: 'hello', version: '1' })).toBe(false);
   });

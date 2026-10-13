@@ -9,7 +9,7 @@ import {
 // A CORS-simple request: no preflight, so the browser never consults the
 // daemon's origin allowlist and the handler runs whatever the origin was.
 function simpleRequest(init: RequestInit = {}): Request {
-  return new Request('http://127.0.0.1:1234/api/git/stash', {
+  return new Request('http://127.0.0.1:1234/api/files/write', {
     method: 'POST',
     headers: { origin: 'https://evil.example' },
     ...init,

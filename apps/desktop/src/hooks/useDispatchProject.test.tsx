@@ -726,10 +726,9 @@ test('a loose task changing refetches only that task', async () => {
   configFixture = null;
 });
 
-// A pull through the Git page rewrites config.yml without a `config.changed`, and a
-// reconnect may follow a daemon restart that read a new one; the ready set is computed
-// from the cached config, so both refetch it.
-test('a git change or a reconnect refetches config', async () => {
+// A reconnect may follow a daemon restart that read a new config.yml; the ready set is
+// computed from the cached config, so it refetches.
+test('a reconnect refetches config', async () => {
   const statuses = ['draft', 'ready', 'working', 'review', 'landed', 'dropped'];
   configFixture = { statuses, notifications: { kinds: null } };
   taskListFixture = [
@@ -747,7 +746,7 @@ test('a git change or a reconnect refetches config', async () => {
     expect([...result.current.readyIds]).toEqual(['t-1']);
   });
   configFetches = 0;
-  // The pulled config.yml no longer counts `ready` as waiting to start.
+  // The restarted daemon's config.yml no longer counts `ready` as waiting to start.
   configFixture = {
     statusDefinitions: statuses.map((name) => ({
       name,
@@ -758,19 +757,12 @@ test('a git change or a reconnect refetches config', async () => {
   };
 
   act(() => {
-    sink?.onEvent({ type: 'git.changed' });
+    sink?.onEvent({ type: 'hello', version: '0.0.1' });
   });
   await waitFor(() => {
     expect(result.current.readyIds.size).toBe(0);
   });
   expect(configFetches).toBe(1);
-
-  act(() => {
-    sink?.onEvent({ type: 'hello', version: '0.0.1' });
-  });
-  await waitFor(() => {
-    expect(configFetches).toBe(2);
-  });
   taskListFixture = null;
   configFixture = null;
 });

@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import type { ServerHandle, StartServerOptions } from '../src/index.js';
 import { startServer } from '../src/index.js';
 import type { JudgmentClient } from '../src/judgments/client.js';
+import { InboxTriageSnapshotStore } from '../src/judgments/inboxTriage.js';
 import { runGitSync } from './orchestrator/helpers.js';
 import { useTestAuth } from './testAuth.js';
 
@@ -156,12 +157,9 @@ describe('capture-time judgments', () => {
     const [item] = await capture('the thing looks off');
     expect(item.kind).toBe('note'); // the regex guess, returned immediately
     await waitFor(async () => (await listInbox())[0]?.kind === 'bug');
-    const triage = (await (
-      await fetch(`${baseUrl}/api/inbox/triage`)
-    ).json()) as {
-      items: Record<string, { kind: string }>;
-    };
-    expect(triage.items[item.id].kind).toBe('bug');
+    // The persisted pass convert reads its readings from.
+    const triage = new InboxTriageSnapshotStore(root).load();
+    expect(triage?.items[item.id]?.kind).toBe('bug');
   });
 
   it('leaves capture exactly as before without a client', async () => {
@@ -171,9 +169,7 @@ describe('capture-time judgments', () => {
     expect(created[0].text).toBe('add dark mode\nnew: fix the board');
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect((await listInbox())[0].kind).toBe('task');
-    expect(
-      await (await fetch(`${baseUrl}/api/inbox/triage`)).json()
-    ).toBeNull();
+    expect(new InboxTriageSnapshotStore(root).load()).toBeNull();
   });
 
   it('convert prefills the judged epic and reports a likely duplicate task', async () => {
@@ -182,9 +178,8 @@ describe('capture-time judgments', () => {
     const existing = store.create({ title: 'landing rows lose their gate' });
     await boot({ judgments: scriptedClient() });
     const [item] = await capture('landing rows lose their gate chip');
-    await waitFor(
-      async () =>
-        (await (await fetch(`${baseUrl}/api/inbox/triage`)).json()) !== null
+    await waitFor(() =>
+      Promise.resolve(new InboxTriageSnapshotStore(root).load() !== null)
     );
 
     const res = await fetch(`${baseUrl}/api/inbox/convert`, {
