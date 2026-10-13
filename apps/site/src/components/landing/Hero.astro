@@ -25,10 +25,8 @@ import InstallCommand from './InstallCommand.astro';
     </div>
   </div>
 
-  <div class="stage">
-    <div class="tilt">
-      <AppDemo />
-    </div>
+  <div class="wrap stage">
+    <AppDemo />
   </div>
 </section>
 
@@ -109,49 +107,10 @@ import InstallCommand from './InstallCommand.astro';
     scroll-margin-top: 6rem;
   }
 
-  /* The app runs off the right edge of the page and fades into it, so it
-     reads as a window onto something larger than the screen. */
+  /* The app sits in the content column like every other drawn piece. */
   .stage {
     position: relative;
-    width: calc(100% - max(var(--gutter), (100% - var(--max)) / 2));
-    margin: clamp(3.5rem, 7vw, 5rem) 0 0 auto;
-    padding-bottom: clamp(3rem, 6vw, 5rem);
-    perspective: 2400px;
-    mask-image:
-      linear-gradient(to right, #000 82%, transparent),
-      linear-gradient(to bottom, #000 78%, transparent);
-    mask-composite: intersect;
-  }
-  .stage :global(.win) {
-    width: max(100%, 74rem);
-  }
-  .tilt {
-    position: relative;
-    transform-origin: 0% 0%;
-  }
-  /* The window starts tilted back and lies flat as the reader scrolls to it. */
-  @supports (animation-timeline: view()) {
-    .tilt {
-      animation: flatten linear both;
-      animation-range: entry 0% cover 40%;
-      animation-timeline: view();
-    }
-  }
-  @keyframes flatten {
-    from {
-      transform: rotateX(22deg) rotateY(-8deg) scale(0.92);
-    }
-    to {
-      transform: none;
-    }
-  }
-  @media (max-width: 720px) {
-    .stage {
-      width: calc(100% - var(--gutter));
-      mask-image: linear-gradient(to bottom, #000 85%, transparent);
-    }
-    .stage :global(.win) {
-      width: 100%;
-    }
+    margin-top: clamp(3.5rem, 7vw, 5rem);
+    padding-bottom: clamp(4rem, 8vw, 6rem);
   }
 </style>
