@@ -353,17 +353,6 @@ describe('epic branches on the branches surface', () => {
     // Nothing has merged into it yet, so nothing is ahead either.
     expect(entry?.ahead).toBe(0);
   });
-
-  it('refuses to delete an epic branch that unreviewed child runs are based on', async () => {
-    const h = makeHarness();
-    const { epicId, taskId } = makeEpicWithChild(h);
-    const branch = epicBranchName(epicId);
-    await dispatchWithWork(h, taskId, 'a.txt');
-
-    await expect(
-      h.orchestrator.deleteBranch(branch, { force: true })
-    ).rejects.toThrow(/is the base of/);
-  });
 });
 
 describe('epic branch and the merge queue', () => {

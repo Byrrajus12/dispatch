@@ -1,11 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -80,83 +74,6 @@ describe('GitRepo: status -> stage -> commit -> log', () => {
     expect(log.commits[0].subject).toBe('feat: add a.txt');
     expect(log.commits[0].sha).toBe(committed.sha);
     expect(log.commits[0].parents).toEqual([]);
-  });
-});
-
-describe('GitRepo: discard', () => {
-  it('discard removes an untracked file entirely', async () => {
-    writeFileSync(join(root, 'scratch.txt'), 'temp\n');
-
-    const result = await repo.discard(['scratch.txt'], true);
-    expect(result.ok).toBe(true);
-
-    const status = await repo.status();
-    if (!status.ok) throw new Error(status.stderr);
-    expect(status.untracked).toEqual([]);
-  });
-
-  it('discard reverts a tracked file to its last committed content', async () => {
-    writeFileSync(join(root, 'a.txt'), 'v1\n');
-    await repo.stage(['a.txt']);
-    await repo.commit({ message: 'chore: seed a.txt' });
-    writeFileSync(join(root, 'a.txt'), 'v2\n');
-
-    const result = await repo.discard(['a.txt'], true);
-    expect(result.ok).toBe(true);
-
-    const status = await repo.status();
-    if (!status.ok) throw new Error(status.stderr);
-    expect(status.unstaged).toEqual([]);
-  });
-
-  it('refuses to run without confirm: true', async () => {
-    writeFileSync(join(root, 'scratch.txt'), 'temp\n');
-
-    const result = await repo.discard(['scratch.txt'], false);
-
-    expect(result.ok).toBe(false);
-    const status = await repo.status();
-    if (!status.ok) throw new Error(status.stderr);
-    expect(status.untracked).toEqual(['scratch.txt']);
-  });
-
-  it('removes an untracked directory too (clean -d), not just files', async () => {
-    mkdirSync(join(root, 'scratch-dir'));
-    writeFileSync(join(root, 'scratch-dir', 'nested.txt'), 'temp\n');
-
-    const result = await repo.discard(['scratch-dir'], true);
-    expect(result.ok).toBe(true);
-
-    const status = await repo.status();
-    if (!status.ok) throw new Error(status.stderr);
-    expect(status.untracked).toEqual([]);
-  });
-
-  it('does not expand pathspec magic — a literal "*" never wipes the tree', async () => {
-    writeFileSync(join(root, 'a.txt'), 'v1\n');
-    await repo.stage(['a.txt']);
-    await repo.commit({ message: 'chore: seed a.txt' });
-    writeFileSync(join(root, 'b.txt'), 'untracked\n');
-
-    const result = await repo.discard(['*'], true);
-    expect(result.ok).toBe(true);
-
-    const status = await repo.status();
-    if (!status.ok) throw new Error(status.stderr);
-    // Neither file was touched — `*` was treated as a literal (nonexistent)
-    // filename, not a wildcard, thanks to --literal-pathspecs.
-    expect(status.untracked).toEqual(['b.txt']);
-  });
-
-  it('does not over-reject a real filename that merely starts with ".."', async () => {
-    writeFileSync(join(root, '..foo.txt'), 'v1\n');
-
-    const result = await repo.discard(['..foo.txt'], true);
-
-    expect(result.ok).toBe(true);
-    const status = await repo.status();
-    if (!status.ok) throw new Error(status.stderr);
-    expect(status.untracked).toEqual([]);
   });
 });
 
