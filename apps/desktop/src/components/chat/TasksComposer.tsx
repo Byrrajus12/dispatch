@@ -3,6 +3,7 @@ import { useState } from 'react';
 
 import type { OverseerSession } from '../../hooks/useOverseerSession';
 import { overseerTurnLive } from '../../lib/agentPresence';
+import { useAttachmentPreviews } from './OverseerChat';
 import { IconButton } from '@/ui/ai/icon-button';
 import { Pill } from '@/ui/ai/pill';
 import { PromptBar } from '@/ui/ai/prompt-bar';
@@ -41,10 +42,17 @@ export function TasksComposer({
           .filter((m) => m.role === 'assistant')
           .at(-1);
   const working = sentAt !== null && overseerTurnLive(overseer);
+  const previews = useAttachmentPreviews(
+    overseer.attachments,
+    overseer.fetchAttachment
+  );
+  const pending = overseer.attachments.length > 0;
 
   const submit = () => {
     const text = draft.trim();
-    if (text === '' || overseer.sending) return;
+    if ((text === '' && !pending) || overseer.sending || overseer.attaching) {
+      return;
+    }
     const prompt =
       pill === null ? text : `About ${pill.taskId} ("${pill.title}"): ${text}`;
     setSentAt(messages.length);
@@ -78,7 +86,7 @@ export function TasksComposer({
           </IconButton>
         </div>
       )}
-      {!expanded && draft === '' ? (
+      {!expanded && draft === '' && !pending ? (
         <InputGroup
           data-testid="tasks-composer-collapsed"
           data-disabled={disabled || undefined}
@@ -107,6 +115,7 @@ export function TasksComposer({
           onBlur={(event) => {
             if (
               draft === '' &&
+              !pending &&
               !event.currentTarget.contains(event.relatedTarget as Node | null)
             ) {
               setExpanded(false);
@@ -127,6 +136,14 @@ export function TasksComposer({
                 : [{ id: 'about', label: `about ${pill.taskId}` }]
             }
             onRemoveReference={() => setDismissed(about?.taskId ?? null)}
+            onAttachFiles={(files) => void overseer.attachFiles(files)}
+            attachments={overseer.attachments.map((a) => ({
+              id: a.path,
+              name: a.name,
+              previewUrl: previews[a.path],
+            }))}
+            onRemoveAttachment={overseer.removeAttachment}
+            attaching={overseer.attaching}
           />
         </div>
       )}

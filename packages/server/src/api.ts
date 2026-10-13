@@ -58,9 +58,12 @@ import {
 import { aiFilterTasks } from './api/aiFilter.js';
 import { amendTask } from './api/amendments.js';
 import {
+  downloadOverseerAttachment,
   downloadTaskAttachment,
   listTaskAttachments,
+  readOverseerAttachments,
   removeTaskAttachment,
+  uploadOverseerAttachments,
   uploadTaskAttachments,
 } from './api/attachments.js';
 import {
@@ -3788,8 +3791,15 @@ async function startOverseer(
     backend?: unknown;
     model?: unknown;
     effort?: unknown;
+    attachments?: unknown;
   };
-  if (typeof body.prompt !== 'string' || body.prompt.trim() === '') {
+  const attached = readOverseerAttachments(body.attachments, ctx.rootDir);
+  if (!attached.ok) return attached.response;
+  // A pasted screenshot alone is a complete message.
+  if (
+    typeof body.prompt !== 'string' ||
+    (body.prompt.trim() === '' && attached.attachments.length === 0)
+  ) {
     return errorResponse(400, 'invalid prompt: prompt is required');
   }
   const model = readOptionalModel(body.model);
@@ -3814,7 +3824,8 @@ async function startOverseer(
     backendName,
     model.model,
     effort.effort,
-    speaker
+    speaker,
+    attached.attachments
   );
   return jsonResponse(record, 202);
 }
@@ -3832,14 +3843,20 @@ async function sendOverseerMessage(
 ): Promise<Response> {
   const parsed = await readJsonBody(req);
   if (!parsed.ok) return parsed.response;
-  const body = parsed.value as { text?: unknown };
-  if (typeof body.text !== 'string' || body.text.trim() === '') {
+  const body = parsed.value as { text?: unknown; attachments?: unknown };
+  const attached = readOverseerAttachments(body.attachments, ctx.rootDir);
+  if (!attached.ok) return attached.response;
+  if (
+    typeof body.text !== 'string' ||
+    (body.text.trim() === '' && attached.attachments.length === 0)
+  ) {
     return errorResponse(400, 'invalid text: text is required');
   }
   const record = ctx.overseerManager.sendMessage(
     conversationId,
     body.text,
-    speaker
+    speaker,
+    attached.attachments
   );
   return jsonResponse(record, 202);
 }
@@ -7038,6 +7055,20 @@ export async function handleApi(
       const speaker = overseerSpeaker(daemonCtx, presented);
       if (segments.length === 1 && method === 'POST') {
         return await startOverseer(req, ctx, speaker);
+      }
+      // Files pasted or picked in the composer, uploaded ahead of the message.
+      if (segments[1] === 'attachments') {
+        if (segments.length === 2 && method === 'POST') {
+          return await uploadOverseerAttachments(req, ctx.rootDir);
+        }
+        if (segments.length === 4 && method === 'GET') {
+          return downloadOverseerAttachment(
+            ctx.rootDir,
+            segments[2],
+            segments[3]
+          );
+        }
+        return errorResponse(405, 'method not allowed');
       }
       // One conversation per person per project: the newest one they opened.
       if (

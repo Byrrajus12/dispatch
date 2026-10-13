@@ -7,6 +7,7 @@ import type { EffortLevel } from '@dispatch-foo/core';
 import type { Message, Sender } from '@dispatch-foo/protocol';
 import { SYSTEM_ADDRESS } from '@dispatch-foo/protocol';
 import { createHash, randomBytes } from 'node:crypto';
+import { join } from 'node:path';
 
 import type { EventBus } from '../events.js';
 import { floorCheckForToolInput } from '../floor.js';
@@ -20,6 +21,7 @@ import type {
   OverseerToolResult,
   OverseerToolset,
   OverseerTurn,
+  OverseerTurnAttachment,
   OverseerTurnOptions,
 } from './overseerBackend.js';
 import { grantKey, GrantStore, type GrantView } from './overseerGrants.js';
@@ -104,7 +106,25 @@ export interface OverseerMessage {
   costUsd?: number;
   /** `notice` entries: a line across the stream, not a speaker's words. */
   notice?: 'stopped' | 'rollover' | 'restarted';
+  /** `user` entries: the files the human attached to the line. */
+  attachments?: OverseerAttachment[];
 }
+
+/**
+ * A file a human attached to a line of the conversation (a pasted screenshot,
+ * a log). The bytes live on this machine under OVERSEER_ATTACHMENTS_DIR, which
+ * the project's `.dispatch/.gitignore` keeps out of commits.
+ */
+export interface OverseerAttachment {
+  name: string;
+  /** Project-relative posix path of the blob. */
+  path: string;
+  size: number;
+  mimeType: string;
+}
+
+/** Where overseer attachments live, relative to the project root. */
+export const OVERSEER_ATTACHMENTS_DIR = '.dispatch/attachments/overseer';
 
 /**
  * A built-in tool call parked on the human: the session wants to run Bash,
@@ -193,6 +213,7 @@ export interface OverseerQueuedMessage {
   id: string;
   text: string;
   at: string;
+  attachments?: OverseerAttachment[];
 }
 
 export interface OverseerManagerContext {
@@ -480,7 +501,8 @@ export class OverseerManager {
     backendName?: string,
     model?: string,
     effort?: EffortLevel,
-    speaker: Sender | null = null
+    speaker: Sender | null = null,
+    attachments: OverseerAttachment[] = []
   ): OverseerRecord {
     const name = backendName ?? this.defaultBackendName();
     const backend = this.requireBackend(name);
@@ -494,7 +516,14 @@ export class OverseerManager {
       ...(model !== undefined ? { model } : {}),
       ...(effort !== undefined ? { effort } : {}),
       state: 'running',
-      messages: [{ role: 'user', text: prompt, at: now }],
+      messages: [
+        {
+          role: 'user',
+          text: prompt,
+          at: now,
+          ...(attachments.length > 0 ? { attachments } : {}),
+        },
+      ],
       pendingActions: [],
       pendingApprovals: [],
       undeliveredDecisions: [],
@@ -506,10 +535,16 @@ export class OverseerManager {
     this.postEntry(record.id, 0, speaker);
     const options = this.turnOptionsFor(record.id);
     const toolset = this.toolsetFor(record.id);
+    const outgoing = withAttachmentNote(prompt, attachments, this.ctx.rootDir);
+    const files = turnAttachments(attachments, this.ctx.rootDir);
     void this.runTurn(
       record.id,
       (abortController) =>
-        backend.start(prompt, toolset, { ...options, abortController }),
+        backend.start(outgoing, toolset, {
+          ...options,
+          abortController,
+          ...(files.length > 0 ? { attachments: files } : {}),
+        }),
       [],
       { speaker, line: 0 }
     );
@@ -525,36 +560,28 @@ export class OverseerManager {
   sendMessage(
     conversationId: string,
     message: string,
-    speaker: Sender | null = null
+    speaker: Sender | null = null,
+    attachments: OverseerAttachment[] = []
   ): OverseerRecord {
     const record = this.get(conversationId);
     this.refuseIfRevoked();
+    const entry: OverseerQueuedMessage = {
+      id: generateQueuedId(),
+      text: message,
+      at: new Date().toISOString(),
+      ...(attachments.length > 0 ? { attachments } : {}),
+    };
     if (record.state === 'running') {
       this.queuedBy.set(conversationId, speaker);
       this.updateRecord(conversationId, {
-        queued: [
-          ...(record.queued ?? []),
-          {
-            id: generateQueuedId(),
-            text: message,
-            at: new Date().toISOString(),
-          },
-        ],
+        queued: [...(record.queued ?? []), entry],
       });
       return this.get(conversationId);
     }
-    const pending = [
-      ...(record.queued ?? []),
-      { id: generateQueuedId(), text: message, at: new Date().toISOString() },
-    ];
+    const pending = [...(record.queued ?? []), entry];
     const [batch, rest] = nextBatch(pending);
     if (rest.length > 0) this.queuedBy.set(conversationId, speaker);
-    return this.beginTurn(
-      record,
-      batch.map((q) => q.text),
-      speaker,
-      rest
-    );
+    return this.beginTurn(record, batch, speaker, rest);
   }
 
   /**
@@ -613,7 +640,7 @@ export class OverseerManager {
   // recap, behind a divider, and the old session's grants end with it.
   private beginTurn(
     record: OverseerRecord,
-    texts: string[],
+    lines: OverseerQueuedMessage[],
     speaker: Sender | null,
     // What still waits behind this turn: messages after a slash command.
     stillQueued: OverseerQueuedMessage[] = []
@@ -621,6 +648,7 @@ export class OverseerManager {
     const backend = this.requireBackend(record.backendName);
     const conversationId = record.id;
     const now = new Date().toISOString();
+    const texts = lines.map((l) => l.text);
     // A slash command goes to the session verbatim: no decisions prefix, and
     // never a rollover, since commands like /compact act on that session.
     const slash = texts.length === 1 && isSlashCommand(texts[0]);
@@ -648,7 +676,14 @@ export class OverseerManager {
       messages: [
         ...record.messages,
         ...divider,
-        ...texts.map((text) => ({ role: 'user' as const, text, at: now })),
+        ...lines.map((l) => ({
+          role: 'user' as const,
+          text: l.text,
+          at: now,
+          ...(l.attachments !== undefined && l.attachments.length > 0
+            ? { attachments: l.attachments }
+            : {}),
+        })),
       ],
       queued: stillQueued,
       // Handed to the backend below, so they must not be delivered twice.
@@ -665,21 +700,37 @@ export class OverseerManager {
     const line = first + texts.length - 1;
 
     // The transcript keeps what the human actually typed; the model gets that
-    // plus the decisions it hasn't been told about yet.
+    // plus the decisions it hasn't been told about yet, and where each line's
+    // attachments sit on disk. A slash command goes verbatim, attachments and all.
     const drained = slash ? [] : record.undeliveredDecisions;
+    const rootDir = this.ctx.rootDir;
     const said = slash
       ? texts[0].trim()
-      : withDecisions(texts.join('\n\n'), drained);
+      : withDecisions(
+          lines
+            .map((l) =>
+              withAttachmentNote(l.text, l.attachments ?? [], rootDir)
+            )
+            .join('\n\n'),
+          drained
+        );
     const outgoing = rollover ? `${recapOf(record.messages)}\n${said}` : said;
     const sessionId = rollover ? undefined : record.sessionId;
     const options = this.turnOptionsFor(conversationId);
     const toolset = this.toolsetFor(conversationId);
+    const files = slash
+      ? []
+      : turnAttachments(
+          lines.flatMap((l) => l.attachments ?? []),
+          rootDir
+        );
     void this.runTurn(
       conversationId,
       (abortController) =>
         backend.sendMessage(sessionId, outgoing, toolset, {
           ...options,
           abortController,
+          ...(files.length > 0 ? { attachments: files } : {}),
         }),
       drained,
       { speaker, line }
@@ -811,12 +862,7 @@ export class OverseerManager {
     const [batch, rest] = nextBatch(queued);
     if (rest.length === 0) this.queuedBy.delete(conversationId);
     try {
-      this.beginTurn(
-        record,
-        batch.map((q) => q.text),
-        speaker,
-        rest
-      );
+      this.beginTurn(record, batch, speaker, rest);
     } catch (err) {
       console.error(`overseer: could not send ${conversationId}'s queue`, err);
     }
@@ -1480,6 +1526,38 @@ function rejectOnAbort(signal: AbortSignal): Promise<never> {
       once: true,
     });
   });
+}
+
+// Appends where a line's attachments sit on disk. Every backend gets this, so
+// one that cannot take an image inline (or a file that is not an image) can
+// still open the file with its own read tool; a backend that does show images
+// inline sends them alongside (see OverseerTurnOptions.attachments).
+function withAttachmentNote(
+  text: string,
+  attachments: OverseerAttachment[],
+  rootDir: string
+): string {
+  if (attachments.length === 0) return text;
+  return [
+    text,
+    '',
+    'Attached files (saved on this machine; read them when they matter):',
+    ...attachments.map(
+      (a) => `- ${a.name} (${a.mimeType}): ${join(rootDir, a.path)}`
+    ),
+  ].join('\n');
+}
+
+// The attachments a backend may show its model directly, by absolute path.
+function turnAttachments(
+  attachments: OverseerAttachment[],
+  rootDir: string
+): OverseerTurnAttachment[] {
+  return attachments.map((a) => ({
+    name: a.name,
+    absolutePath: join(rootDir, a.path),
+    mimeType: a.mimeType,
+  }));
 }
 
 // Prefixes a follow-up with whatever the human decided since the last turn.

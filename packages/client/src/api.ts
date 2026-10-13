@@ -1725,6 +1725,19 @@ export interface OverseerMessage {
   costUsd?: number;
   /** `notice` entries: a line across the stream, not a speaker's words. */
   notice?: 'stopped' | 'rollover' | 'restarted';
+  /** `user` entries: the files the human attached to the line. */
+  attachments?: OverseerAttachment[];
+}
+
+// Mirrors OverseerAttachment in packages/server/src/orchestrator/overseer.ts —
+// a file pasted or picked in the composer, uploaded with
+// uploadOverseerAttachments before the message that carries it is sent.
+export interface OverseerAttachment {
+  name: string;
+  /** Project-relative path of the blob on the daemon's machine. */
+  path: string;
+  size: number;
+  mimeType: string;
 }
 
 /** One slash command an Overseer session accepts: `/name`, with what it does. */
@@ -1824,7 +1837,12 @@ export interface OverseerRecord {
   spendUsd?: number;
   /** Messages typed while a turn ran; they go out together when it ends.
    *  `id` names one entry for editQueuedOverseerMessage / removeQueuedOverseerMessage. */
-  queued?: { id: string; text: string; at: string }[];
+  queued?: {
+    id: string;
+    text: string;
+    at: string;
+    attachments?: OverseerAttachment[];
+  }[];
   /** The slash commands the session offered on its last turn. */
   commands?: OverseerCommand[];
   /** The bus thread this conversation's lines are posted to, once one is. */
@@ -3741,7 +3759,12 @@ export interface ApiClient {
   // `overseer` role's model; the conversation keeps it for every follow-up.
   startOverseer(
     prompt: string,
-    opts?: { backend?: string; model?: string; effort?: EffortLevel }
+    opts?: {
+      backend?: string;
+      model?: string;
+      effort?: EffortLevel;
+      attachments?: OverseerAttachment[];
+    }
   ): Promise<OverseerRecord>;
   getOverseer(id: string): Promise<OverseerRecord>;
   /** The model and effort the conversation's next turns run on; null restores the project default. */
@@ -3754,8 +3777,13 @@ export interface ApiClient {
   // Mid-turn it queues for the turn's end. 404s an unknown conversation.
   sendOverseerMessage(
     conversationId: string,
-    text: string
+    text: string,
+    attachments?: OverseerAttachment[]
   ): Promise<OverseerRecord>;
+  /** Uploads files for the next overseer message to carry. */
+  uploadOverseerAttachments(files: File[]): Promise<OverseerAttachment[]>;
+  /** An overseer attachment's bytes, for a thumbnail or a download. */
+  fetchOverseerAttachment(attachment: OverseerAttachment): Promise<Blob>;
   /** Stops the running turn; anything queued waits for the next send. */
   stopOverseer(conversationId: string): Promise<OverseerRecord>;
   /** Jev's read on whether `text` starts a new subject; fail-open reads "no". */
@@ -4688,6 +4716,9 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
           ...(opts.backend !== undefined ? { backend: opts.backend } : {}),
           ...(opts.model !== undefined ? { model: opts.model } : {}),
           ...(opts.effort !== undefined ? { effort: opts.effort } : {}),
+          ...(opts.attachments !== undefined && opts.attachments.length > 0
+            ? { attachments: opts.attachments }
+            : {}),
         }),
       }),
     getOverseer: (id) => request(target, `/api/overseer/${id}`),
@@ -4696,11 +4727,32 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
         method: 'PATCH',
         ...jsonBody(options),
       }),
-    sendOverseerMessage: (conversationId, text) =>
+    sendOverseerMessage: (conversationId, text, attachments = []) =>
       request(target, `/api/overseer/${conversationId}/message`, {
         method: 'POST',
-        ...jsonBody({ text }),
+        ...jsonBody({
+          text,
+          ...(attachments.length > 0 ? { attachments } : {}),
+        }),
       }),
+    uploadOverseerAttachments: async (files) => {
+      const form = new FormData();
+      for (const file of files) form.append('files', file, file.name);
+      const body = await request<{ attachments: OverseerAttachment[] }>(
+        target,
+        '/api/overseer/attachments',
+        { method: 'POST', body: form }
+      );
+      return body.attachments;
+    },
+    fetchOverseerAttachment: (attachment) => {
+      // `.dispatch/attachments/overseer/<uploadId>/<name>`: the last two segments.
+      const [uploadId, name] = attachment.path.split('/').slice(-2);
+      return requestBlob(
+        target,
+        `/api/overseer/attachments/${encodeURIComponent(uploadId)}/${encodeURIComponent(name)}`
+      );
+    },
     stopOverseer: (conversationId) =>
       request(target, `/api/overseer/${conversationId}/stop`, {
         method: 'POST',

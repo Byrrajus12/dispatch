@@ -9,8 +9,10 @@ import type {
   PermissionMode,
   Query,
   SdkMcpToolDefinition,
+  SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import { agentEnv } from '@dispatch-foo/core';
+import { readFileSync, statSync } from 'node:fs';
 import type { z } from 'zod';
 
 import { openClaudeQuery, rewriteMissingCliError } from '../claudeCli.js';
@@ -23,6 +25,7 @@ import type {
   OverseerToolDescriptor,
   OverseerToolset,
   OverseerTurn,
+  OverseerTurnAttachment,
   OverseerTurnOptions,
 } from '../overseerBackend.js';
 import { toolDescriptionForModel } from '../overseerBackend.js';
@@ -265,7 +268,25 @@ export class ClaudeOverseer implements OverseerBackend {
     // PATH `claude` -> install hint) the executor and planner use.
     // Auto memory stays off: request-tier callers read overseer transcripts,
     // so the owner's native Claude notes never load here.
-    const sdkQuery: Query = openClaudeQuery(this.queryFn, prompt, options);
+    // Attached images go to the model inline, the way a pasted screenshot does
+    // in Claude Code; the input stays open until the turn settles (see
+    // promptWithImages), so `turnSettled` must resolve however the turn ends.
+    let settleTurn = (): void => {};
+    const turnSettled = new Promise<void>((resolve) => {
+      settleTurn = resolve;
+    });
+    const images = inlineImages(opts.attachments ?? []);
+    const input =
+      images.length === 0
+        ? prompt
+        : promptWithImages(prompt, images, turnSettled);
+    let sdkQuery: Query;
+    try {
+      sdkQuery = openClaudeQuery(this.queryFn, input, options);
+    } catch (err) {
+      settleTurn();
+      throw err;
+    }
 
     // Asked once per turn, alongside it; any failure only means no suggestions.
     const commands = Promise.resolve()
@@ -308,8 +329,78 @@ export class ClaudeOverseer implements OverseerBackend {
       // than synchronously from openClaudeQuery — apply the same install-hint
       // rewrite here too. Any other error passes through unchanged.
       throw new Error(rewriteMissingCliError((err as Error).message));
+    } finally {
+      settleTurn();
     }
   }
+}
+
+// The image types the Messages API accepts inline, and its per-image size cap.
+// Anything else (a PDF, a log, an oversized shot) stays a path in the prompt
+// for the session's Read tool.
+const INLINE_IMAGE_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]);
+const INLINE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+
+type InlineImageType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+
+interface InlineImage {
+  mediaType: InlineImageType;
+  base64: string;
+}
+
+// Reads the turn's attached images that can go to the model inline. A file
+// that has gone missing or is too large is skipped; its path is still in the
+// prompt text.
+function inlineImages(attachments: OverseerTurnAttachment[]): InlineImage[] {
+  const images: InlineImage[] = [];
+  for (const a of attachments) {
+    if (!INLINE_IMAGE_TYPES.has(a.mimeType)) continue;
+    try {
+      if (statSync(a.absolutePath).size > INLINE_IMAGE_MAX_BYTES) continue;
+      images.push({
+        mediaType: a.mimeType as InlineImageType,
+        base64: readFileSync(a.absolutePath).toString('base64'),
+      });
+    } catch {
+      // Gone since it was attached; the prompt still names it.
+    }
+  }
+  return images;
+}
+
+// The turn's prompt as one streamed user message carrying the images ahead of
+// the text. Streaming input is the only way to send content blocks, and the
+// stream must not end before the turn does: the session answers permission
+// checks and hooks over the same channel, so it waits for `settled`.
+async function* promptWithImages(
+  text: string,
+  images: InlineImage[],
+  settled: Promise<void>
+): AsyncGenerator<SDKUserMessage> {
+  yield {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [
+        ...images.map((img) => ({
+          type: 'image' as const,
+          source: {
+            type: 'base64' as const,
+            media_type: img.mediaType,
+            data: img.base64,
+          },
+        })),
+        { type: 'text' as const, text },
+      ],
+    },
+    parent_tool_use_id: null,
+  };
+  await settled;
 }
 
 // The session's slash commands, trimmed to what the composer shows.

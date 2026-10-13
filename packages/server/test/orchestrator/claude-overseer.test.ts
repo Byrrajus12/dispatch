@@ -1,5 +1,12 @@
-import type { Options, Query } from '@anthropic-ai/claude-agent-sdk';
+import type {
+  Options,
+  Query,
+  SDKUserMessage,
+} from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { z } from 'zod';
 
 import { CLAUDE_INSTALL_HINT } from '../../src/orchestrator/claudeCli.js';
@@ -555,5 +562,73 @@ describe('shared overseer pieces', () => {
       preset: 'claude_code',
       append: overseerInstructions('Claude Code'),
     });
+  });
+});
+
+describe('ClaudeOverseer attachments', () => {
+  // Runs a turn with `attachments` and returns the prompt query() was given.
+  async function promptFor(
+    attachments: OverseerTurnOptions['attachments']
+  ): Promise<unknown> {
+    let prompt: unknown;
+    const queryFn = (args: { prompt: unknown }) => {
+      prompt = args.prompt;
+      return successStream()() as unknown as Query;
+    };
+    const overseer = new ClaudeOverseer(
+      '/tmp/does-not-matter',
+      queryFn as unknown as typeof import('@anthropic-ai/claude-agent-sdk').query
+    );
+    await overseer.start('what is this?', stubToolset().toolset, {
+      attachments,
+    });
+    return prompt;
+  }
+
+  it('sends an attached image inline, ahead of the text', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'overseer-attach-'));
+    const shot = join(dir, 'shot.png');
+    writeFileSync(shot, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    try {
+      const prompt = await promptFor([
+        { name: 'shot.png', absolutePath: shot, mimeType: 'image/png' },
+      ]);
+      // Streamed, and the stream ends once the turn has settled.
+      const messages: SDKUserMessage[] = [];
+      for await (const m of prompt as AsyncIterable<SDKUserMessage>) {
+        messages.push(m);
+      }
+      expect(messages).toHaveLength(1);
+      expect(messages[0].message.content).toEqual([
+        {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: 'image/png',
+            data: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64'),
+          },
+        },
+        { type: 'text', text: 'what is this?' },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a plain prompt when nothing attached can go inline', async () => {
+    expect(
+      await promptFor([
+        {
+          name: 'log.txt',
+          absolutePath: '/nowhere/log.txt',
+          mimeType: 'text/plain',
+        },
+        {
+          name: 'gone.png',
+          absolutePath: '/nowhere/gone.png',
+          mimeType: 'image/png',
+        },
+      ])
+    ).toBe('what is this?');
   });
 });

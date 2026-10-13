@@ -6,10 +6,15 @@ import {
   sanitizeAttachmentName,
 } from '@dispatch-foo/core';
 import type { TaskAttachment, TaskDoc } from '@dispatch-foo/core';
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 
 import type { ApiContext } from '../api.js';
+import {
+  OVERSEER_ATTACHMENTS_DIR,
+  type OverseerAttachment,
+} from '../orchestrator/overseer.js';
 import { errorResponse, jsonResponse } from './http.js';
 
 // The four attachment routes under /api/tasks/:id/attachments. The bytes live
@@ -227,4 +232,144 @@ export function removeTaskAttachment(
       existing.filter((a) => a.name !== target.name)
     )
   );
+}
+
+// Overseer (chat) attachments: a file a human pastes or picks in the composer
+// is uploaded first, then named by the message that carries it. Each upload
+// gets its own directory under OVERSEER_ATTACHMENTS_DIR, so two `image.png`
+// pastes never collide and a path in a message pins exactly one blob.
+
+// One upload directory's name: random, and the only shape a path may carry.
+const OVERSEER_UPLOAD_ID = /^[0-9a-f]{12}$/;
+
+// The type a browser reported, else Bun's guess from the extension, without
+// parameters (`text/plain;charset=utf-8` is `text/plain`).
+function mimeTypeOf(file: File, name: string): string {
+  const type = file.type !== '' ? file.type : Bun.file(name).type;
+  const bare = type.split(';')[0].trim();
+  return bare === '' ? 'application/octet-stream' : bare;
+}
+
+// POST /api/overseer/attachments — multipart upload under `files`. Answers
+// `{ attachments }`, the entries the next message's body may carry.
+export async function uploadOverseerAttachments(
+  req: Request,
+  rootDir: string
+): Promise<Response> {
+  const declared = Number(req.headers.get('content-length') ?? '0');
+  if (Number.isFinite(declared) && declared > UPLOAD_REQUEST_MAX_BYTES) {
+    return errorResponse(413, 'upload exceeds the 100 MB request limit');
+  }
+  let entries: unknown[];
+  try {
+    entries = (await req.formData()).getAll('files');
+  } catch {
+    return errorResponse(400, 'expected a multipart form with files');
+  }
+  const files = entries.filter((entry): entry is File => entry instanceof File);
+  if (files.length === 0) return errorResponse(400, 'no files were uploaded');
+  for (const file of files) {
+    if (file.size > ATTACHMENT_MAX_BYTES) {
+      return errorResponse(413, `${file.name} exceeds the 25 MB limit`);
+    }
+    if (sanitizeAttachmentName(file.name) === null) {
+      return errorResponse(400, `invalid attachment name: ${file.name}`);
+    }
+  }
+  ensureProjectGitignore(rootDir, 'files');
+  const attachments: OverseerAttachment[] = [];
+  for (const file of files) {
+    const name = sanitizeAttachmentName(file.name) as string;
+    const uploadId = randomBytes(6).toString('hex');
+    const path = `${OVERSEER_ATTACHMENTS_DIR}/${uploadId}/${name}`;
+    const absolute = resolve(rootDir, path);
+    mkdirSync(resolve(absolute, '..'), { recursive: true });
+    await Bun.write(absolute, file);
+    attachments.push({
+      name,
+      path,
+      size: file.size,
+      mimeType: mimeTypeOf(file, name),
+    });
+  }
+  return jsonResponse({ attachments });
+}
+
+// The blob behind an overseer attachment path, or null when the path is not
+// one this daemon's upload route could have written.
+function overseerAttachmentFile(rootDir: string, path: string): string | null {
+  const prefix = `${OVERSEER_ATTACHMENTS_DIR}/`;
+  if (!path.startsWith(prefix)) return null;
+  const [uploadId, rawName, ...rest] = path.slice(prefix.length).split('/');
+  if (rest.length > 0 || uploadId === undefined || rawName === undefined) {
+    return null;
+  }
+  if (!OVERSEER_UPLOAD_ID.test(uploadId)) return null;
+  const name = sanitizeAttachmentName(rawName);
+  if (name === null || name !== rawName) return null;
+  const dir = resolve(rootDir, OVERSEER_ATTACHMENTS_DIR, uploadId);
+  const file = resolve(dir, name);
+  return file.startsWith(dir + sep) ? file : null;
+}
+
+// GET /api/overseer/attachments/:uploadId/:name — the bytes, for the chat's
+// thumbnails and downloads.
+export function downloadOverseerAttachment(
+  rootDir: string,
+  uploadId: string,
+  rawName: string
+): Response {
+  const name = decodeSegment(rawName);
+  const file = overseerAttachmentFile(
+    rootDir,
+    `${OVERSEER_ATTACHMENTS_DIR}/${uploadId}/${name}`
+  );
+  if (file === null) return errorResponse(400, 'invalid attachment path');
+  if (!existsSync(file)) {
+    return errorResponse(404, `attachment not found: ${name}`);
+  }
+  return new Response(Bun.file(file), {
+    headers: { 'content-disposition': contentDisposition(name) },
+  });
+}
+
+// A message body's `attachments`: absent means none; otherwise every entry
+// must name a blob the upload route wrote and that is still on disk. Size and
+// type are taken from the request but the path is what the daemon trusts.
+export function readOverseerAttachments(
+  value: unknown,
+  rootDir: string
+):
+  | { ok: true; attachments: OverseerAttachment[] }
+  | { ok: false; response: Response } {
+  if (value === undefined) return { ok: true, attachments: [] };
+  const invalid = (why: string) => ({
+    ok: false as const,
+    response: errorResponse(400, `invalid attachments: ${why}`),
+  });
+  if (!Array.isArray(value)) return invalid('expected an array');
+  const attachments: OverseerAttachment[] = [];
+  for (const entry of value as unknown[]) {
+    if (typeof entry !== 'object' || entry === null) {
+      return invalid('each entry must be an object');
+    }
+    const e = entry as Record<string, unknown>;
+    if (typeof e.path !== 'string') {
+      return invalid('each entry needs a path');
+    }
+    const file = overseerAttachmentFile(rootDir, e.path);
+    if (file === null) return invalid(`not an uploaded file: ${e.path}`);
+    if (!existsSync(file)) return invalid(`no longer on disk: ${e.path}`);
+    // The name shown is the one on disk, whatever the request called it.
+    attachments.push({
+      name: e.path.slice(e.path.lastIndexOf('/') + 1),
+      path: e.path,
+      size: typeof e.size === 'number' ? e.size : 0,
+      mimeType:
+        typeof e.mimeType === 'string' && e.mimeType !== ''
+          ? e.mimeType
+          : 'application/octet-stream',
+    });
+  }
+  return { ok: true, attachments };
 }

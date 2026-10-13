@@ -7,7 +7,12 @@ import {
 import type { Dispatch, SetStateAction } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { type ApiClient, ApiError, type OverseerRecord } from './api';
+import {
+  type ApiClient,
+  ApiError,
+  type OverseerAttachment,
+  type OverseerRecord,
+} from './api';
 import {
   approvalReply,
   findOverseerActionGate,
@@ -233,6 +238,20 @@ export interface OverseerSession {
    * against the current value, not the one its closure captured.
    */
   setDraft: Dispatch<SetStateAction<string>>;
+  /**
+   * Files pasted, dropped or picked into the composer, already uploaded and
+   * waiting to go out with the next submit. Session-held for the same reason
+   * `draft` is, and sent and restored with it.
+   */
+  attachments: OverseerAttachment[];
+  /** Uploads files for the next submit; a failure lands on `sendError`. */
+  attachFiles: (files: File[]) => Promise<void>;
+  /** Drops one pending attachment (by `path`) before it is sent. */
+  removeAttachment: (path: string) => void;
+  /** An upload from `attachFiles` is in flight; Send waits for it. */
+  attaching: boolean;
+  /** An attachment's bytes, for a thumbnail; rejects with no daemon to ask. */
+  fetchAttachment: (attachment: OverseerAttachment) => Promise<Blob>;
 }
 
 /**
@@ -307,6 +326,8 @@ export function useOverseerSession(
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [revoked, setRevoked] = useState(false);
+  const [attachments, setAttachments] = useState<OverseerAttachment[]>([]);
+  const [attaching, setAttaching] = useState(false);
 
   // A conversation opened against one project's dispatchd must not survive a
   // project switch — the stale id would 404 against the new daemon (the same
@@ -316,6 +337,7 @@ export function useOverseerSession(
   useEffect(() => {
     setConversationId(null);
     setDraft('');
+    setAttachments([]);
     setDecidingActionId(null);
     setDecidingRequestId(null);
     setSendError(null);
@@ -368,7 +390,7 @@ export function useOverseerSession(
   });
 
   const start = useCallback(
-    async (prompt: string) => {
+    async (prompt: string, files: OverseerAttachment[] = []) => {
       if (client === null) throw new Error('dispatchd client not ready');
       // The dev/e2e escape hatch (the host's `fakeBackend`): an opted-in session opens
       // conversations against the daemon's scripted 'fake' backend instead of
@@ -377,6 +399,7 @@ export function useOverseerSession(
       const rec = await client.startOverseer(prompt, {
         model,
         effort: effortFromId(effortId),
+        attachments: files,
         ...(fakeBackend?.() === true ? { backend: 'fake' } : {}),
       });
       queryClient.setQueryData(overseerKey(port, rec.id), rec);
@@ -394,11 +417,11 @@ export function useOverseerSession(
   );
 
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, files: OverseerAttachment[] = []) => {
       if (client === null || conversationId === null) {
         throw new Error('no overseer conversation open');
       }
-      const rec = await client.sendOverseerMessage(conversationId, text);
+      const rec = await client.sendOverseerMessage(conversationId, text, files);
       queryClient.setQueryData(overseerKey(port, conversationId), rec);
       // Reconciles a turn that settled mid-flight — without this, the stale
       // `running` record written above would overwrite the settled one the
@@ -427,25 +450,58 @@ export function useOverseerSession(
    */
   const send = useCallback(
     async (text: string, fresh: boolean) => {
+      // The pending attachments go out with the text and come back with it on
+      // failure, ahead of anything attached since.
+      const files = attachments;
       setSending(true);
       setSendError(null);
       setDraft('');
+      setAttachments([]);
       try {
         if (fresh || conversationId === null) {
-          await start(text);
+          await start(text, files);
         } else {
-          await sendMessage(text);
+          await sendMessage(text, files);
         }
         setRevoked(false);
       } catch (err) {
         setRevoked(isRevokedRefusal(err));
         setSendError(err instanceof Error ? err.message : String(err));
         setDraft((current) => (current === '' ? text : current));
+        setAttachments((current) => [...files, ...current]);
       } finally {
         setSending(false);
       }
     },
-    [conversationId, sendMessage, start]
+    [attachments, conversationId, sendMessage, start]
+  );
+
+  // Uploads right away, so Send only ever waits on the message itself.
+  const attachFiles = useCallback(
+    async (files: File[]) => {
+      if (client === null || files.length === 0) return;
+      setAttaching(true);
+      setSendError(null);
+      try {
+        const uploaded = await client.uploadOverseerAttachments(files);
+        setAttachments((current) => [...current, ...uploaded]);
+      } catch (err) {
+        setSendError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setAttaching(false);
+      }
+    },
+    [client]
+  );
+  const removeAttachment = useCallback((path: string) => {
+    setAttachments((current) => current.filter((a) => a.path !== path));
+  }, []);
+  const fetchAttachment = useCallback(
+    (attachment: OverseerAttachment) =>
+      client === null
+        ? Promise.reject(new Error('dispatchd client not ready'))
+        : client.fetchOverseerAttachment(attachment),
+    [client]
   );
   const submit = useCallback((text: string) => send(text, false), [send]);
   const submitNew = useCallback((text: string) => send(text, true), [send]);
@@ -694,5 +750,10 @@ export function useOverseerSession(
     open: setConversationId,
     draft,
     setDraft,
+    attachments,
+    attachFiles,
+    removeAttachment,
+    attaching,
+    fetchAttachment,
   };
 }

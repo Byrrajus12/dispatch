@@ -67,6 +67,11 @@ function overseerSession(over: Partial<OverseerSession> = {}): OverseerSession {
     open: () => {},
     draft: '',
     setDraft: () => {},
+    attachments: [],
+    attachFiles: () => Promise.resolve(),
+    removeAttachment: () => {},
+    attaching: false,
+    fetchAttachment: () => Promise.resolve(new Blob()),
     ...over,
   };
 }
@@ -1058,4 +1063,58 @@ test('a failed Overseer turn can be retried or handed back to the agent', async 
     screen.getByRole('button', { name: 'Ask the agent to fix it' })
   );
   expect(replies).toEqual(['what needs me?', askAgentToFix('TypeError: boom')]);
+});
+
+test('a pasted screenshot alone can be sent, and the sent line shows it', async () => {
+  const sent: string[] = [];
+  const shot = {
+    name: 'image.png',
+    path: '.dispatch/attachments/overseer/0123456789ab/image.png',
+    size: 3,
+    mimeType: 'image/png',
+  };
+  const fetched: string[] = [];
+  const overseer = overseerSession({
+    conversationId: 'w-1',
+    record: overseerRecord({
+      messages: [
+        {
+          role: 'user',
+          text: '',
+          at: '2026-01-01T00:00:00.000Z',
+          attachments: [
+            { ...shot, path: shot.path.replace('image', 'earlier') },
+            {
+              name: 'build.log',
+              path: '.dispatch/attachments/overseer/ba9876543210/build.log',
+              size: 4,
+              mimeType: 'text/plain',
+            },
+          ],
+        },
+      ],
+    }),
+    attachments: [shot],
+    submit: (text: string) => {
+      sent.push(text);
+      return Promise.resolve();
+    },
+    fetchAttachment: (attachment) => {
+      fetched.push(attachment.path);
+      return Promise.resolve(new Blob(['png'], { type: 'image/png' }));
+    },
+  });
+  render(<ChatWithDraft overseer={overseer} />);
+
+  // The transcript's file chip and the pending shot's remove button.
+  expect(screen.getByText('build.log')).not.toBeNull();
+  expect(
+    screen.getByRole('button', { name: 'Remove image.png' })
+  ).not.toBeNull();
+  await clickAndSettle(screen.getByRole('button', { name: 'Send' }));
+  expect(sent).toEqual(['']);
+  // Only images are fetched for previews, each once.
+  expect(fetched.sort()).toEqual(
+    [shot.path, shot.path.replace('image', 'earlier')].sort()
+  );
 });
