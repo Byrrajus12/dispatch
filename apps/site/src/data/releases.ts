@@ -9,6 +9,36 @@ export interface Release {
 
 export const releases: Release[] = [
   {
+    v: 'v0.45.1',
+    date: 'Oct 13, 2026',
+    title: 'Memory in Docs',
+    text: 'Browse what your agents remember from the Docs page, import Claude notes from a symlinked memory folder, and the Overseer works even when an agent started the daemon first.',
+  },
+  {
+    v: 'v0.45.0',
+    date: 'Oct 13, 2026',
+    title: 'Attachments and dispatch tui',
+    text: 'Attach files and pasted images to Overseer messages, run Overseer, Tasks and Runs in the terminal with dispatch tui, and answer a task’s planner questions from its rail.',
+  },
+  {
+    v: 'v0.44.1',
+    date: 'Oct 12, 2026',
+    title: 'Clearer first steps',
+    text: 'Setup notices a signed-out Claude Code, drafted acceptance criteria are kept, and the first land in a new project works.',
+  },
+  {
+    v: 'v0.44.0',
+    date: 'Oct 12, 2026',
+    title: 'Guided setup, and Codex can plan',
+    text: 'Setup walks you to your first task, and Codex can now draft tasks, plan milestones and run the Overseer, with errors in plain English.',
+  },
+  {
+    v: 'v0.43.0',
+    date: 'Oct 11, 2026',
+    title: 'Approving a plan sends agents',
+    text: 'An approved Overseer plan starts its agents on its own, and runs work on the current Claude models.',
+  },
+  {
     v: 'v0.42.0',
     date: 'Oct 9, 2026',
     title: 'Two views is the whole app',
