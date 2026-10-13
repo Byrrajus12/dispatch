@@ -1263,9 +1263,14 @@ const waves = [1, 2, 3].map((n) => ({ n, cards: cards.filter((c) => c.wave === n
       showPause();
     });
     showPause();
+    // Off screen the story holds at its next step instead of redrawing unseen.
+    let offscreen = false;
+    new IntersectionObserver((entries) => {
+      offscreen = !entries.some((e) => e.isIntersecting);
+    }).observe(win);
     const unpaused = () =>
       new Promise<void>((resolve) => {
-        const check = () => (paused ? setTimeout(check, 150) : resolve());
+        const check = () => (paused || offscreen ? setTimeout(check, 150) : resolve());
         check();
       });
     // Every pause in the story is scaled by this; lower plays faster.

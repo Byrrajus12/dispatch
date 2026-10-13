@@ -85,16 +85,17 @@ const curve = (x1: number, y1: number, x2: number, y2: number) =>
     stroke-width: 1.5;
     vector-effect: non-scaling-stroke;
   }
-  /* Dashes travel along each wire: requests flowing in, tools flowing out. */
+  /* Dashes tick along each wire: requests flowing in, tools flowing out.
+     Stepped, not smooth, so the full-width SVG repaints a few times a second. */
   .wire.in {
     stroke: rgb(139 143 248 / 55%);
     stroke-dasharray: 1 2.5;
-    animation: flow 2.2s linear infinite var(--d);
+    animation: flow 2.2s steps(14) infinite var(--d);
   }
   .wire.out {
     stroke: var(--ink-3);
     stroke-dasharray: 1 2.5;
-    animation: flow 2.6s linear infinite var(--d);
+    animation: flow 2.6s steps(14) infinite var(--d);
   }
   @keyframes flow {
     to {
@@ -141,7 +142,6 @@ const curve = (x1: number, y1: number, x2: number, y2: number) =>
     padding: 1.6rem 2.2rem 1.3rem;
     border: 2px solid var(--accent);
     background-color: var(--bg);
-    background-image: var(--hatching);
   }
   .core-orb {
     width: 1.6rem;

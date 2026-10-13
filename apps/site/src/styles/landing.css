@@ -375,6 +375,13 @@ main {
   animation-delay: calc(var(--i, 0) * var(--step, 700ms));
 }
 
+/* Landing.astro marks off-screen sections idle; their loops hold still. */
+[data-idle] *,
+[data-idle] *::before,
+[data-idle] *::after {
+  animation-play-state: paused !important;
+}
+
 @keyframes seq-in {
   from {
     opacity: 0;
