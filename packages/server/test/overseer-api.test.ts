@@ -1154,7 +1154,7 @@ describe('overseer attachments', () => {
     for (const path of [
       'README.md',
       '.dispatch/attachments/overseer/../../../README.md',
-      '.dispatch/attachments/overseer/nothex/a.png',
+      '.dispatch/attachments/overseer/not-hex/a.png',
       '.dispatch/attachments/overseer/0123456789ab/missing.png',
     ]) {
       const res = await fetch(`${baseUrl}/api/overseer`, {
@@ -1168,7 +1168,7 @@ describe('overseer attachments', () => {
       expect(res.status).toBe(400);
     }
     expect(
-      (await fetch(`${baseUrl}/api/overseer/attachments/nothex/a.png`)).status
+      (await fetch(`${baseUrl}/api/overseer/attachments/not-hex/a.png`)).status
     ).toBe(400);
   });
 });
