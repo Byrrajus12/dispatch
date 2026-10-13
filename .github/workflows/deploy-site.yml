@@ -1,0 +1,50 @@
+name: Deploy site
+
+# Ships dispatch.foo whenever main changes anything the site build reads. The
+# image cannot build the site itself (workspace deps such as @dispatch/tokens
+# do not resolve in a standalone image), so this job builds dist/ the same way
+# `moonx site:deploy` does locally, tests it, and uploads it with `railway up`.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/site/**'
+      - 'packages/tokens/**'
+      - 'packages/protocol-spec/versions/**'
+      - 'apps/desktop/src-tauri/tauri.conf.json'
+      - '.github/workflows/deploy-site.yml'
+  workflow_dispatch:
+
+# One deploy at a time, and a newer push waits rather than cancelling one
+# mid-upload.
+concurrency:
+  group: deploy-site
+  cancel-in-progress: false
+
+env:
+  NO_COLOR: 1
+
+jobs:
+  deploy:
+    name: Build, test and deploy dispatch.foo
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up moon and caches
+        uses: ./.github/actions/setup
+
+      # site:test depends on site:build, so this builds dist/ and checks it.
+      - name: Build and test the site
+        run: moon run site:test
+
+      # A project token (Railway project settings, Tokens) scoped to the
+      # production environment. --ci streams the build and fails the job when
+      # Railway's build or deploy fails.
+      - name: Deploy to Railway
+        working-directory: apps/site
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: pnpm exec railway up . --path-as-root --service dispatch-site --ci
