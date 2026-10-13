@@ -87,7 +87,7 @@ const mermaid = [
                 {e.critical && <path class="pulse" d={e.d} />}
                 {!e.clear && (
                   <>
-                    <rect class="pill" x={e.lx - 13} y={e.ly - 11} width="26" height="22" rx="11" />
+                    <rect class="pill" x={e.lx - 13} y={e.ly - 11} width="26" height="22" />
                     <text class="pill-n" x={e.lx} y={e.ly + 4.5}>
                       {e.count}
                     </text>
@@ -102,13 +102,13 @@ const mermaid = [
                 class:list={['ms', m.path && 'critical', m.done === m.total && 'landed', m.id === 'v1' && 'goal']}
                 transform={`translate(${m.x} ${m.y})`}
               >
-                <rect class="box" width={W} height={H} rx="12" />
-                <circle class="ms-dot" cx="20" cy="26" r="5" />
+                <rect class="box" width={W} height={H} />
+                <rect class="ms-dot" x="15" y="21" width="10" height="10" />
                 <text class="ms-title" x="34" y="31">
                   {m.title}
                 </text>
-                <rect class="track" x="16" y="46" width={W - 32} height="5" rx="2.5" />
-                <rect class="fill" x="16" y="46" width={((W - 32) * m.done) / m.total} height="5" rx="2.5" />
+                <rect class="track" x="16" y="46" width={W - 32} height="5" />
+                <rect class="fill" x="16" y="46" width={((W - 32) * m.done) / m.total} height="5" />
                 <text class="ms-meta" x="16" y="70">
                   {m.done}/{m.total} landed
                 </text>
@@ -130,66 +130,76 @@ const mermaid = [
   .map {
     margin: clamp(3rem, 6vw, 4.5rem) 0 0;
     overflow: hidden;
-    border: 1px solid var(--line-2);
-    border-radius: 16px;
+    border: 1px solid var(--border);
     background: var(--panel);
-    box-shadow: 0 50px 120px -40px rgb(0 0 0 / 95%);
   }
   .map-head {
     display: flex;
     flex-wrap: wrap;
-    align-items: center;
-    gap: 0.75rem 1.25rem;
-    padding: 0.8rem 1rem;
-    border-bottom: 1px solid var(--line);
+    align-items: stretch;
+    gap: 0 1.25rem;
+    border-bottom: 1px solid var(--border);
+    background-image: var(--hatching);
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
   }
   .seg {
     display: inline-flex;
-    padding: 0.2rem;
-    border: 1px solid var(--line-2);
-    border-radius: 9px;
+    border-right: 1px solid var(--border);
   }
   .seg button {
-    padding: 0.3rem 0.8rem;
+    padding: 0.85rem 1.1rem;
     border: 0;
-    border-radius: 6px;
     background: none;
     color: var(--ink-3);
     font: inherit;
-    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: inherit;
+    text-transform: inherit;
     cursor: pointer;
   }
-  .seg button[aria-selected='true'] {
-    background: rgb(255 255 255 / 9%);
+  .seg button + button {
+    border-left: 1px solid var(--border);
+  }
+  .seg button:hover {
     color: var(--ink);
+  }
+  .seg button[aria-selected='true'] {
+    background: var(--ink);
+    color: var(--bg);
   }
   .eta {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.6rem;
     color: var(--ink-2);
-    font-size: 0.85rem;
   }
   .cp {
     width: 1rem;
-    height: 0.25rem;
-    border-radius: 2px;
-    background: var(--accent-strong);
+    height: 2px;
+    background: var(--accent);
   }
   .copy {
     margin-left: auto;
-    padding: 0.4rem 0.85rem;
+    padding: 0 1.1rem;
     border: 0;
-    border-radius: 8px;
-    background: var(--accent-strong);
-    color: #fff;
+    border-left: 2px solid var(--accent);
+    background: none;
+    color: var(--ink);
     font: inherit;
-    font-size: 0.85rem;
-    font-weight: 500;
+    font-weight: 700;
+    letter-spacing: inherit;
+    text-transform: inherit;
     cursor: pointer;
+    transition:
+      background 0.15s ease,
+      color 0.15s ease;
   }
   .copy:hover {
-    background: #6a6ee0;
+    background: var(--accent);
+    color: var(--on-accent);
   }
   .view {
     padding: clamp(1rem, 3vw, 2.25rem);
@@ -232,7 +242,6 @@ const mermaid = [
     stroke-dasharray: 40 400;
     stroke-linecap: round;
     stroke-width: 3;
-    filter: drop-shadow(0 0 6px var(--accent));
     animation: run 2.4s linear infinite;
   }
   @keyframes run {
@@ -244,7 +253,7 @@ const mermaid = [
     }
   }
   .pill {
-    fill: #1b1b1f;
+    fill: var(--bg);
     stroke: var(--line-2);
   }
   .edge.critical .pill {
@@ -257,15 +266,15 @@ const mermaid = [
     text-anchor: middle;
   }
   .box {
-    fill: #161619;
+    fill: var(--bg);
     stroke: var(--line-2);
   }
   .ms.critical .box {
-    stroke: rgb(139 143 248 / 60%);
+    stroke: var(--accent);
   }
   .ms.goal .box {
     stroke: var(--ink);
-    stroke-width: 1.5;
+    stroke-width: 2;
   }
   .ms-dot {
     fill: none;
@@ -278,8 +287,9 @@ const mermaid = [
   }
   .ms-title {
     fill: var(--ink);
-    font-size: 15px;
-    font-weight: 600;
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 700;
   }
   .track {
     fill: rgb(255 255 255 / 8%);
@@ -289,7 +299,9 @@ const mermaid = [
   }
   .ms-meta {
     fill: var(--ink-3);
-    font-size: 12px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
   }
 </style>
 

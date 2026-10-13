@@ -10,42 +10,51 @@ const command = 'brew install --cask wsoule/tap/dispatch';
 </div>
 
 <style>
+  /* The one accent-ruled box on the page: the command that matters most. */
   .install {
     display: inline-flex;
-    align-items: center;
-    gap: 0.75rem;
+    align-items: stretch;
     max-width: 100%;
-    padding: 0.4rem 0.4rem 0.4rem 1rem;
-    border: 1px solid var(--line);
-    border-radius: 999px;
-    background: var(--panel);
+    min-height: 3rem;
+    border: 2px solid var(--accent);
+    background: var(--bg);
   }
   code {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
     min-width: 0;
+    padding: 0 1rem;
     overflow-x: auto;
     white-space: nowrap;
     font-size: 0.85rem;
     scrollbar-width: none;
   }
   .prompt {
-    color: var(--ink-3);
+    color: var(--accent);
     user-select: none;
   }
   button {
     flex: none;
-    min-height: 2rem;
-    padding: 0 0.85rem;
+    min-width: 5.5rem;
+    padding: 0 1rem;
     border: 0;
-    border-radius: 999px;
-    background: rgb(255 255 255 / 7%);
-    color: var(--ink-2);
-    font: inherit;
-    font-size: 0.8rem;
-    font-weight: 550;
+    border-left: 2px solid var(--accent);
+    background: none;
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
     cursor: pointer;
+    transition:
+      background 0.15s ease,
+      color 0.15s ease;
   }
   button:hover {
-    color: var(--ink);
+    background: var(--accent);
+    color: var(--on-accent);
   }
 </style>
 

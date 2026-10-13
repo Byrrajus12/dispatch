@@ -13,7 +13,7 @@ import InstallCommand from './InstallCommand.astro';
           The shared board your team’s agents work from, on your own machines. Plan in one
           sentence, watch agents work through it, and see exactly what stands between you and v1.
         </p>
-        <a class="new" href="#two-views"><b>New</b> Overseer topic routing</a>
+        <a class="new" href="#two-views"><b>New</b> Overseer topic routing <span aria-hidden="true">→</span></a>
       </div>
       <div class="actions" id="install">
         <a class="btn btn-primary" href={DMG.arm}>Download for Mac</a>
@@ -26,7 +26,6 @@ import InstallCommand from './InstallCommand.astro';
   </div>
 
   <div class="stage">
-    <div class="glow" aria-hidden="true"></div>
     <div class="tilt">
       <AppDemo />
     </div>
@@ -35,13 +34,19 @@ import InstallCommand from './InstallCommand.astro';
 
 <style>
   .alt {
-    margin-top: 0.75rem;
+    margin-top: 0.9rem;
     color: var(--ink-3);
-    font-size: 0.85rem;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
   }
   .alt a {
     color: var(--ink-2);
     text-underline-offset: 3px;
+  }
+  .alt a:hover {
+    color: var(--accent);
   }
   .hero {
     position: relative;
@@ -61,30 +66,46 @@ import InstallCommand from './InstallCommand.astro';
   }
   .lede {
     max-width: 36rem;
-    color: var(--ink-2);
-    font-size: clamp(1.05rem, 1.4vw, 1.2rem);
-    line-height: 1.55;
+    color: var(--ink-soft);
+    font-size: clamp(1.1rem, 1.5vw, 1.35rem);
+    line-height: 1.45;
     text-wrap: pretty;
   }
+  /* The release note: a ruled mono strip that floods on hover. */
   .new {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.7rem;
+    padding: 0.5rem 0.8rem;
+    border: 1px solid var(--border);
     color: var(--ink-2);
-    font-size: 0.95rem;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
     text-decoration: none;
+    text-transform: uppercase;
+    transition:
+      background 0.15s ease,
+      color 0.15s ease;
   }
   .new b {
-    margin-right: 0.4rem;
-    color: var(--ink);
-    font-weight: 550;
+    color: var(--accent);
+    font-weight: 700;
   }
   .new:hover {
-    color: var(--ink);
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--on-accent);
+  }
+  .new:hover b {
+    color: var(--on-accent);
   }
   .actions {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 0.75rem;
-    margin-top: 2.25rem;
+    margin-top: 2.5rem;
     scroll-margin-top: 6rem;
   }
 
@@ -103,16 +124,6 @@ import InstallCommand from './InstallCommand.astro';
   }
   .stage :global(.win) {
     width: max(100%, 74rem);
-  }
-  .glow {
-    position: absolute;
-    inset: -6% 10% 30% -5%;
-    background:
-      radial-gradient(40% 50% at 35% 30%, rgb(91 95 214 / 50%), transparent 70%),
-      radial-gradient(30% 40% at 15% 70%, rgb(63 207 142 / 14%), transparent 70%),
-      radial-gradient(30% 40% at 70% 65%, rgb(242 199 68 / 12%), transparent 70%);
-    filter: blur(60px);
-    pointer-events: none;
   }
   .tilt {
     position: relative;

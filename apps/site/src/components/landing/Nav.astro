@@ -13,9 +13,13 @@ const links: [string, string][] = [
 ---
 
 <header class="nav">
-  <div class="wrap row">
+  <div class="bar">
+    <span class="reg tl" aria-hidden="true"></span>
+    <span class="reg tr" aria-hidden="true"></span>
+    <span class="reg bl" aria-hidden="true"></span>
+    <span class="reg br" aria-hidden="true"></span>
     <a class="mark" href="/" aria-label="Dispatch home">
-      <span class="orb" aria-hidden="true"></span>
+      <span class="glyph" aria-hidden="true"></span>
       Dispatch
     </a>
     <nav aria-label="Site">
@@ -26,7 +30,7 @@ const links: [string, string][] = [
           </a>
         ))
       }
-      <a class="btn btn-primary" href="/#install">Install</a>
+      <a class="install" href="/#install">Install</a>
       <details class="menu">
         <summary aria-label="Menu"><span class="bars" aria-hidden="true"></span></summary>
         <div class="sheet">
@@ -38,37 +42,128 @@ const links: [string, string][] = [
 </header>
 
 <style>
+  /* A flush, hatched bar at the top of the page. Once the page scrolls,
+     Landing.astro sets html.nav-detached and the bar lifts into a floating
+     box with registration marks on its corners. Hovering floods it indigo. */
   .nav {
     position: sticky;
     top: 0;
     z-index: 20;
-    border-bottom: 1px solid var(--line);
-    background: color-mix(in srgb, var(--bg) 70%, transparent);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+    transition: top 0.4s var(--ease-chrome);
   }
-  .row {
+  .bar {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: space-between;
+    max-width: 100%;
     min-height: 4rem;
+    margin: 0 auto;
+    padding: 0 var(--gutter);
+    border-bottom: 1px solid var(--border);
+    background-color: var(--bg);
+    background-image: var(--hatching);
+    transition:
+      max-width 0.4s var(--ease-chrome),
+      padding 0.4s var(--ease-chrome),
+      min-height 0.4s var(--ease-chrome),
+      border-color 0.4s var(--ease-chrome),
+      background-color 0.2s ease,
+      color 0.2s ease;
   }
+  :global(html.nav-detached) .nav {
+    top: 12px;
+  }
+  :global(html.nav-detached) .bar {
+    max-width: calc(var(--max) + var(--gutter) * 2 - 1rem);
+    min-height: 3.4rem;
+    padding: 0 1.4rem;
+    border: 1px solid var(--border);
+  }
+  @media (hover: hover) {
+    .bar:hover {
+      background-color: var(--accent);
+      color: var(--on-accent);
+    }
+    .bar:hover .link {
+      color: var(--on-accent);
+    }
+    .bar:hover .glyph {
+      background: var(--on-accent);
+    }
+    .bar:hover .install {
+      border-color: var(--on-accent);
+      background: var(--on-accent);
+      color: var(--accent);
+    }
+    .bar:hover .reg {
+      opacity: 0;
+    }
+  }
+
+  /* Registration marks: two crossed 1px arms centered on the border line. */
+  .reg {
+    position: absolute;
+    width: 11px;
+    height: 11px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.4s var(--ease-chrome);
+  }
+  :global(html.nav-detached) .reg {
+    opacity: 1;
+  }
+  .reg::before,
+  .reg::after {
+    content: '';
+    position: absolute;
+    background: var(--accent);
+  }
+  .reg::before {
+    top: 5px;
+    left: 0;
+    width: 11px;
+    height: 1px;
+  }
+  .reg::after {
+    top: 0;
+    left: 5px;
+    width: 1px;
+    height: 11px;
+  }
+  .tl {
+    top: -6px;
+    left: -6px;
+  }
+  .tr {
+    top: -6px;
+    right: -6px;
+  }
+  .bl {
+    bottom: -6px;
+    left: -6px;
+  }
+  .br {
+    right: -6px;
+    bottom: -6px;
+  }
+
   .mark {
     display: inline-flex;
     align-items: center;
-    gap: 0.55rem;
-    font-size: 1.1rem;
-    font-weight: 650;
-    letter-spacing: -0.03em;
+    gap: 0.6rem;
+    font-family: var(--mono);
+    font-size: 1rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
     text-decoration: none;
+    text-transform: uppercase;
   }
-  .orb {
-    width: 1.05rem;
-    height: 1.05rem;
-    border: 2px solid var(--accent);
-    border-radius: 50%;
-    background: radial-gradient(circle, var(--accent) 40%, transparent 44%);
-    box-shadow: 0 0 12px var(--accent);
+  .glyph {
+    width: 0.8rem;
+    height: 0.8rem;
+    background: var(--accent);
+    transition: background 0.2s ease;
   }
   nav {
     display: flex;
@@ -77,16 +172,36 @@ const links: [string, string][] = [
   }
   .link {
     color: var(--ink-2);
-    font-size: 0.92rem;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.1em;
     text-decoration: none;
-    transition: color 150ms var(--ease);
+    text-transform: uppercase;
+    transition: color 0.2s ease;
   }
   .link:hover {
-    color: var(--ink);
+    text-decoration: underline;
+    text-underline-offset: 4px;
   }
-  .btn {
-    min-height: 2.25rem;
-    font-size: 0.88rem;
+  .install {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.2rem;
+    padding: 0 1rem;
+    border: 2px solid var(--accent);
+    background: var(--accent);
+    color: var(--on-accent);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-decoration: none;
+    text-transform: uppercase;
+    transition:
+      background 0.2s ease,
+      color 0.2s ease,
+      border-color 0.2s ease;
   }
   .menu {
     display: none;
@@ -95,10 +210,9 @@ const links: [string, string][] = [
   summary {
     display: grid;
     place-items: center;
-    width: 2.25rem;
-    height: 2.25rem;
-    border: 1px solid var(--line-2);
-    border-radius: 999px;
+    width: 2.2rem;
+    height: 2.2rem;
+    border: 1px solid currentColor;
     list-style: none;
     cursor: pointer;
   }
@@ -110,7 +224,7 @@ const links: [string, string][] = [
     display: block;
     width: 0.9rem;
     height: 1.5px;
-    background: var(--ink);
+    background: currentColor;
     transition: transform 200ms var(--ease);
   }
   .bars {
@@ -128,25 +242,28 @@ const links: [string, string][] = [
   }
   .sheet {
     position: absolute;
-    top: calc(100% + 0.6rem);
+    top: calc(100% + 0.75rem);
     right: 0;
     display: grid;
     min-width: 12rem;
-    padding: 0.4rem;
-    border: 1px solid var(--line-2);
-    border-radius: 12px;
-    background: #111113;
-    box-shadow: 0 20px 50px -10px rgb(0 0 0 / 80%);
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--ink);
   }
   .sheet a {
-    padding: 0.6rem 0.75rem;
-    border-radius: 8px;
-    color: var(--ink-2);
+    padding: 0.75rem 1rem;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
     text-decoration: none;
+    text-transform: uppercase;
+  }
+  .sheet a + a {
+    border-top: 1px solid var(--line);
   }
   .sheet a:hover {
-    background: rgb(255 255 255 / 6%);
-    color: var(--ink);
+    background: var(--accent);
+    color: var(--on-accent);
   }
   @media (max-width: 860px) {
     .link {
@@ -157,6 +274,20 @@ const links: [string, string][] = [
     }
     nav {
       gap: 0.6rem;
+    }
+    :global(html.nav-detached) .nav {
+      top: 8px;
+    }
+    :global(html.nav-detached) .bar {
+      max-width: calc(100% - 1rem);
+      padding: 0 1rem;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .nav,
+    .bar,
+    .reg {
+      transition: none;
     }
   }
 </style>

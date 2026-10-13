@@ -1,10 +1,13 @@
 ---
 import '@fontsource-variable/inter';
 import '@fontsource/jetbrains-mono/400.css';
+import '@fontsource/jetbrains-mono/600.css';
+import '@fontsource/jetbrains-mono/700.css';
+import '@fontsource/jetbrains-mono/800.css';
 import '../styles/landing.css';
 
 // The home page's own frame. The protocol pages keep Base.astro and the app's
-// tokens; the landing page is always dark, in the app's beta look.
+// tokens; the landing page is always dark: a spec sheet printed in negative.
 interface Props {
   // The 404 page: kept out of search and given no canonical link.
   notFound?: boolean;
@@ -53,7 +56,7 @@ const url = `https://dispatch.foo${path}`;
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:image" content="https://dispatch.foo/og.png" />
     <meta name="color-scheme" content="dark" />
-    <meta name="theme-color" content="#050506" />
+    <meta name="theme-color" content="#0b0b0c" />
   </head>
   <body>
     <slot />
@@ -70,6 +73,12 @@ const url = `https://dispatch.foo${path}`;
         { threshold: 0.35 }
       );
       for (const el of document.querySelectorAll('[data-seq-root]')) io.observe(el);
+
+      // The nav lifts off the top edge into a floating box once the page scrolls.
+      const root = document.documentElement;
+      const syncNav = () => root.classList.toggle('nav-detached', scrollY > 6);
+      addEventListener('scroll', syncNav, { passive: true });
+      syncNav();
     </script>
   </body>
 </html>

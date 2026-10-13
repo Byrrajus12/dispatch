@@ -47,7 +47,7 @@ const entries = [
         <p class="label"><span class="n">2</span>A person approves it</p>
         <div class="pane">
           <p class="proposal">
-            <span class="tag">proposal</span>Team memory from Claude
+            <span class="stamp ptag">proposal</span>Team memory from Claude
           </p>
           <p class="title">Stripe sends events twice; webhook handlers must be idempotent</p>
           <p class="acts"><span class="ok">Approve</span><span>Reject</span></p>
@@ -103,19 +103,22 @@ const entries = [
   .label {
     display: flex;
     align-items: center;
-    gap: 0.55rem;
+    gap: 0.7rem;
     margin-bottom: 0.7rem;
-    font-weight: 600;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
   }
   .n {
     display: grid;
     place-items: center;
-    width: 1.4rem;
-    height: 1.4rem;
-    border-radius: 50%;
-    background: rgb(139 143 248 / 18%);
-    color: var(--accent);
-    font-size: 0.75rem;
+    width: 1.5rem;
+    height: 1.5rem;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-size: 0.72rem;
   }
   .pane {
     display: flex;
@@ -124,11 +127,10 @@ const entries = [
     gap: 0.45rem;
     min-height: 17rem;
     padding: 1rem;
-    border: 1px solid var(--line-2);
-    border-radius: 14px;
-    background: #0f0f12;
-    box-shadow: 0 40px 100px -40px rgb(0 0 0 / 95%);
+    border: 1px solid var(--border);
+    background: var(--panel);
     font-size: 0.82rem;
+    font-weight: 400;
   }
   .who {
     display: flex;
@@ -143,7 +145,6 @@ const entries = [
   .dot {
     width: 0.5rem;
     height: 0.5rem;
-    border-radius: 50%;
     background: var(--working);
   }
   .dot.codex {
@@ -167,9 +168,8 @@ const entries = [
   }
   .save {
     padding: 0.6rem 0.7rem;
-    border: 1px solid rgb(139 143 248 / 40%);
-    border-radius: 9px;
-    background: rgb(91 95 214 / 12%);
+    border: 1px solid var(--accent);
+    background: rgb(139 143 248 / 8%);
   }
   .save p:first-child {
     display: flex;
@@ -180,11 +180,11 @@ const entries = [
     font-weight: 550;
   }
   .kind,
-  .scope,
-  .tag {
+  .scope {
     padding: 0 0.4rem;
-    border-radius: 999px;
-    font-size: 0.68rem;
+    font-family: var(--mono);
+    font-size: 0.64rem;
+    letter-spacing: 0.04em;
   }
   .kind {
     background: rgb(255 255 255 / 8%);
@@ -216,8 +216,7 @@ const entries = [
     gap: 0.45rem;
     color: var(--ink-2);
   }
-  .tag {
-    background: rgb(240 138 60 / 18%);
+  .ptag {
     color: #f0a060;
   }
   .acts {
@@ -227,11 +226,11 @@ const entries = [
   .acts span {
     padding: 0.15rem 0.6rem;
     border: 1px solid var(--line-2);
-    border-radius: 6px;
   }
   .acts .ok {
-    border-color: transparent;
-    background: var(--accent-strong);
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--on-accent);
   }
   .list {
     display: grid;
@@ -259,7 +258,6 @@ const entries = [
     text-overflow: ellipsis;
   }
   .list .new {
-    border-radius: 6px;
     background: rgb(139 143 248 / 12%);
   }
   .list .stale {
@@ -273,8 +271,8 @@ const entries = [
   pre {
     padding: 0.7rem;
     overflow-x: auto;
-    border-radius: 8px;
-    background: #0a0a0c;
+    border: 1px solid var(--line);
+    background: var(--bg);
     color: var(--ink-3);
     font-size: 0.72rem;
     line-height: 1.6;
@@ -285,7 +283,6 @@ const entries = [
   mark {
     display: inline-block;
     padding: 0 0.2rem;
-    border-radius: 4px;
     background: rgb(139 143 248 / 18%);
     color: var(--ink);
   }

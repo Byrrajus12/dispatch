@@ -27,72 +27,89 @@ const releases = all.slice(0, 4);
 </section>
 
 <style>
+  /* Four ruled cells on one baseline; hovering one floods it indigo. */
   .releases {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 2rem;
     margin-top: clamp(3rem, 6vw, 4rem);
-    padding: 0;
+    padding: 1px 0 0 1px;
     list-style: none;
   }
   li {
     position: relative;
     display: grid;
-    align-content: start;
-    gap: 0.45rem;
-    padding-top: 2.6rem;
+    grid-template-rows: auto auto 1fr auto;
+    gap: 0.6rem;
+    margin: -1px 0 0 -1px;
+    padding: 1.4rem 1.4rem 1.6rem;
+    border: 1px solid var(--border);
+    transition:
+      background 0.15s ease,
+      color 0.15s ease;
   }
-  /* The timeline: a hairline through every release's dot. */
-  li::before {
-    content: '';
-    position: absolute;
-    top: 0.3rem;
-    right: 0;
-    left: 0;
-    border-top: 1px solid var(--line-2);
-  }
-  @media (min-width: 901px) {
-    li:not(:last-child)::before {
-      right: -2rem;
-    }
+  li:hover {
+    background: var(--accent);
+    color: var(--on-accent);
   }
   .pip {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 0.65rem;
-    height: 0.65rem;
-    border: 2px solid var(--bg);
-    border-radius: 50%;
+    width: 0.6rem;
+    height: 0.6rem;
     background: var(--ink-3);
   }
   .pip.latest {
     background: var(--accent);
-    box-shadow: 0 0 12px var(--accent);
+  }
+  li:hover .pip {
+    background: var(--on-accent);
   }
   b {
-    font-weight: 560;
+    font-weight: 600;
+    line-height: 1.3;
   }
   li p {
     color: var(--ink-2);
     font-size: 0.92rem;
   }
+  li:hover p {
+    color: inherit;
+  }
   li .meta {
-    margin-top: 0.4rem;
-    font-size: 0.78rem;
+    padding-top: 0.8rem;
+    border-top: 1px solid var(--line-2);
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  li:hover .meta {
+    border-color: currentColor;
   }
   .meta code {
-    color: var(--ink-3);
+    color: var(--accent);
+    font-size: 1em;
+    font-weight: 700;
+  }
+  li:hover .meta code {
+    color: inherit;
   }
   .all {
     display: inline-block;
-    margin-top: 2.5rem;
+    margin-top: 2rem;
     color: var(--ink-2);
-    font-size: 0.92rem;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
     text-decoration: none;
+    text-transform: uppercase;
+  }
+  .all::after {
+    content: ' →';
+    color: var(--accent);
   }
   .all:hover {
     color: var(--ink);
+    text-decoration: underline;
+    text-underline-offset: 4px;
   }
   @media (max-width: 900px) {
     .releases {

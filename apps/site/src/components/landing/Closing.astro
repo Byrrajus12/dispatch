@@ -88,37 +88,38 @@ const shots = [
   .tour {
     margin: 3rem 0 0;
   }
+  /* A ruled tab strip sitting on the screenshot's top edge. */
   .tabs {
     display: flex;
-    gap: 0.25rem;
     overflow-x: auto;
     scrollbar-width: none;
-    width: fit-content;
     max-width: 100%;
-    margin: 0 auto 1.25rem;
-    padding: 0.25rem;
-    border: 1px solid var(--line);
-    border-radius: 999px;
-    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-bottom: 0;
+    background-image: var(--hatching);
   }
   .tabs button {
     flex: none;
-    padding: 0.45rem clamp(0.7rem, 2.5vw, 1rem);
+    padding: 0.9rem clamp(0.9rem, 2.5vw, 1.4rem);
     border: 0;
-    border-radius: 999px;
+    border-right: 1px solid var(--border);
     background: none;
     color: var(--ink-2);
-    font: 500 0.9rem/1 var(--body);
+    font: 600 0.72rem/1 var(--mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
     cursor: pointer;
-    transition: color 0.2s var(--ease), background 0.2s var(--ease);
+    transition:
+      color 0.15s ease,
+      background 0.15s ease;
   }
   .tabs button:hover {
-    color: var(--ink);
+    background: var(--accent);
+    color: var(--on-accent);
   }
   .tabs button[aria-selected='true'] {
-    background: var(--panel-2);
-    box-shadow: inset 0 0 0 1px var(--line-2);
-    color: var(--ink);
+    background: var(--ink);
+    color: var(--bg);
   }
   .tabs button:focus-visible {
     outline: 2px solid var(--accent);
@@ -142,7 +143,11 @@ const shots = [
     margin-top: 1rem;
     color: var(--ink-2);
     font-size: 0.95rem;
-    text-align: center;
+  }
+  figcaption::before {
+    content: '↳ ';
+    color: var(--accent);
+    font-family: var(--mono);
   }
   @keyframes shot-in {
     from {
@@ -156,37 +161,37 @@ const shots = [
     }
   }
 
+  /* The closing shout gets the most air: two mono lines, the second one
+     indigo. */
   .closing {
     position: relative;
-    padding: clamp(6rem, 14vw, 11rem) 0;
-    overflow: hidden;
-    text-align: center;
-  }
-  .closing::before {
-    content: '';
-    position: absolute;
-    inset: 20% 10% -40%;
-    background: radial-gradient(50% 50% at 50% 50%, rgb(91 95 214 / 40%), transparent 70%);
-    filter: blur(40px);
-    pointer-events: none;
+    padding: clamp(7rem, 15vw, 12rem) 0;
+    border-top: 1px solid var(--border);
   }
   .closing .wrap {
-    position: relative;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
   }
   .closing h2 {
-    font-size: clamp(3.25rem, 9vw, 7rem);
+    font-size: clamp(2rem, 6.2vw, 6rem);
+    letter-spacing: -0.05em;
+  }
+  .closing h2 em {
+    color: var(--accent);
   }
   .closing p {
     max-width: 34rem;
-    margin: 1.5rem auto 0;
+    margin: 1.75rem 0 0;
     color: var(--ink-2);
-    font-size: 1.15rem;
+    font-size: 1.2rem;
   }
-  .platforms {
-    margin: 1.25rem auto 0;
+  .closing .platforms {
+    margin: 1rem 0 0;
     color: var(--ink-3);
-    font-size: 0.95rem;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
   }
   .platforms a {
     color: var(--ink-2);
@@ -195,10 +200,9 @@ const shots = [
   .actions {
     display: flex;
     flex-wrap: wrap;
-    justify-content: center;
     align-items: center;
     gap: 0.75rem;
-    margin-top: 2.25rem;
+    margin-top: 2.5rem;
   }
 
 </style>

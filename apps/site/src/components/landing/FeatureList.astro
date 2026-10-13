@@ -29,40 +29,61 @@ const { items } = Astro.props;
     display: grid;
     gap: 1rem 4rem;
     margin-top: clamp(3rem, 6vw, 4.5rem);
-    padding-top: 2rem;
-    border-top: 1px solid var(--line);
   }
   .features-label {
     color: var(--ink-3);
-    font-size: 0.92rem;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
   }
+  /* A ruled grid of disclosures; shared edges collapse into one line. Hover
+     floods a cell indigo, open turns it to ink. */
   .features-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.35rem 3rem;
+    padding: 1px 0 0 1px;
+  }
+  details {
+    margin: -1px 0 0 -1px;
+    border: 1px solid var(--border);
+    transition:
+      background 0.15s ease,
+      color 0.15s ease;
   }
   summary {
-    display: inline-flex;
+    display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 0.5rem;
-    padding: 0.25rem 0;
-    color: var(--ink);
-    font-size: 0.95rem;
+    padding: 0.85rem 1rem;
+    color: inherit;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
     list-style: none;
     cursor: pointer;
   }
   summary::-webkit-details-marker {
     display: none;
   }
-  summary:hover {
-    color: #fff;
+  details:hover {
+    background: var(--accent);
+    color: var(--on-accent);
+  }
+  details[open] {
+    background: var(--ink);
+    color: var(--bg);
   }
   /* A plus that turns into a cross when open. */
   .plus {
     position: relative;
     width: 0.6rem;
     height: 0.6rem;
-    color: var(--ink-3);
+    flex: none;
     transition: transform 200ms var(--ease);
   }
   .plus::before,
@@ -82,10 +103,10 @@ const { items } = Astro.props;
     transform: rotate(45deg);
   }
   details p {
-    max-width: 26rem;
-    padding: 0.1rem 0 0.7rem;
-    color: var(--ink-2);
-    font-size: 0.9rem;
+    max-width: 30rem;
+    padding: 0 1rem 1rem;
+    font-size: 0.95rem;
+    font-weight: 400;
     animation: open 250ms var(--ease);
   }
   @keyframes open {
