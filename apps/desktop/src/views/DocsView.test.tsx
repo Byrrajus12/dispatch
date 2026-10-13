@@ -1050,3 +1050,20 @@ test('in Two views an open doc sits under All docs › its title, and the crumb 
     await screen.findByRole('button', { name: 'Auth refactor' })
   ).toBeDefined();
 });
+
+test('in Two views the Docs page switches to the memory runs read', async () => {
+  renderView({
+    canDecide: true,
+    tasksPage: { onBack: () => {}, onOpenAllDocs: () => {} },
+  });
+  await screen.findByRole('button', { name: 'Auth refactor' });
+  fireEvent.click(screen.getByRole('button', { name: 'Memory' }));
+  expect(await screen.findByTestId('memory-browser')).toBeDefined();
+  const header = document.querySelector<HTMLElement>(
+    '[data-slot="page-header"]'
+  );
+  expect(header?.querySelector('[aria-current="page"]')?.textContent).toBe(
+    'Memory'
+  );
+  expect(screen.queryByRole('button', { name: 'Auth refactor' })).toBeNull();
+});

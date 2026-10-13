@@ -13,7 +13,6 @@ import {
   memoryQueryRootKey,
   memorySettingsModel,
 } from '../../lib/memory';
-import { MemoryBrowser } from '../memory/MemoryBrowser';
 import { RehomePanel } from '../memory/RehomePanel';
 import { ChoiceSetting, NumberSetting } from './fields';
 import { SettingsSearchable } from './search';
@@ -78,7 +77,7 @@ function ActionError({ error }: { error: string | null }) {
   );
 }
 
-/** Settings → Memory: the store's health and warnings, the lessons runs read,
+/** Settings → Memory: the store's health and warnings, where lessons live,
  *  re-homing a moved checkout's entries, the ledger import's parity report,
  *  the owner's Claude-notes import, Claude files a scan skipped, the caller's
  *  identity and links, and memory's run settings. */
@@ -112,11 +111,10 @@ export function MemorySection({ data, config, onSave }: MemorySectionProps) {
           keywords="memory entries lessons personal project team proposals stale"
           requires="none"
         >
-          <SettingsSearchable text="memory entries lessons proposals stale">
-            <PanelRow className="block p-0">
-              <MemoryBrowser data={data} />
-            </PanelRow>
-          </SettingsSearchable>
+          <SettingsRow
+            title="Browse memory"
+            subtitle="Entries and proposals live in Docs → Memory."
+          />
         </SettingsGroup>
       )}
       {client !== null && <RehomeGroup client={client} port={port} />}

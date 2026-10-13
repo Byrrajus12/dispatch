@@ -19,7 +19,7 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 /**
- * Settings › Memory's lessons (memory Task 29): Personal, Project and Team
+ * Docs › Memory's lessons (memory Task 29): Personal, Project and Team
  * entries, open Proposals, and Stale ones, with an entry's provenance,
  * history and actions under the list. Team includes entries replicated from
  * teammates' machines.

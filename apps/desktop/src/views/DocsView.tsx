@@ -6,6 +6,7 @@ import { useMemo, useState } from 'react';
 import { DocList } from '../components/docs/DocList';
 import { DocPage } from '../components/docs/DocPage';
 import { NewDocDialog } from '../components/docs/NewDocDialog';
+import { MemoryBrowser } from '../components/memory/MemoryBrowser';
 import { DaemonUnavailable } from '../components/shell/DaemonUnavailable';
 import {
   CrumbLink,
@@ -17,6 +18,7 @@ import type { DocFilter } from '../lib/docs';
 import { filterDocs } from '../lib/docs';
 import type { RefAction } from '../lib/threadSources';
 import { Button } from '@/ui/button';
+import { ToggleGroup, ToggleGroupItem } from '@/ui/toggle-group';
 
 // The most search hits a query asks the daemon for.
 const SEARCH_LIMIT = 50;
@@ -69,6 +71,8 @@ export function DocsView({
   const [anchor, setAnchor] = useState<string | null>(initialAnchor);
   const [merge, setMerge] = useState<string | null>(initialMerge);
   const [creating, setCreating] = useState(false);
+  // Two views' list pane shows docs or the memory runs read, one at a time.
+  const [section, setSection] = useState<'docs' | 'memory'>('docs');
   const queryClient = useQueryClient();
   // A doc named while the view is up (a ref, a palette hit) replaces the open one.
   const [named, setNamed] = useState({
@@ -199,6 +203,28 @@ export function DocsView({
         title,
       ]);
     }
+    const sectionToggle = (
+      <ToggleGroup
+        size="sm"
+        aria-label="Docs or memory"
+        value={[section]}
+        onValueChange={([value]) => {
+          // Re-pressing the active one hands back an empty list; keep it.
+          if (value === 'docs' || value === 'memory') setSection(value);
+        }}
+      >
+        <ToggleGroupItem value="docs">Docs</ToggleGroupItem>
+        <ToggleGroupItem value="memory">Memory</ToggleGroupItem>
+      </ToggleGroup>
+    );
+    if (section === 'memory')
+      return frame(
+        <div className="h-full overflow-y-auto">
+          <MemoryBrowser data={data} />
+        </div>,
+        ['Memory'],
+        sectionToggle
+      );
     return frame(
       <>
         {newDoc}
@@ -215,10 +241,13 @@ export function DocsView({
         />
       </>,
       ['All docs'],
-      <Button size="sm" variant="ghost" onClick={() => setCreating(true)}>
-        <Plus className="size-3.5" />
-        New doc
-      </Button>
+      <>
+        {sectionToggle}
+        <Button size="sm" variant="ghost" onClick={() => setCreating(true)}>
+          <Plus className="size-3.5" />
+          New doc
+        </Button>
+      </>
     );
   }
   return (
