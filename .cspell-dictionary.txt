@@ -14,6 +14,7 @@ analysed
 anci
 APFS
 apikey
+Applebot
 appliable
 argmax
 arrayish
@@ -36,6 +37,7 @@ bceb
 behaviour
 behavioural
 bigmap
+Bingbot
 birpc
 blurple
 bodyless
@@ -279,6 +281,7 @@ linkify
 liveframe
 livefull
 liveiframe
+llms
 localdomain
 localh
 localho
@@ -577,6 +580,7 @@ unfetched
 urlmatch
 uudecode
 websocat
+wght
 überblick
 ulid
 ulids

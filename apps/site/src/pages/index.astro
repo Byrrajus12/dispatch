@@ -4,6 +4,7 @@ import AnyAgent from '../components/landing/AnyAgent.astro';
 import BoardNotChat from '../components/landing/BoardNotChat.astro';
 import Changelog from '../components/landing/Changelog.astro';
 import Closing from '../components/landing/Closing.astro';
+import Faq from '../components/landing/Faq.astro';
 import Footer from '../components/landing/Footer.astro';
 import Hero from '../components/landing/Hero.astro';
 import Memory from '../components/landing/Memory.astro';
@@ -11,10 +12,12 @@ import Mermaid from '../components/landing/Mermaid.astro';
 import Nav from '../components/landing/Nav.astro';
 import Principles from '../components/landing/Principles.astro';
 import TwoViews from '../components/landing/TwoViews.astro';
+import { homeFaq } from '../data/faq';
 import Landing from '../layouts/Landing.astro';
+import { faqPage } from '../lib/seo';
 ---
 
-<Landing>
+<Landing jsonLd={[faqPage(homeFaq)]}>
   <Nav />
   <main>
     <Hero />
@@ -26,6 +29,7 @@ import Landing from '../layouts/Landing.astro';
     <Memory />
     <Mermaid />
     <Changelog />
+    <Faq />
     <Closing />
   </main>
   <Footer />

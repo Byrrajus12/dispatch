@@ -3,6 +3,7 @@ import '@fontsource-variable/inter';
 import '@fontsource/jetbrains-mono/400.css';
 import '@fontsource/jetbrains-mono/500.css';
 import tokensCss from '@dispatch/tokens/tokens.css?raw';
+import { breadcrumbs, ldJson, organization, SITE, website } from '../lib/seo';
 import { themeAwareTokens } from '../lib/themeTokens';
 import '../styles/global.css';
 
@@ -18,11 +19,33 @@ interface Props {
   canonical?: string;
 }
 const { title, description, canonical } = Astro.props;
+// An alias page names the immutable page it shows; every other page is its
+// own canonical.
+const canonicalUrl = `${SITE}${canonical ?? Astro.url.pathname}`;
 // A page that sets its own title or description also sets its link preview.
 const ogTitle = title ?? 'Dispatch';
 const ogDescription =
   description ??
   'The shared board for your team’s coding agents: tasks, reviews and a merge queue in your repo.';
+// The page as a protocol document, filed under the site and its publisher.
+const ld = ldJson([
+    organization,
+    website,
+    {
+      '@type': 'TechArticle',
+      headline: ogTitle,
+      description: ogDescription,
+      url: canonicalUrl,
+      inLanguage: 'en',
+      publisher: { '@id': organization['@id'] },
+      isPartOf: { '@id': website['@id'] },
+    },
+    breadcrumbs([
+      ['Dispatch', '/'],
+      ['Protocol', '/protocol/'],
+      [ogTitle, canonical ?? Astro.url.pathname],
+    ]),
+  ]);
 ---
 
 <!doctype html>
@@ -30,20 +53,27 @@ const ogDescription =
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{title ?? 'Dispatch: the shared board for your team’s coding agents'}</title>
+    <title>{title ?? 'Dispatch: the shared task board for AI coding agents'}</title>
     <meta
       name="description"
       content={description ??
         'The shared board for your team’s coding agents: tasks, reviews and a merge queue, all in your repo.'}
     />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="canonical" href={canonicalUrl} />
+    <meta property="og:type" content="article" />
+    <meta property="og:site_name" content="Dispatch" />
+    <meta property="og:url" content={canonicalUrl} />
     <meta property="og:title" content={ogTitle} />
     <meta property="og:description" content={ogDescription} />
-    {
-      canonical !== undefined && (
-        <link rel="canonical" href={`https://dispatch.foo${canonical}`} />
-      )
-    }
+    <meta property="og:image" content={`${SITE}/og.png`} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={ogTitle} />
+    <meta name="twitter:description" content={ogDescription} />
+    <meta name="twitter:image" content={`${SITE}/og.png`} />
+    <script type="application/ld+json" set:html={ld}></script>
     <style is:inline set:html={tokens}></style>
     <!-- Applies a stored theme choice before first paint so the page never flashes the
          wrong palette. No choice stored means the OS setting applies. -->
