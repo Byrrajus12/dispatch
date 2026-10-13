@@ -73,7 +73,8 @@ describe('whichOnPath', () => {
   });
 
   it('finds a Windows install that only exists as name.exe', () => {
-    const dirs = [join('C:', 'a'), join('C:', 'Users', 'me', '.local', 'bin')];
+    // No drive letter: the host's delimiter is ':' off Windows.
+    const dirs = [join('Users', 'a'), join('Users', 'me', '.local', 'bin')];
     const exe = join(dirs[1], 'claude') + '.EXE';
     const exec = (p: string) => p === exe;
     expect(whichOnPath('claude', dirs.join(delimiter), exec, 'win32')).toBe(
