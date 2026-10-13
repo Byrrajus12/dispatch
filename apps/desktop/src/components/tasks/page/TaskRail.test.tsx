@@ -1,3 +1,4 @@
+import type { ApiClient, PlanRecord } from '@dispatch/client';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, mock, test } from 'bun:test';
 import type { ReactNode } from 'react';
@@ -7,6 +8,7 @@ import {
   type HostLog,
   newLog,
   PageProviders,
+  run,
   task,
 } from './pageHost.test-helper';
 
@@ -97,5 +99,101 @@ describe('TaskRail Linear fields', () => {
       id: 't-1',
       patch: { startDate: null },
     });
+  });
+});
+
+// An enrich plan for t-1 that stopped to ask the human something.
+function askingPlan(over: Partial<PlanRecord> = {}): PlanRecord {
+  return {
+    id: 'pl-1',
+    prompt: 'add detail',
+    plannerName: 'claude',
+    role: 'enrich',
+    state: 'ready',
+    messages: [],
+    questions: [
+      { id: 'q1', question: 'Which store?', options: ['SQLite', 'JSON'] },
+    ],
+    createdAt: '2026-10-12T00:00:00.000Z',
+    updatedAt: '2026-10-12T00:00:00.000Z',
+    ...over,
+  };
+}
+
+function mountAsking({
+  live,
+  plan = askingPlan(),
+  sendPlanMessage = () => Promise.resolve(plan),
+}: {
+  live: boolean;
+  plan?: PlanRecord;
+  sendPlanMessage?: ApiClient['sendPlanMessage'];
+}) {
+  render(
+    <PageProviders
+      host={fakeHost(newLog(), {
+        tasks: [task('t-1')],
+        // A live run puts the page in Run mode; none leaves it in Spec mode.
+        runs: live ? [run()] : [],
+        client: { sendPlanMessage },
+        project: { enrichTaskId: 't-1', enrichPlanRecord: plan },
+      })}
+    >
+      <TaskPage taskId="t-1" layout="peek" />
+    </PageProviders>
+  );
+}
+
+describe('TaskRail planner questions', () => {
+  test("outside Spec mode the rail carries the task's open planner questions", () => {
+    mountAsking({ live: true });
+    const section = document.querySelector<HTMLElement>(
+      '[data-slot=task-rail] [data-slot=planner-questions]'
+    );
+    expect(section?.textContent).toContain('Which store?');
+  });
+
+  test('answering in the rail sends the composed answers to the plan', async () => {
+    const sent: { id: string; message: string }[] = [];
+    mountAsking({
+      live: true,
+      sendPlanMessage: (id, message) => {
+        sent.push({ id, message });
+        return Promise.resolve(askingPlan());
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'SQLite' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Send answers/ }));
+      await Promise.resolve();
+    });
+    expect(sent).toEqual([
+      { id: 'pl-1', message: 'Q: Which store?\nA: SQLite' },
+    ]);
+  });
+
+  test('in Spec mode the questions stay in the spec, not twice in the rail', () => {
+    mountAsking({ live: false });
+    expect(
+      document.querySelector(
+        '[data-slot=task-rail] [data-slot=planner-questions]'
+      )
+    ).toBeNull();
+    expect(screen.getAllByText('Which store?')).toHaveLength(1);
+  });
+
+  test("another task's enrich questions never show on this rail", () => {
+    render(
+      <PageProviders
+        host={fakeHost(newLog(), {
+          tasks: [task('t-1'), task('t-2')],
+          runs: [run()],
+          project: { enrichTaskId: 't-2', enrichPlanRecord: askingPlan() },
+        })}
+      >
+        <TaskPage taskId="t-1" layout="peek" />
+      </PageProviders>
+    );
+    expect(document.querySelector('[data-slot=planner-questions]')).toBeNull();
   });
 });
