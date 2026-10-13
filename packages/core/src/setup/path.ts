@@ -113,16 +113,25 @@ function executable(path: string): boolean {
   }
 }
 
-/** First `binary` on `path`; works under Node, unlike Bun.which. */
+/** First `binary` on `path`; works under Node, unlike Bun.which. On Windows a bare
+ * name is also tried with each PATHEXT extension, since installers ship `claude.exe`
+ * or `codex.cmd` and nothing named plain `claude` (as `mergeDriverSetup`'s lookup does). */
 export function whichOnPath(
   binary: string,
   path: string,
-  isExecutable: (p: string) => boolean = executable
+  isExecutable: (p: string) => boolean = executable,
+  platform: NodeJS.Platform = process.platform
 ): string | null {
+  const exts =
+    platform === 'win32'
+      ? ['', ...(process.env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';')]
+      : [''];
   for (const dir of path.split(delimiter)) {
     if (dir === '') continue;
-    const candidate = join(dir, binary);
-    if (isExecutable(candidate)) return candidate;
+    for (const ext of exts) {
+      const candidate = join(dir, binary) + ext;
+      if (isExecutable(candidate)) return candidate;
+    }
   }
   return null;
 }
