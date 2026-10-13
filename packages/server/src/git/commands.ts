@@ -15,15 +15,6 @@ export type GitOutcome<T extends object = object> =
 // Pre-flight rejections: git never ran. Exported so tests can tell them apart.
 export const PATH_ESCAPE_ERROR = 'path escapes the repository root';
 export const INVALID_REF_ERROR = 'invalid ref: must not start with "-"';
-const CONFIRM_REQUIRED_ERROR =
-  'this operation is destructive and requires confirm: true';
-// `.`, `./` and `src/..` all name the whole checkout while reading like an
-// ordinary relative path — discard takes the paths the caller meant to name.
-export const WHOLE_TREE_DISCARD_ERROR =
-  'refusing a pathspec that targets the whole repository: discard needs specific paths';
-// Prefix only — the named paths follow.
-export const STAGED_DISCARD_PREFIX =
-  'unstage before discarding (discard restores the working tree, not the index): ';
 // Prefix only — marks a commit that landed but whose sha couldn't be confirmed.
 const COMMIT_SHA_UNRESOLVED_PREFIX =
   'commit succeeded but could not resolve its sha: ';
@@ -188,13 +179,6 @@ export class GitRepo {
       : rawPath;
   }
 
-  // True when a pathspec resolves to the repo root itself. safePath only rules
-  // out escapes *above* the root, so the root is otherwise an accepted target.
-  private isRepoRoot(rawPath: string): boolean {
-    const root = this.realRoot();
-    return relative(root, resolveRealParent(resolve(root, rawPath))) === '';
-  }
-
   private safePaths(paths: string[]): string[] | null {
     const safe: string[] = [];
     for (const path of paths) {
@@ -320,62 +304,6 @@ export class GitRepo {
       : { ok: false, stderr: commandErrorText(result) };
   }
 
-  // Staged deletions and renames, which `checkout -- <path>` cannot undo because
-  // it restores from the index rather than HEAD. Empty on an unborn branch.
-  private async stagedRemovals(
-    paths: string[]
-  ): Promise<{ ok: true; paths: string[] } | { ok: false; stderr: string }> {
-    const head = await this.runGit([
-      'rev-parse',
-      '--verify',
-      '--quiet',
-      'HEAD',
-    ]);
-    if (!head.ok) return { ok: true, paths: [] };
-    const diff = await this.runGit([
-      'diff',
-      '--cached',
-      '--name-only',
-      '-z',
-      '--diff-filter=DR',
-      'HEAD',
-      '--',
-      ...paths,
-    ]);
-    if (!diff.ok) return { ok: false, stderr: commandErrorText(diff) };
-    return { ok: true, paths: diff.stdout.split('\0').filter((p) => p !== '') };
-  }
-
-  // Restores tracked paths (found via `ls-files`, not checkout's locale-dependent
-  // error text) before deleting untracked ones, so a failed restore destroys nothing.
-  async discard(paths: string[], confirm: boolean): Promise<GitOutcome> {
-    if (!confirm) return { ok: false, stderr: CONFIRM_REQUIRED_ERROR };
-    const safe = this.safePaths(paths);
-    if (safe === null) return { ok: false, stderr: PATH_ESCAPE_ERROR };
-    if (safe.some((path) => this.isRepoRoot(path))) {
-      return { ok: false, stderr: WHOLE_TREE_DISCARD_ERROR };
-    }
-    const staged = await this.stagedRemovals(safe);
-    if (!staged.ok) return { ok: false, stderr: staged.stderr };
-    if (staged.paths.length > 0) {
-      return {
-        ok: false,
-        stderr: `${STAGED_DISCARD_PREFIX}${staged.paths.join(', ')}`,
-      };
-    }
-    const tracked = await this.runGit(['ls-files', '-z', '--', ...safe]);
-    if (!tracked.ok) return { ok: false, stderr: commandErrorText(tracked) };
-    const trackedPaths = tracked.stdout.split('\0').filter((p) => p !== '');
-    if (trackedPaths.length > 0) {
-      const checkout = await this.runGit(['checkout', '--', ...trackedPaths]);
-      if (!checkout.ok)
-        return { ok: false, stderr: commandErrorText(checkout) };
-    }
-    const clean = await this.runGit(['clean', '-f', '-d', '--', ...safe]);
-    if (!clean.ok) return { ok: false, stderr: commandErrorText(clean) };
-    return { ok: true };
-  }
-
   // `amend` takes no `confirm`, unlike discard/stashDrop/`branch -D`: it rewrites
   // HEAD but destroys nothing, leaving the replaced commit at HEAD@{1} in the reflog.
   //
@@ -404,41 +332,5 @@ export class GitRepo {
       };
     }
     return { ok: true, sha: head.stdout.trim() };
-  }
-
-  async createBranch(name: string, from?: string): Promise<GitOutcome> {
-    if (!isSafeRef(name) || (from !== undefined && !isSafeRef(from))) {
-      return { ok: false, stderr: INVALID_REF_ERROR };
-    }
-    const args = from !== undefined ? ['branch', name, from] : ['branch', name];
-    const result = await this.runGit(args);
-    return result.ok
-      ? { ok: true }
-      : { ok: false, stderr: commandErrorText(result) };
-  }
-
-  async pull(): Promise<GitOutcome> {
-    const result = await this.runGit(['pull']);
-    return result.ok
-      ? { ok: true }
-      : { ok: false, stderr: commandErrorText(result) };
-  }
-
-  // `setUpstream` records the tracking relationship; never force-pushes.
-  async push(opts: { setUpstream?: boolean } = {}): Promise<GitOutcome> {
-    const args =
-      opts.setUpstream === true ? ['push', '-u', 'origin', 'HEAD'] : ['push'];
-    const result = await this.runGit(args);
-    return result.ok
-      ? { ok: true }
-      : { ok: false, stderr: commandErrorText(result) };
-  }
-
-  async revert(sha: string): Promise<GitOutcome> {
-    if (!isSafeRef(sha)) return { ok: false, stderr: INVALID_REF_ERROR };
-    const result = await this.runGit(['revert', '--no-edit', sha]);
-    return result.ok
-      ? { ok: true }
-      : { ok: false, stderr: commandErrorText(result) };
   }
 }
