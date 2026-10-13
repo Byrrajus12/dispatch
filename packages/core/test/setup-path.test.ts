@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { delimiter, join } from 'node:path';
 
 import { whichOnPath, widenPath } from '../src/setup/path.js';
 
@@ -69,5 +70,17 @@ describe('whichOnPath', () => {
     const exec = (p: string) => p === '/b/claude' || p === '/c/claude';
     expect(whichOnPath('claude', '/a:/b:/c', exec)).toBe('/b/claude');
     expect(whichOnPath('codex', '/a:/b', exec)).toBeNull();
+  });
+
+  it('finds a Windows install that only exists as name.exe', () => {
+    const dirs = [join('C:', 'a'), join('C:', 'Users', 'me', '.local', 'bin')];
+    const exe = join(dirs[1], 'claude') + '.EXE';
+    const exec = (p: string) => p === exe;
+    expect(whichOnPath('claude', dirs.join(delimiter), exec, 'win32')).toBe(
+      exe
+    );
+    expect(
+      whichOnPath('claude', dirs.join(delimiter), exec, 'darwin')
+    ).toBeNull();
   });
 });
