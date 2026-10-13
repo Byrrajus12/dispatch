@@ -282,8 +282,6 @@ describe('the tier ladder', () => {
       await get('/api/terminals', lead),
       await get('/api/browser', lead),
       await post('/api/files/write', lead, { path: 'x', text: 'y' }),
-      await post('/api/git/stage', lead, { paths: ['README.md'] }),
-      await post('/api/git/push', lead),
     ]) {
       expect(res.status).toBe(403);
       // The refusal says what was missing and how to get it.
@@ -302,13 +300,10 @@ describe('the tier ladder', () => {
 
   it('request tier no longer changes the checkout, but still reads it', async () => {
     const agent = handle.tokens.agentToken;
-    expect((await post('/api/git/stage', agent, { paths: ['x'] })).status).toBe(
-      403
-    );
     expect(
-      (await post('/api/git/discard', agent, { paths: ['x'] })).status
+      (await post('/api/files/write', agent, { path: 'x', text: 'y' })).status
     ).toBe(403);
-    expect((await get('/api/git/status', agent)).status).toBe(200);
+    expect((await get('/api/files/tree', agent)).status).toBe(200);
   });
 
   it('nobody hands out more than they hold', async () => {

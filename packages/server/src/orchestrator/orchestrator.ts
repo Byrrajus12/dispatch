@@ -861,11 +861,9 @@ export class Orchestrator {
     }
   }
 
-  // Every live run's current claims, for GET /api/runs/claims and the epic
-  // scheduler. A terminal run holds no claims — see TERMINAL_RUN_STATES.
-  // `dispatchedBy` rides along so an agent reading GET /api/runs/claims (or a
-  // teammate's dialog) can see whose work a claim is, not just which run's —
-  // "src/api.ts is ada's" is something a person can act on.
+  // Every live run's current claims, for the epic scheduler. A terminal run
+  // holds no claims — see TERMINAL_RUN_STATES. `dispatchedBy` rides along so a
+  // teammate's dialog can see whose work a claim is, not just which run's.
   liveClaims(): {
     runId: string;
     taskId: string;

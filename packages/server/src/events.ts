@@ -76,9 +76,6 @@ export type ServerEvent =
   | { type: 'linear.changed'; summary: LinearSyncSummary }
   // A long Linear pass (an import) moved on; carries where it got to.
   | { type: 'linear.progress'; progress: LinearProgress }
-  // The repo's git state changed via an `/api/git/*` mutation — same
-  // "go refetch" contract as `run.changed`.
-  | { type: 'git.changed' }
   // A finding's verdict/ruling changed, or a review run raised a new one.
   | { type: 'finding.changed' }
   // A decision, hazard or constraint was added to the ledger.

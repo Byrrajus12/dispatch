@@ -29,7 +29,6 @@ describe("an A2A-origin run's token", () => {
       // Files and git.
       ['GET', '/api/files?path=README.md'],
       ['GET', '/api/files/tree'],
-      ['GET', '/api/git/status'],
       ['GET', '/api/branches'],
       // Notes, inbox, plans, drafts, search.
       ['GET', '/api/notes'],
@@ -133,7 +132,7 @@ describe("an A2A-origin run's token", () => {
   it("leaves an ordinary run's token at the request tier", async () => {
     const w = world();
     const run = await liveRun(w, w.app, 'ordinary');
-    for (const path of ['/api/runs', '/api/tasks', '/api/git/status']) {
+    for (const path of ['/api/runs', '/api/tasks', '/api/files/tree']) {
       expect((await call(w, run.runToken, 'GET', path)).status).toBe(200);
     }
   });

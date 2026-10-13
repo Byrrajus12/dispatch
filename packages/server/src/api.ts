@@ -138,7 +138,6 @@ import {
 } from './api/proposalFence.js';
 import { getQueue } from './api/queue.js';
 import { listTaskFindings, startTaskReview } from './api/review.js';
-import { listRunClaims } from './api/runClaims.js';
 import { createRunEvidence, createRunMutation } from './api/runEvidence.js';
 import { handleSetupRoute } from './api/setup.js';
 import { storageErrorResponse } from './api/storageErrors.js';
@@ -167,28 +166,12 @@ import { handleDocsRoute } from './docs/routes.js';
 import type { DocsService } from './docs/service.js';
 import type { EventBus } from './events.js';
 import type { FindingStorePort } from './findings.js';
-import {
-  COMMIT_SHA_UNRESOLVED_PREFIX,
-  CONFIRM_REQUIRED_ERROR,
-  INVALID_REF_ERROR,
-  INVALID_REMOTE_ERROR,
-  INVALID_STASH_INDEX_ERROR,
-  PATH_ESCAPE_ERROR,
-  resolveWorktreeFilePath,
-} from './git/commands.js';
-import type { GitOutcome } from './git/commands.js';
+import { PATH_ESCAPE_ERROR, resolveWorktreeFilePath } from './git/commands.js';
 import { GitRepo } from './git/commands.js';
-import { CommitMessageGenerator } from './git/commitMessage.js';
-import type { GitBranch } from './git/parse.js';
 import { expiredTokenMessage, sha256 } from './identity.js';
 import type { TokenIdentity, TokenRegistry } from './identity.js';
 import type { InboxKind } from './inbox.js';
 import { INBOX_KINDS, type InboxStore } from './inbox.js';
-import {
-  filterGroupsToLocalItems,
-  InboxClusterer,
-  InboxClusterSnapshotStore,
-} from './inboxClusterer.js';
 import {
   type JudgmentClient,
   lastJudgmentFailure,
@@ -197,7 +180,6 @@ import {
 import {
   InboxTriageSnapshotStore,
   splitCapture,
-  untriagedForClustering,
 } from './judgments/inboxTriage.js';
 import type { InboxTriageScheduler } from './judgments/inboxTriage.js';
 import {
@@ -400,7 +382,6 @@ export interface ApiContext {
   // The tracked-file list behind a task-subject impact query; memoized the
   // same way (see index.ts's wiring for its invalidation signal).
   trackedFilesCache: TrackedFilesCache;
-  inboxClusterer?: InboxClusterer;
   // The sentence-to-filter-clauses port behind POST /api/tasks/filter/ai;
   // absent means the Claude-backed one is built per request.
   aiTaskFilter?: AiTaskFilterPort;
@@ -431,12 +412,8 @@ export interface ApiContext {
   // shutdown has something to kill.
   browsers: BrowserRegistry;
   terminals: TerminalRegistry;
-  // The Git page's backend — see packages/server/src/git/commands.ts.
-  gitRepo: GitRepo;
   // The two tokens this daemon accepts — see DaemonTokens.
   tokens: DaemonTokens;
-  // Test-injection seam only, same as `inboxClusterer` above.
-  commitMessageGenerator?: CommitMessageGenerator;
   // Who this daemon acts as, resolved once at boot from git config.
   actorContext: ActorContext;
   // The file backend's board syncer (it commits task files to the main
@@ -1158,8 +1135,7 @@ async function reviewRun(
 //
 // Git pushes are covered whole — whether the daemon pushes at all, and to
 // which remote, repo and branch — because they run on the owner's own git
-// credentials, which nobody handed to Dispatch: the authority POST
-// /api/git/push already reserves. autoCommit pushes to origin's main branch
+// credentials, which nobody handed to Dispatch. autoCommit pushes to origin's main branch
 // and sync defaults to origin, so switching either on picks a destination
 // nobody chose; receipts.enabled is also the audit trail, which the tier whose
 // decisions it records must not switch off. Integrations that run on a
@@ -2640,360 +2616,6 @@ async function sendBackRun(
   }
 }
 
-// POST /api/branches/free-disk — reclaims a branch's worktree directory while
-// leaving its branch ref intact, so the work stays recoverable. Returns the
-// branch's refreshed BranchEntry rather than a bare 204 so the client can
-// re-render one row without re-fetching the whole list.
-async function freeBranchDisk(
-  req: Request,
-  ctx: ApiContext
-): Promise<Response> {
-  const parsed = await readJsonBody(req);
-  if (!parsed.ok) return parsed.response;
-  const body = parsed.value as { branch?: unknown };
-  if (typeof body.branch !== 'string' || body.branch === '') {
-    return errorResponse(400, 'branch is required');
-  }
-  return jsonResponse(await ctx.orchestrator.freeWorktreeDisk(body.branch));
-}
-
-// DELETE /api/branches/:branch — removes a branch ref and any worktree it
-// still has. The branch name is URL-encoded by the client because dispatch
-// branch names always contain `/`, so the whole remainder of the path after
-// `branches/` is rejoined and decoded rather than read as a single segment.
-// `?force=1` opts into deleting a branch whose commits have NOT landed on its
-// base — the one irreversible case, which the orchestrator refuses otherwise.
-async function deleteBranch(
-  ctx: ApiContext,
-  branch: string,
-  url: URL
-): Promise<Response> {
-  const force = url.searchParams.get('force') === '1';
-  await ctx.orchestrator.deleteBranch(branch, { force });
-  return jsonResponse({ ok: true });
-}
-
-// A `GitBranch` joined with whatever run claims that name, mirroring
-// Orchestrator.listBranches' join but for every branch, not just dispatch/*.
-interface GitBranchWithRun extends GitBranch {
-  runId?: string;
-  taskId?: string;
-  taskTitle?: string;
-}
-
-// GET /api/git/branches's core: every local/remote branch git knows about,
-// annotated with the run that owns it when one does.
-async function gitBranches(
-  ctx: ApiContext
-): Promise<GitOutcome<{ branches: GitBranchWithRun[] }>> {
-  const result = await ctx.gitRepo.branches();
-  if (!result.ok) return result;
-  const runByBranch = new Map(
-    ctx.orchestrator.list().map((r) => [r.branch, r])
-  );
-  const branches = result.branches.map((branch) => {
-    const run = runByBranch.get(branch.name);
-    return {
-      ...branch,
-      runId: run?.id,
-      taskId: run?.taskId,
-      taskTitle: run?.taskTitle,
-    };
-  });
-  return { ok: true, branches };
-}
-
-// GitRepo's own pre-flight rejections never touch git, so `alwaysBroadcast`
-// below must not fire for them even though they report `ok: false`.
-const PRE_FLIGHT_REJECTIONS: ReadonlySet<string> = new Set([
-  PATH_ESCAPE_ERROR,
-  INVALID_REF_ERROR,
-  INVALID_REMOTE_ERROR,
-  CONFIRM_REQUIRED_ERROR,
-  INVALID_STASH_INDEX_ERROR,
-]);
-
-// Shared by every `/api/git/*` mutation route; `alwaysBroadcast` covers ops
-// that can mutate the tree even on `ok: false` (a conflicted pull or discard).
-function gitMutationResponse(
-  ctx: ApiContext,
-  result: GitOutcome,
-  opts: { alwaysBroadcast?: boolean } = {}
-): Response {
-  const mutated =
-    result.ok ||
-    (opts.alwaysBroadcast === true &&
-      !PRE_FLIGHT_REJECTIONS.has(result.stderr));
-  if (mutated) ctx.events.broadcast({ type: 'git.changed' });
-  return jsonResponse(result);
-}
-
-// Shared shape check for the routes that take a list of file paths (stage,
-// unstage, discard) — requires a non-empty array of non-empty strings.
-function requirePathList(value: unknown): string[] | null {
-  if (
-    !Array.isArray(value) ||
-    value.length === 0 ||
-    !value.every((v) => typeof v === 'string' && v !== '')
-  ) {
-    return null;
-  }
-  return value as string[];
-}
-
-async function gitStage(req: Request, ctx: ApiContext): Promise<Response> {
-  const parsed = await readJsonBody(req);
-  if (!parsed.ok) return parsed.response;
-  const paths = requirePathList((parsed.value as { paths?: unknown }).paths);
-  if (paths === null)
-    return errorResponse(400, 'paths is required: a non-empty list of strings');
-  return gitMutationResponse(ctx, await ctx.gitRepo.stage(paths));
-}
-
-async function gitUnstage(req: Request, ctx: ApiContext): Promise<Response> {
-  const parsed = await readJsonBody(req);
-  if (!parsed.ok) return parsed.response;
-  const paths = requirePathList((parsed.value as { paths?: unknown }).paths);
-  if (paths === null)
-    return errorResponse(400, 'paths is required: a non-empty list of strings');
-  return gitMutationResponse(ctx, await ctx.gitRepo.unstage(paths));
-}
-
-// POST /api/git/discard — destructive (drops uncommitted work with no undo),
-// so it 400s outright unless the body carries `confirm: true`.
-async function gitDiscard(req: Request, ctx: ApiContext): Promise<Response> {
-  const parsed = await readJsonBody(req);
-  if (!parsed.ok) return parsed.response;
-  const body = parsed.value as { paths?: unknown; confirm?: unknown };
-  const paths = requirePathList(body.paths);
-  if (paths === null)
-    return errorResponse(400, 'paths is required: a non-empty list of strings');
-  if (body.confirm !== true) {
-    return errorResponse(
-      400,
-      'discard is destructive and requires confirm: true'
-    );
-  }
-  return gitMutationResponse(ctx, await ctx.gitRepo.discard(paths, true), {
-    alwaysBroadcast: true,
-  });
-}
-
-async function gitStageHunk(req: Request, ctx: ApiContext): Promise<Response> {
-  const parsed = await readJsonBody(req);
-  if (!parsed.ok) return parsed.response;
-  const patch = (parsed.value as { patch?: unknown }).patch;
-  if (typeof patch !== 'string' || patch === '') {
-    return errorResponse(400, 'patch is required');
-  }
-  return gitMutationResponse(ctx, await ctx.gitRepo.stageHunk(patch));
-}
-
-async function gitUnstageHunk(
-  req: Request,
-  ctx: ApiContext
-): Promise<Response> {
-  const parsed = await readJsonBody(req);
-  if (!parsed.ok) return parsed.response;
-  const patch = (parsed.value as { patch?: unknown }).patch;
-  if (typeof patch !== 'string' || patch === '') {
-    return errorResponse(400, 'patch is required');
-  }
-  return gitMutationResponse(ctx, await ctx.gitRepo.unstageHunk(patch));
-}
-
-async function gitCommit(req: Request, ctx: ApiContext): Promise<Response> {
-  const parsed = await readJsonBody(req);
-  if (!parsed.ok) return parsed.response;
-  const body = parsed.value as { message?: unknown; amend?: unknown };
-  if (typeof body.message !== 'string' || body.message.trim() === '') {
-    return errorResponse(400, 'message is required');
-  }
-  if (body.amend !== undefined && typeof body.amend !== 'boolean') {
-    return errorResponse(400, 'amend must be a boolean');
-  }
-  const result = await ctx.gitRepo.commit({
-    message: body.message,
-    amend: body.amend === true,
-  });
-  // The commit itself can still have landed even when this reports `ok:
-  // false` (rev-parse failed to confirm the sha) — broadcast that case too.
-  const shaUnresolved =
-    !result.ok && result.stderr.startsWith(COMMIT_SHA_UNRESOLVED_PREFIX);
-  return gitMutationResponse(ctx, result, { alwaysBroadcast: shaUnresolved });
-}
-
-// POST /api/git/commit-message — the agent-focused route. 400s when nothing
-// is staged; 502s a model failure rather than a generic 500.
-async function gitCommitMessage(
-  _req: Request,
-  ctx: ApiContext
-): Promise<Response> {
-  const diff = await ctx.gitRepo.diff({ staged: true });
-  if (!diff.ok) return errorResponse(409, diff.stderr);
-  if (diff.patch.trim() === '') {
-    return errorResponse(400, 'no staged changes to summarize');
-  }
-  const generator =
-    ctx.commitMessageGenerator ?? new CommitMessageGenerator(ctx.rootDir);
-  try {
-    const message = await generator.generate(diff.patch);
-    return jsonResponse({ message });
-  } catch (err) {
-    return errorResponse(502, (err as Error).message);
-  }
-}
-
-async function gitCheckout(req: Request, ctx: ApiContext): Promise<Response> {
-  const parsed = await readJsonBody(req);
-  if (!parsed.ok) return parsed.response;
-  const branch = (parsed.value as { branch?: unknown }).branch;
-  if (typeof branch !== 'string' || branch === '') {
-    return errorResponse(400, 'branch is required');
-  }
-  return gitMutationResponse(ctx, await ctx.gitRepo.checkout(branch));
-}
-
-async function gitCreateBranch(
-  req: Request,
-  ctx: ApiContext
-): Promise<Response> {
-  const parsed = await readJsonBody(req);
-  if (!parsed.ok) return parsed.response;
-  const body = parsed.value as { name?: unknown; from?: unknown };
-  if (typeof body.name !== 'string' || body.name === '') {
-    return errorResponse(400, 'name is required');
-  }
-  if (body.from !== undefined && typeof body.from !== 'string') {
-    return errorResponse(400, 'from must be a string');
-  }
-  return gitMutationResponse(
-    ctx,
-    await ctx.gitRepo.createBranch(body.name, body.from)
-  );
-}
-
-// DELETE /api/git/branch/:name — `force: true` (git's `-D`) 400s unless the
-// body also carries `confirm: true`; a plain `-d` delete needs no confirm.
-async function gitDeleteBranch(
-  req: Request,
-  ctx: ApiContext,
-  name: string
-): Promise<Response> {
-  const parsed = await readJsonBodyOptional(req);
-  if (!parsed.ok) return parsed.response;
-  const body = parsed.value as { force?: unknown; confirm?: unknown };
-  const force = body.force === true;
-  if (force && body.confirm !== true) {
-    return errorResponse(
-      400,
-      'deleting an unmerged branch is destructive and requires confirm: true'
-    );
-  }
-  return gitMutationResponse(
-    ctx,
-    await ctx.gitRepo.deleteBranch(name, force, body.confirm === true)
-  );
-}
-
-async function gitStashPush(req: Request, ctx: ApiContext): Promise<Response> {
-  const parsed = await readJsonBodyOptional(req);
-  if (!parsed.ok) return parsed.response;
-  const message = (parsed.value as { message?: unknown }).message;
-  if (message !== undefined && typeof message !== 'string') {
-    return errorResponse(400, 'message must be a string');
-  }
-  return gitMutationResponse(ctx, await ctx.gitRepo.stashPush(message));
-}
-
-function requireStashIndex(value: unknown): number | null {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0
-    ? value
-    : null;
-}
-
-async function gitStashPop(req: Request, ctx: ApiContext): Promise<Response> {
-  const parsed = await readJsonBody(req);
-  if (!parsed.ok) return parsed.response;
-  const index = requireStashIndex((parsed.value as { index?: unknown }).index);
-  if (index === null)
-    return errorResponse(400, 'index is required: a non-negative integer');
-  return gitMutationResponse(ctx, await ctx.gitRepo.stashPop(index), {
-    alwaysBroadcast: true,
-  });
-}
-
-// POST /api/git/stash/drop — destructive (the stash entry is gone for good),
-// so it 400s outright unless the body carries `confirm: true`.
-async function gitStashDrop(req: Request, ctx: ApiContext): Promise<Response> {
-  const parsed = await readJsonBody(req);
-  if (!parsed.ok) return parsed.response;
-  const body = parsed.value as { index?: unknown; confirm?: unknown };
-  const index = requireStashIndex(body.index);
-  if (index === null)
-    return errorResponse(400, 'index is required: a non-negative integer');
-  if (body.confirm !== true) {
-    return errorResponse(
-      400,
-      'dropping a stash is destructive and requires confirm: true'
-    );
-  }
-  return gitMutationResponse(ctx, await ctx.gitRepo.stashDrop(index, true));
-}
-
-async function gitFetch(req: Request, ctx: ApiContext): Promise<Response> {
-  const parsed = await readJsonBodyOptional(req);
-  if (!parsed.ok) return parsed.response;
-  const remote = (parsed.value as { remote?: unknown }).remote;
-  if (remote !== undefined && typeof remote !== 'string') {
-    return errorResponse(400, 'remote must be a string');
-  }
-  return gitMutationResponse(ctx, await ctx.gitRepo.fetch(remote));
-}
-
-async function gitPush(req: Request, ctx: ApiContext): Promise<Response> {
-  const parsed = await readJsonBodyOptional(req);
-  if (!parsed.ok) return parsed.response;
-  const setUpstream = (parsed.value as { setUpstream?: unknown }).setUpstream;
-  if (setUpstream !== undefined && typeof setUpstream !== 'boolean') {
-    return errorResponse(400, 'setUpstream must be a boolean');
-  }
-  return gitMutationResponse(
-    ctx,
-    await ctx.gitRepo.push({ setUpstream: setUpstream === true })
-  );
-}
-
-async function gitCherryPick(req: Request, ctx: ApiContext): Promise<Response> {
-  const parsed = await readJsonBody(req);
-  if (!parsed.ok) return parsed.response;
-  const sha = (parsed.value as { sha?: unknown }).sha;
-  if (typeof sha !== 'string' || sha === '')
-    return errorResponse(400, 'sha is required');
-  return gitMutationResponse(ctx, await ctx.gitRepo.cherryPick(sha), {
-    alwaysBroadcast: true,
-  });
-}
-
-async function gitRevert(req: Request, ctx: ApiContext): Promise<Response> {
-  const parsed = await readJsonBody(req);
-  if (!parsed.ok) return parsed.response;
-  const sha = (parsed.value as { sha?: unknown }).sha;
-  if (typeof sha !== 'string' || sha === '')
-    return errorResponse(400, 'sha is required');
-  return gitMutationResponse(ctx, await ctx.gitRepo.revert(sha), {
-    alwaysBroadcast: true,
-  });
-}
-
-// Absent -> undefined; a valid non-negative integer -> that number;
-// otherwise -> null so the route can 400 instead of passing NaN to git.
-function parseCountParam(raw: string | null): number | undefined | null {
-  if (raw === null) return undefined;
-  const n = Number(raw);
-  return Number.isInteger(n) && n >= 0 ? n : null;
-}
-
 // GET /api/runs/:id/pr — the run's GitHub PR status + conversation, read live
 // via gh (see PrManager.getPrDetail). 409s a run with no open PR.
 async function getPr(
@@ -4239,41 +3861,6 @@ async function addInbox(req: Request, ctx: ApiContext): Promise<Response> {
   return jsonResponse(created, 201);
 }
 
-// PATCH /api/inbox/:id — retype an item, fix its wording, or toggle it done.
-async function updateInbox(
-  req: Request,
-  ctx: ApiContext,
-  id: string
-): Promise<Response> {
-  const parsed = await readJsonBody(req);
-  if (!parsed.ok) return parsed.response;
-  const body = parsed.value as {
-    kind?: unknown;
-    text?: unknown;
-    done?: unknown;
-  };
-  if (
-    typeof body.kind === 'string' &&
-    !(INBOX_KINDS as readonly string[]).includes(body.kind)
-  ) {
-    return errorResponse(400, `unknown inbox kind: ${body.kind}`);
-  }
-  try {
-    const item = ctx.inboxStore.update(id, {
-      kind:
-        typeof body.kind === 'string' ? (body.kind as InboxKind) : undefined,
-      text: typeof body.text === 'string' ? body.text : undefined,
-      done: typeof body.done === 'boolean' ? body.done : undefined,
-    });
-    ctx.events.broadcast({ type: 'inbox.changed' });
-    // New words, new reading — the snapshot is keyed by text hash.
-    if (typeof body.text === 'string') ctx.inboxTriage.request();
-    return jsonResponse(item);
-  } catch (err) {
-    return errorResponse(404, (err as Error).message);
-  }
-}
-
 // POST /api/inbox/dismiss — drop items outright. A dismissed thought should not linger in an
 // archive; the point of the inbox is that most of what lands in it is noise.
 async function dismissInbox(req: Request, ctx: ApiContext): Promise<Response> {
@@ -4410,45 +3997,6 @@ function buildNoteEnrichPrompt(note: Note): string {
     .join('\n\n');
 }
 
-/**
- * POST /api/inbox/cluster — ask a model which captured items are one piece of
- * work. Always 200 with `error` set, since it runs unattended in the background.
- */
-async function clusterInbox(ctx: ApiContext): Promise<Response> {
-  const clusterer = ctx.inboxClusterer ?? new InboxClusterer(ctx.rootDir);
-  try {
-    // listAll(), not list(): clustering has to see every teammate's captures, not just this
-    // daemon's own actor file, or two people describing the same work would never group. But
-    // the response has to stay local: display (BrainDumpView) and convert both resolve ids
-    // against list() only, so a group carrying a teammate's item id would overstate its count,
-    // seed selection with an id the UI can't resolve, and fail convert outright. Filtering here
-    // — rather than widening display/convert to cross-file reads — also keeps a teammate's
-    // private capture text from ever reaching the local UI or a future model call over it.
-    const localOpen = ctx.inboxStore.list().filter((i) => !i.done);
-    const localIds = new Set(localOpen.map((i) => i.id));
-    const all = ctx.inboxStore.listAll();
-    // Triage first: an item with a confident epic has its home and never
-    // reaches the clusterer, so the model call below only sees the rest. The
-    // background scheduler owns the pass; waiting on it here keeps one writer
-    // on the snapshot file.
-    ctx.inboxTriage.request();
-    await ctx.inboxTriage.idle();
-    const triage = new InboxTriageSnapshotStore(ctx.rootDir).load();
-    const groups = await clusterer.cluster(untriagedForClustering(all, triage));
-    const localGroups = filterGroupsToLocalItems(groups, localIds);
-    // Persisted so a page load renders this pass instead of billing a new one;
-    // a failed pass below deliberately leaves the previous snapshot standing.
-    new InboxClusterSnapshotStore(ctx.rootDir).save({
-      groups: localGroups,
-      itemIds: [...localIds],
-      updatedAt: new Date().toISOString(),
-    });
-    return jsonResponse({ groups: localGroups, error: null });
-  } catch (err) {
-    return jsonResponse({ groups: [], error: (err as Error).message });
-  }
-}
-
 // A stored JSON object with `readiness` appended as its last key, which is
 // exactly where serializing `{ ...doc, readiness }` would put it.
 function withReadiness(
@@ -4500,18 +4048,6 @@ async function getReadyTasks(
 function cachedReadiness(ctx: ApiContext): Record<string, unknown> {
   if (ctx.judgments === null) return {};
   return new ReadinessStore(ctx.rootDir).loadFresh((id) => ctx.cache.get(id));
-}
-
-// GET /api/inbox/clusters — the persisted result of the last clustering pass,
-// or null when none has ever run (or the cache was corrupt).
-function getInboxClusters(ctx: ApiContext): Response {
-  return jsonResponse(new InboxClusterSnapshotStore(ctx.rootDir).load());
-}
-
-// GET /api/inbox/triage — the last triage pass (kind, epic, duplicates per
-// item), or null when none has run or no judgment client is configured.
-function getInboxTriage(ctx: ApiContext): Response {
-  return jsonResponse(new InboxTriageSnapshotStore(ctx.rootDir).load());
 }
 
 /**
@@ -4873,36 +4409,6 @@ const ELEVATED_ROUTES: ReadonlyArray<{
   { method: 'POST', segments: ['terminals', '*', 'input'], tier: 'operator' },
   { method: 'POST', segments: ['terminals', '*', 'resize'], tier: 'operator' },
   { method: 'POST', segments: ['terminals', '*', 'close'], tier: 'operator' },
-  // Git operations that change the operator's own checkout or push with their
-  // credentials. On a shared daemon these would otherwise let any invited
-  // teammate discard someone's uncommitted work or push to their remote.
-  // Reads, `fetch` (refs only, never the working tree) and drafting a commit
-  // message stay on the request tier. Only the desktop app calls these — the
-  // CLI and the agents' MCP tools never do — and the app holds the app token.
-  ...(
-    [
-      'stage',
-      'unstage',
-      'stage-hunk',
-      'unstage-hunk',
-      'discard',
-      'commit',
-      'checkout',
-      'branch',
-      'stash',
-      'pull',
-      'push',
-      'cherry-pick',
-      'revert',
-    ] as const
-  ).map((op) => ({
-    method: 'POST',
-    segments: ['git', op],
-    tier: 'operator' as const,
-  })),
-  { method: 'DELETE', segments: ['git', 'branch', '*'], tier: 'operator' },
-  { method: 'POST', segments: ['git', 'stash', 'pop'], tier: 'operator' },
-  { method: 'POST', segments: ['git', 'stash', 'drop'], tier: 'operator' },
 ];
 
 // A task id as the board mints them (`t-` or `e-` and a hex tag), with room
@@ -6059,13 +5565,6 @@ export async function handleApi(
           ctx.orchestrator.decorateRunsWithPushed(ctx.orchestrator.list())
         );
       }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'claims' &&
-        method === 'GET'
-      ) {
-        return listRunClaims(ctx);
-      }
       if (segments.length === 2 && method === 'GET') {
         ctx.orchestrator.backfillLastSteps();
         const result = ctx.orchestrator.getRun(segments[1]);
@@ -6633,211 +6132,6 @@ export async function handleApi(
       if (segments.length === 1 && method === 'GET') {
         return jsonResponse(await ctx.orchestrator.listBranches());
       }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'free-disk' &&
-        method === 'POST'
-      ) {
-        return await freeBranchDisk(req, ctx);
-      }
-      // Everything after `branches/` is one branch name that happens to
-      // contain slashes — `segments` already split it apart, so rejoin it and
-      // decode each part back to its original form.
-      if (segments.length >= 2 && method === 'DELETE') {
-        const branch = segments
-          .slice(1)
-          .map((part) => decodeURIComponent(part))
-          .join('/');
-        return await deleteBranch(ctx, branch, url);
-      }
-    }
-
-    // The Git page — status/log/branches/diff reads plus staging, committing,
-    // checkout, stash, and remote mutations against the main checkout.
-    if (segments[0] === 'git') {
-      if (
-        segments.length === 2 &&
-        segments[1] === 'status' &&
-        method === 'GET'
-      ) {
-        return jsonResponse(await ctx.gitRepo.status());
-      }
-      if (segments.length === 2 && segments[1] === 'log' && method === 'GET') {
-        const limit = parseCountParam(url.searchParams.get('limit'));
-        if (limit === null)
-          return errorResponse(400, 'limit must be a non-negative integer');
-        const skip = parseCountParam(url.searchParams.get('skip'));
-        if (skip === null)
-          return errorResponse(400, 'skip must be a non-negative integer');
-        return jsonResponse(
-          await ctx.gitRepo.log({
-            ref: url.searchParams.get('ref') ?? undefined,
-            limit,
-            skip,
-          })
-        );
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'branches' &&
-        method === 'GET'
-      ) {
-        return jsonResponse(await gitBranches(ctx));
-      }
-      if (segments.length === 2 && segments[1] === 'diff' && method === 'GET') {
-        return jsonResponse(
-          await ctx.gitRepo.diff({
-            staged: url.searchParams.get('staged') === '1',
-            path: url.searchParams.get('path') ?? undefined,
-          })
-        );
-      }
-      if (
-        segments.length === 3 &&
-        segments[1] === 'commit' &&
-        method === 'GET'
-      ) {
-        return jsonResponse(
-          await ctx.gitRepo.diffCommit(decodeURIComponent(segments[2]))
-        );
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'stage' &&
-        method === 'POST'
-      ) {
-        return await gitStage(req, ctx);
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'unstage' &&
-        method === 'POST'
-      ) {
-        return await gitUnstage(req, ctx);
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'stage-hunk' &&
-        method === 'POST'
-      ) {
-        return await gitStageHunk(req, ctx);
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'unstage-hunk' &&
-        method === 'POST'
-      ) {
-        return await gitUnstageHunk(req, ctx);
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'discard' &&
-        method === 'POST'
-      ) {
-        return await gitDiscard(req, ctx);
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'commit' &&
-        method === 'POST'
-      ) {
-        return await gitCommit(req, ctx);
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'commit-message' &&
-        method === 'POST'
-      ) {
-        return await gitCommitMessage(req, ctx);
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'checkout' &&
-        method === 'POST'
-      ) {
-        return await gitCheckout(req, ctx);
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'branch' &&
-        method === 'POST'
-      ) {
-        return await gitCreateBranch(req, ctx);
-      }
-      if (
-        segments.length === 3 &&
-        segments[1] === 'branch' &&
-        method === 'DELETE'
-      ) {
-        return await gitDeleteBranch(req, ctx, decodeURIComponent(segments[2]));
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'stash' &&
-        method === 'POST'
-      ) {
-        return await gitStashPush(req, ctx);
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'stash' &&
-        method === 'GET'
-      ) {
-        return jsonResponse(await ctx.gitRepo.stashList());
-      }
-      if (
-        segments.length === 3 &&
-        segments[1] === 'stash' &&
-        segments[2] === 'pop' &&
-        method === 'POST'
-      ) {
-        return await gitStashPop(req, ctx);
-      }
-      if (
-        segments.length === 3 &&
-        segments[1] === 'stash' &&
-        segments[2] === 'drop' &&
-        method === 'POST'
-      ) {
-        return await gitStashDrop(req, ctx);
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'fetch' &&
-        method === 'POST'
-      ) {
-        return await gitFetch(req, ctx);
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'pull' &&
-        method === 'POST'
-      ) {
-        return gitMutationResponse(ctx, await ctx.gitRepo.pull(), {
-          alwaysBroadcast: true,
-        });
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'push' &&
-        method === 'POST'
-      ) {
-        return await gitPush(req, ctx);
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'cherry-pick' &&
-        method === 'POST'
-      ) {
-        return await gitCherryPick(req, ctx);
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'revert' &&
-        method === 'POST'
-      ) {
-        return await gitRevert(req, ctx);
-      }
     }
 
     if (segments[0] === 'notes') {
@@ -6889,30 +6183,6 @@ export async function handleApi(
         method === 'POST'
       ) {
         return await dismissInbox(req, ctx);
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'cluster' &&
-        method === 'POST'
-      ) {
-        return await clusterInbox(ctx);
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'clusters' &&
-        method === 'GET'
-      ) {
-        return getInboxClusters(ctx);
-      }
-      if (
-        segments.length === 2 &&
-        segments[1] === 'triage' &&
-        method === 'GET'
-      ) {
-        return getInboxTriage(ctx);
-      }
-      if (segments.length === 2 && method === 'PATCH') {
-        return await updateInbox(req, ctx, segments[1]);
       }
     }
 
