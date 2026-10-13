@@ -20,6 +20,9 @@ tasks:
       # The protocol and A2A extension pages render the frozen DMP versions,
       # read by path at build time (no package dependency on the spec).
       - '/packages/protocol-spec/versions/**/*'
+      # src/lib/seo.ts reads the shipping app version for llms.txt and the
+      # SoftwareApplication structured data.
+      - '/apps/desktop/src-tauri/tauri.conf.json'
     outputs:
       - 'dist'
 
