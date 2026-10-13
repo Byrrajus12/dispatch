@@ -1,8 +1,13 @@
 import { providerById } from '@dispatch-foo/core/browser';
-import type { OverseerAction, OverseerApproval } from '@dispatch/client';
+import type {
+  OverseerAction,
+  OverseerApproval,
+  OverseerAttachment,
+} from '@dispatch/client';
 import {
   Check,
   CircleAlert,
+  FileIcon,
   Plus,
   Search,
   Shield,
@@ -67,6 +72,99 @@ const STARTERS: readonly { label: string; text: string }[] = [
 /** The models the opening composer offers, in `PromptBar`'s shape. */
 const COMPOSER_MODELS = MODELS.map((m) => ({ id: m.id, label: m.label }));
 
+// Object URLs for attached images, by upload path. A path names exactly one
+// upload, so a URL made once serves every bubble and composer that shows it.
+const previewUrls = new Map<string, Promise<string>>();
+
+function isImage(attachment: OverseerAttachment): boolean {
+  return attachment.mimeType.startsWith('image/');
+}
+
+/**
+ * Preview URLs for the images among `attachments`, keyed by path; a file that
+ * is not an image, or whose bytes have not arrived, has none. Shared by the
+ * composer's pending row and the transcript's bubbles.
+ */
+export function useAttachmentPreviews(
+  attachments: readonly OverseerAttachment[],
+  fetchAttachment: (attachment: OverseerAttachment) => Promise<Blob>
+): Record<string, string> {
+  const [urls, setUrls] = useState<Record<string, string>>({});
+  const paths = attachments.filter(isImage).map((a) => a.path);
+  // One string for the effect to key on: the same paths need no new fetch.
+  const key = paths.join('|');
+  useEffect(() => {
+    let live = true;
+    for (const attachment of attachments.filter(isImage)) {
+      let url = previewUrls.get(attachment.path);
+      if (url === undefined) {
+        url = fetchAttachment(attachment).then((blob) =>
+          URL.createObjectURL(blob)
+        );
+        // A failed fetch may work later (a daemon restart), so it is not kept.
+        url.catch(() => previewUrls.delete(attachment.path));
+        previewUrls.set(attachment.path, url);
+      }
+      void url.then(
+        (resolved) => {
+          if (!live) return;
+          setUrls((current) =>
+            current[attachment.path] === resolved
+              ? current
+              : { ...current, [attachment.path]: resolved }
+          );
+        },
+        () => {}
+      );
+    }
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, fetchAttachment]);
+  return urls;
+}
+
+/** The files on a line you sent: images as thumbnails that open full size, the rest as chips. */
+function SentAttachments({
+  attachments,
+  fetchAttachment,
+}: {
+  attachments: OverseerAttachment[];
+  fetchAttachment: (attachment: OverseerAttachment) => Promise<Blob>;
+}) {
+  const urls = useAttachmentPreviews(attachments, fetchAttachment);
+  return (
+    <ul
+      aria-label="Attachments"
+      className="flex max-w-[85%] flex-wrap justify-end gap-1.5 self-end"
+    >
+      {attachments.map((attachment) => {
+        const url = urls[attachment.path];
+        return (
+          <li key={attachment.path}>
+            {isImage(attachment) && url !== undefined ? (
+              <a href={url} target="_blank" rel="noreferrer">
+                <img
+                  src={url}
+                  alt={attachment.name}
+                  title={attachment.name}
+                  className="rounded-card shadow-hairline max-h-48 max-w-64 object-contain"
+                />
+              </a>
+            ) : (
+              <span className="bg-surface-secondary shadow-hairline rounded-pill text-muted-foreground flex items-center gap-1 px-2 py-0.5 text-[12px]">
+                <FileIcon aria-hidden className="size-3" />
+                <span className="max-w-48 truncate">{attachment.name}</span>
+              </span>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 /** An inline failure line — a send that dispatchd refused, a decision that threw. */
 function ErrorLine({ children }: { children: ReactNode }) {
   return (
@@ -85,23 +183,39 @@ function OverseerMessageBubble({
   text,
   at,
   plain = false,
+  attachments = [],
+  fetchAttachment,
 }: {
   role: 'user' | 'assistant';
   text: string;
   at: string;
   /** Two views: a pill for you, bare text for the agent, the time on hover. */
   plain?: boolean;
+  attachments?: OverseerAttachment[];
+  fetchAttachment: (attachment: OverseerAttachment) => Promise<Blob>;
 }) {
   const fromUser = role === 'user';
+  const files =
+    attachments.length > 0 ? (
+      <SentAttachments
+        attachments={attachments}
+        fetchAttachment={fetchAttachment}
+      />
+    ) : null;
   if (plain) {
     const when = new Date(at).toLocaleString();
     return fromUser ? (
-      <p
-        title={when}
-        className="bg-surface-secondary shadow-hairline rounded-card font-book max-w-[85%] self-end px-3 py-1.5 text-[13px] whitespace-pre-wrap"
-      >
-        {text}
-      </p>
+      <>
+        {files}
+        {text.trim() !== '' && (
+          <p
+            title={when}
+            className="bg-surface-secondary shadow-hairline rounded-card font-book max-w-[85%] self-end px-3 py-1.5 text-[13px] whitespace-pre-wrap"
+          >
+            {text}
+          </p>
+        )}
+      </>
     ) : (
       <div title={when} className="max-w-full self-stretch px-1">
         <Markdown content={text} className="text-[13px]" />
@@ -122,7 +236,12 @@ function OverseerMessageBubble({
         <span className="font-book">{formatRelativeTimeFromIso(at)}</span>
       </div>
       {fromUser ? (
-        <p className="font-book text-[13px] whitespace-pre-wrap">{text}</p>
+        <>
+          {files}
+          {text.trim() !== '' && (
+            <p className="font-book text-[13px] whitespace-pre-wrap">{text}</p>
+          )}
+        </>
       ) : (
         <Markdown content={text} className="text-[13px]" />
       )}
@@ -621,6 +740,23 @@ export function OverseerChat({
   // of them is ever on screen, and `conversationId` decides which.
   const { sending, sendError } = overseer;
 
+  // Pasted, dropped or picked files waiting on the next send — the session's,
+  // like the draft, and shown in whichever composer is on screen.
+  const pendingPreviews = useAttachmentPreviews(
+    overseer.attachments,
+    overseer.fetchAttachment
+  );
+  const attachProps = {
+    onAttachFiles: (files: File[]) => void overseer.attachFiles(files),
+    attachments: overseer.attachments.map((a) => ({
+      id: a.path,
+      name: a.name,
+      previewUrl: pendingPreviews[a.path],
+    })),
+    onRemoveAttachment: overseer.removeAttachment,
+    attaching: overseer.attaching,
+  };
+
   // Both are the session's, for the same reason: approving runs the real
   // mutation before the call resolves, and every surface that renders a
   // confirm card is unmounted by an ordinary tab flip, collapse or navigation.
@@ -721,8 +857,10 @@ export function OverseerChat({
    */
   function submitDraft() {
     const text = draft.trim();
+    // A pasted screenshot alone is a message; an upload still running is not.
+    const empty = text === '' && overseer.attachments.length === 0;
     // A durable conversation takes a message mid-turn: the daemon queues it.
-    if (text === '' || sending || (busy && !durable)) return;
+    if (empty || sending || overseer.attaching || (busy && !durable)) return;
     // The reader asked for a reply, so their message and the answer should be
     // in view even if they had scrolled up to read.
     followRef.current = true;
@@ -758,6 +896,8 @@ export function OverseerChat({
             text={item.text}
             at={item.at}
             plain={durable}
+            attachments={item.attachments}
+            fetchAttachment={overseer.fetchAttachment}
           />
         );
       case 'tool':
@@ -934,6 +1074,7 @@ export function OverseerChat({
           disabled={disabled || sending}
           placeholder={placeholder ?? "What's going on with my agents?"}
           ariaLabel="Overseer opening question"
+          {...attachProps}
           models={COMPOSER_MODELS}
           modelId={overseer.model}
           onModelChange={overseer.setModel}
@@ -1080,6 +1221,7 @@ export function OverseerChat({
             'Ask about runs, tasks, the queue — or ask it to act…'
           }
           ariaLabel="Follow-up message"
+          {...attachProps}
           // Only what the draft is typing, so a picked command closes the list.
           commands={suggestions.map((command) => ({
             id: command.name,

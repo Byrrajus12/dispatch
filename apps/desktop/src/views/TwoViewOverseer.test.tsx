@@ -56,6 +56,11 @@ function session(over: Partial<OverseerSession>): OverseerSession {
     open: () => {},
     draft: '',
     setDraft: () => {},
+    attachments: [],
+    attachFiles: () => Promise.resolve(),
+    removeAttachment: () => {},
+    attaching: false,
+    fetchAttachment: () => Promise.resolve(new Blob()),
     ...over,
   };
 }

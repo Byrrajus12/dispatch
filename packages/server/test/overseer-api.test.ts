@@ -8,7 +8,10 @@ import { join } from 'node:path';
 import type { ServerHandle } from '../src/index.js';
 import { startServer } from '../src/index.js';
 import { FakeExecutor } from '../src/orchestrator/executors/fake.js';
-import type { OverseerRecord } from '../src/orchestrator/overseer.js';
+import type {
+  OverseerAttachment,
+  OverseerRecord,
+} from '../src/orchestrator/overseer.js';
 import type {
   OverseerBackend,
   OverseerToolset,
@@ -1043,5 +1046,129 @@ describe('who an overseer conversation belongs to', () => {
       { method: 'DELETE' }
     );
     expect(await json(revoked)).toEqual({ revoked: false });
+  });
+});
+
+// Records each turn's prompt and the attachments the manager handed it, and
+// answers at once.
+class RecordingOverseer implements OverseerBackend {
+  readonly turns: {
+    prompt: string;
+    attachments: OverseerTurnOptions['attachments'];
+  }[] = [];
+  start(
+    prompt: string,
+    _toolset: OverseerToolset,
+    options: OverseerTurnOptions = {}
+  ): Promise<OverseerTurn> {
+    this.turns.push({ prompt, attachments: options.attachments });
+    return Promise.resolve({ reply: 'seen it' });
+  }
+  sendMessage(
+    _sessionId: string | undefined,
+    message: string,
+    toolset: OverseerToolset,
+    options: OverseerTurnOptions = {}
+  ): Promise<OverseerTurn> {
+    return this.start(message, toolset, options);
+  }
+}
+
+describe('overseer attachments', () => {
+  async function upload(
+    name: string,
+    body: string,
+    type = 'image/png'
+  ): Promise<Response> {
+    const form = new FormData();
+    form.append('files', new File([body], name, { type }));
+    return fetch(`${baseUrl}/api/overseer/attachments`, {
+      method: 'POST',
+      body: form,
+    });
+  }
+
+  it('uploads a pasted image, serves it back, and hands it to the turn', async () => {
+    const backend = new RecordingOverseer();
+    await startWithOverseer(backend);
+
+    const res = await upload('image.png', 'png-bytes');
+    expect(res.status).toBe(200);
+    const { attachments } = (await json(res)) as {
+      attachments: OverseerAttachment[];
+    };
+    expect(attachments).toEqual([
+      expect.objectContaining({ name: 'image.png', mimeType: 'image/png' }),
+    ]);
+    const [shot] = attachments;
+    expect(shot.path).toMatch(
+      /^\.dispatch\/attachments\/overseer\/[0-9a-f]{12}\/image\.png$/
+    );
+    expect(existsSync(join(root, shot.path))).toBe(true);
+
+    const served = await fetch(
+      `${baseUrl}/api/overseer/attachments/${shot.path.split('/').slice(-2).join('/')}`
+    );
+    expect(served.status).toBe(200);
+    expect(await served.text()).toBe('png-bytes');
+
+    // An image with no words is a whole message.
+    const started = await fetch(`${baseUrl}/api/overseer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt: '', attachments }),
+    });
+    expect(started.status).toBe(202);
+    const record = (await json(started)) as OverseerRecord;
+    expect(record.messages[0].attachments).toEqual(attachments);
+
+    await settled(record.id);
+    expect(backend.turns[0].attachments).toEqual([
+      {
+        name: 'image.png',
+        absolutePath: join(root, shot.path),
+        mimeType: 'image/png',
+      },
+    ]);
+    expect(backend.turns[0].prompt).toContain(join(root, shot.path));
+
+    // A follow-up carries its own attachments the same way.
+    const second = (await json(await upload('log.txt', 'boom', 'text/plain')))
+      .attachments as typeof attachments;
+    const sent = await fetch(`${baseUrl}/api/overseer/${record.id}/message`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'and this log', attachments: second }),
+    });
+    expect(sent.status).toBe(202);
+    const after = await settled(record.id);
+    expect(
+      after.messages.filter((m) => m.role === 'user').at(-1)?.attachments
+    ).toEqual(second);
+    expect(backend.turns[1].prompt).toStartWith('and this log');
+    expect(backend.turns[1].attachments?.[0].mimeType).toBe('text/plain');
+  });
+
+  it('refuses paths the upload route did not write', async () => {
+    await startWithOverseer(new RecordingOverseer());
+    for (const path of [
+      'README.md',
+      '.dispatch/attachments/overseer/../../../README.md',
+      '.dispatch/attachments/overseer/nothex/a.png',
+      '.dispatch/attachments/overseer/0123456789ab/missing.png',
+    ]) {
+      const res = await fetch(`${baseUrl}/api/overseer`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          prompt: 'look',
+          attachments: [{ name: 'x', path }],
+        }),
+      });
+      expect(res.status).toBe(400);
+    }
+    expect(
+      (await fetch(`${baseUrl}/api/overseer/attachments/nothex/a.png`)).status
+    ).toBe(400);
   });
 });

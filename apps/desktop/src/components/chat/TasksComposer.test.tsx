@@ -9,6 +9,9 @@ const overseer = {
   sending: false,
   sendError: null,
   submit: () => Promise.resolve(),
+  attachments: [],
+  attaching: false,
+  fetchAttachment: () => Promise.resolve(new Blob()),
 } as unknown as OverseerSession;
 
 test('sits as one line until used, carrying the context pill', () => {

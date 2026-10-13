@@ -1,6 +1,7 @@
 import type {
   OverseerAction,
   OverseerApproval,
+  OverseerAttachment,
   OverseerMessage,
   OverseerRecord,
 } from '@dispatch/client';
@@ -24,6 +25,8 @@ export type OverseerThreadItem =
       role: 'user' | 'assistant';
       text: string;
       at: string;
+      /** The files the human attached to the line, when any. */
+      attachments?: OverseerAttachment[];
     }
   | { kind: 'tool'; key: string; tool: string; text: string; at: string }
   | {
@@ -223,6 +226,9 @@ function buildRow(
       role: message.role,
       text: message.text,
       at: message.at,
+      ...(message.attachments !== undefined && message.attachments.length > 0
+        ? { attachments: message.attachments }
+        : {}),
     };
   }
   if (message.role === 'notice') {

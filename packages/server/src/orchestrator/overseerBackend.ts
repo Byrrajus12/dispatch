@@ -118,6 +118,19 @@ export interface OverseerTurnOptions {
   onToolUse?: (toolName: string, input: unknown) => void;
   /** Fired by Stop; the backend ends the turn as soon as it can. */
   abortController?: AbortController;
+  /**
+   * Files the human attached to this turn's lines. Their paths are already in
+   * the prompt text, so a backend may ignore this; one whose model takes images
+   * directly sends the image files inline as well.
+   */
+  attachments?: OverseerTurnAttachment[];
+}
+
+/** One attached file as a backend receives it. */
+export interface OverseerTurnAttachment {
+  name: string;
+  absolutePath: string;
+  mimeType: string;
 }
 
 /** One settled assistant turn: the text reply, and the handle to resume from. */

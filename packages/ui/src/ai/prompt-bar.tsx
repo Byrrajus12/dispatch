@@ -1,5 +1,19 @@
-import { ArrowUpIcon, MicIcon, XIcon } from 'lucide-react';
-import { type KeyboardEvent, type ReactNode, useEffect, useRef } from 'react';
+import {
+  ArrowUpIcon,
+  FileIcon,
+  MicIcon,
+  PaperclipIcon,
+  XIcon,
+} from 'lucide-react';
+import {
+  type ClipboardEvent,
+  type DragEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 
 import { Kbd } from '../kbd';
 import { cn } from '../lib/utils';
@@ -11,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../select';
+import { Spinner } from '../spinner';
 import { IconButton } from './icon-button';
 import { Pill } from './pill';
 
@@ -28,6 +43,14 @@ export type PromptBarCommand = {
   hint?: string;
   /** A muted line after the label saying what the command does. */
   description?: string;
+};
+
+/** A file waiting to go out with the message. */
+export type PromptBarAttachment = {
+  id: string;
+  name: string;
+  /** An image's preview; without one the file shows as a named chip. */
+  previewUrl?: string;
 };
 
 export type PromptBarModel = {
@@ -63,7 +86,28 @@ export type PromptBarProps = {
   completion?: { listId: string; activeOptionId?: string };
   /** Puts the caret in the text box on mount, for a composer the user just opened. */
   focusOnMount?: boolean;
+  /** Turns attaching on: a paperclip button, and files pasted or dropped onto
+   *  the composer come here instead of into the text. Omitted, none of it renders. */
+  onAttachFiles?: (files: File[]) => void;
+  /** Files waiting to go out with the message, above the text box. */
+  attachments?: PromptBarAttachment[];
+  onRemoveAttachment?: (id: string) => void;
+  /** An upload is in flight: Send waits for it, the paperclip spins. */
+  attaching?: boolean;
 };
+
+// The files a paste or drop carried; empty for plain text, so a text paste
+// keeps the textarea's own behaviour.
+function filesIn(dt: DataTransfer | null): File[] {
+  if (dt === null) return [];
+  const files: File[] = [];
+  for (const item of Array.from(dt.items ?? [])) {
+    if (item.kind !== 'file') continue;
+    const file = item.getAsFile();
+    if (file !== null) files.push(file);
+  }
+  return files.length > 0 ? files : Array.from(dt.files ?? []);
+}
 
 const MIN_ROWS = 1;
 const MAX_ROWS = 8;
@@ -120,8 +164,15 @@ export function PromptBar({
   ariaLabel = 'Prompt',
   completion,
   focusOnMount = false,
+  onAttachFiles,
+  attachments = [],
+  onRemoveAttachment,
+  attaching = false,
 }: PromptBarProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const canAttach = onAttachFiles !== undefined && !disabled;
 
   useEffect(() => {
     if (focusOnMount) textareaRef.current?.focus();
@@ -133,7 +184,34 @@ export function PromptBar({
 
   const matches = matchCommands(commands, value);
   const commandPopoverOpen = value.startsWith('/') && commands.length > 0;
-  const canSubmit = value.trim().length > 0 && !disabled;
+  // A pasted screenshot is a whole message; an upload still running is not.
+  const canSubmit =
+    (value.trim().length > 0 || attachments.length > 0) &&
+    !disabled &&
+    !attaching;
+
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    if (!canAttach) return;
+    const files = filesIn(event.clipboardData);
+    if (files.length === 0) return;
+    event.preventDefault();
+    onAttachFiles(files);
+  }
+
+  function handleDragOver(event: DragEvent<HTMLDivElement>) {
+    if (!canAttach || !event.dataTransfer.types.includes('Files')) return;
+    event.preventDefault();
+    setDragging(true);
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    setDragging(false);
+    if (!canAttach) return;
+    const files = filesIn(event.dataTransfer);
+    if (files.length === 0) return;
+    event.preventDefault();
+    onAttachFiles(files);
+  }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -144,11 +222,51 @@ export function PromptBar({
 
   return (
     <div
+      onDragOver={handleDragOver}
+      onDragLeave={() => setDragging(false)}
+      onDrop={handleDrop}
       className={cn(
         'bg-surface-quaternary rounded-card ease-out-expo flex flex-col gap-1.5 border-[0.5px] border-border-strong p-1.5 transition-[box-shadow] duration-100',
-        'focus-within:ring-1 focus-within:ring-ring'
+        'focus-within:ring-1 focus-within:ring-ring',
+        dragging && 'ring-ring ring-2'
       )}
     >
+      {attachments.length > 0 && (
+        <ul
+          aria-label="Attachments"
+          className="flex flex-wrap items-end gap-1.5 px-0.5 pt-0.5"
+        >
+          {attachments.map((attachment) => (
+            <li key={attachment.id} className="relative">
+              {attachment.previewUrl !== undefined ? (
+                <img
+                  src={attachment.previewUrl}
+                  alt={attachment.name}
+                  title={attachment.name}
+                  className="rounded-control shadow-hairline size-14 object-cover"
+                />
+              ) : (
+                <Pill className="pr-6">
+                  <FileIcon aria-hidden className="size-3" />
+                  <span className="max-w-40 min-w-0 truncate">
+                    {attachment.name}
+                  </span>
+                </Pill>
+              )}
+              {onRemoveAttachment !== undefined && (
+                <button
+                  type="button"
+                  aria-label={`Remove ${attachment.name}`}
+                  onClick={() => onRemoveAttachment(attachment.id)}
+                  className="bg-surface-secondary text-muted-foreground hover:text-foreground shadow-hairline rounded-pill absolute -top-1 -right-1 flex size-4 items-center justify-center"
+                >
+                  <XIcon aria-hidden className="size-3" />
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
       {references.length > 0 && (
         <div className="flex flex-wrap gap-1.5 px-0.5 pt-0.5">
           {references.map((reference) => (
@@ -179,6 +297,7 @@ export function PromptBar({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
         placeholder={placeholder}
         disabled={disabled}
         aria-label={ariaLabel}
@@ -267,6 +386,33 @@ export function PromptBar({
         </div>
 
         <div className="flex items-center gap-1">
+          {onAttachFiles !== undefined && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                hidden
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? []);
+                  // Cleared so picking the same file again still fires.
+                  event.target.value = '';
+                  if (files.length > 0) onAttachFiles(files);
+                }}
+              />
+              <IconButton
+                label="Attach files"
+                disabled={!canAttach || attaching}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {attaching ? (
+                  <Spinner aria-hidden />
+                ) : (
+                  <PaperclipIcon aria-hidden />
+                )}
+              </IconButton>
+            </>
+          )}
           {onMicClick !== undefined && (
             <IconButton
               label="Start dictation"

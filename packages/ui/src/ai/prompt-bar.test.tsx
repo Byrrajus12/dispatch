@@ -205,3 +205,75 @@ describe('PromptBar dictation', () => {
     expect(clicks).toBe(1);
   });
 });
+
+describe('PromptBar attachments', () => {
+  // happy-dom's ClipboardEvent carries no DataTransfer, so the paste is built
+  // from a plain event with the one field the handler reads.
+  function pasteFiles(target: HTMLElement, files: File[]): void {
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        items: files.map((file) => ({ kind: 'file', getAsFile: () => file })),
+        files,
+      },
+    });
+    fireEvent(target, event);
+  }
+
+  test('a pasted image goes to onAttachFiles, not into the text', () => {
+    const attached: File[][] = [];
+    render(
+      <PromptBar
+        value=""
+        onChange={() => {}}
+        onSubmit={() => {}}
+        onAttachFiles={(files) => attached.push(files)}
+      />
+    );
+    const shot = new File(['png'], 'image.png', { type: 'image/png' });
+    pasteFiles(screen.getByLabelText('Prompt'), [shot]);
+    expect(attached).toEqual([[shot]]);
+  });
+
+  test('without onAttachFiles there is no paperclip and a paste is left alone', () => {
+    render(<PromptBar value="" onChange={() => {}} onSubmit={() => {}} />);
+    expect(screen.queryByRole('button', { name: 'Attach files' })).toBeNull();
+  });
+
+  test('an attachment alone can be sent, but not while an upload runs', () => {
+    let sent = 0;
+    const props = {
+      value: '',
+      onChange: () => {},
+      onSubmit: () => {
+        sent += 1;
+      },
+      onAttachFiles: () => {},
+      attachments: [{ id: 'a', name: 'image.png', previewUrl: 'blob:x' }],
+    };
+    const { rerender } = render(<PromptBar {...props} attaching />);
+    expect(
+      screen.getByRole('button', { name: 'Send' }).hasAttribute('disabled')
+    ).toBe(true);
+    rerender(<PromptBar {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(sent).toBe(1);
+    expect(screen.getByRole('img', { name: 'image.png' })).not.toBeNull();
+  });
+
+  test('a pending attachment can be removed', () => {
+    const removed: string[] = [];
+    render(
+      <PromptBar
+        value=""
+        onChange={() => {}}
+        onSubmit={() => {}}
+        onAttachFiles={() => {}}
+        attachments={[{ id: 'log', name: 'build.log' }]}
+        onRemoveAttachment={(id) => removed.push(id)}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Remove build.log' }));
+    expect(removed).toEqual(['log']);
+  });
+});

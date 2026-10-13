@@ -250,6 +250,7 @@ export type {
   VerificationResult,
   OverseerAction,
   OverseerApproval,
+  OverseerAttachment,
   OverseerCommand,
   OverseerGrant,
   OverseerMessage,
