@@ -12,8 +12,7 @@ export type GitOutcome<T extends object = object> =
   | ({ ok: true } & T)
   | { ok: false; stderr: string };
 
-// Exported so api.ts can tell a pre-flight rejection (git never ran) apart
-// from a real git failure, for its `alwaysBroadcast` decision.
+// Pre-flight rejections: git never ran. Exported so tests can tell them apart.
 export const PATH_ESCAPE_ERROR = 'path escapes the repository root';
 export const INVALID_REF_ERROR = 'invalid ref: must not start with "-"';
 const CONFIRM_REQUIRED_ERROR =

@@ -16,7 +16,6 @@ const models: ModelConfig = {
   plan: 'sonnet',
   draft: 'haiku',
   enrich: 'haiku',
-  cluster: 'haiku',
   summarize: 'haiku',
   judge: 'jev',
 };

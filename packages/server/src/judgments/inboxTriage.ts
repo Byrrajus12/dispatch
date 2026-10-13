@@ -20,13 +20,12 @@ import { capText, mapLimit, warnOnce } from './client.js';
 
 /**
  * Triage for inbox captures: per item, which kind it really is, which open
- * epic it belongs to, and whether it duplicates work already captured. Runs
- * before the Claude clustering pass so items with a confident home never
- * reach it — that is where the agent spend drops.
+ * epic it belongs to, and whether it duplicates work already captured.
+ * Converting an item into a task reads these judgments.
  *
  * Everything here is either pure (candidates, questions, interpretation) or
  * a thin runner around the judgment client; the runner returns null on any
- * failure so `clusterInbox` behaves exactly as before.
+ * failure, and convert then works without them.
  */
 
 export interface TriageEpic {

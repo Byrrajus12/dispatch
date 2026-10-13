@@ -3441,12 +3441,8 @@ export interface ApiClient {
   /** The retry for a run merged locally that never reached origin: replays
    *  its squash onto origin's tip. Returns the run with its new merge commit. */
   publishRun(runId: string): Promise<RunMeta>;
-  // The Branches surface: every `dispatch/*` ref that exists in git right now,
-  // joined with whatever run claims it. `freeBranchDisk` reclaims the working
-  // copy but keeps the ref (recoverable); `deleteBranch` removes both, and
-  // needs `force` for a branch whose commits have not landed on its base.
-  // Discarding a run is deliberately NOT here — that's `reviewRun(id,
-  // 'discard')`, the path that already does the full bookkeeping.
+  // Every `dispatch/*` ref that exists in git right now, joined with whatever
+  // run claims it. Discarding a run is `reviewRun(id, 'discard')`.
   fetchBranches(): Promise<BranchEntry[]>;
   // GitHub PR review surface (items 3+4): read a run's PR status + conversation,
   // submit a review verdict (approve/request-changes/comment), or add a
