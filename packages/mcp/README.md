@@ -50,7 +50,9 @@ New mail reaches a session three ways:
   when there is mail. This works in every client.
 - Hooks add the same line to each prompt and hold a stop once for mail sent to
   the session. Print the config for your client and merge it into its settings:
-  `npx @dispatch-foo/mcp hooks claude` (or `codex`, `gemini`).
+  `npx @dispatch-foo/mcp hooks claude` (or `codex`, `gemini`). Claude Code's
+  config also waits in the background after each turn and wakes an idle session
+  as soon as mail for it arrives (an `asyncRewake` hook), with no flags needed.
 - Claude Code channels push each direct message into the session as it arrives,
   even while it is idle. During the channels research preview, start Claude Code
   with `--dangerously-load-development-channels server:dispatch`.

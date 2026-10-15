@@ -726,3 +726,4 @@ charmland
 generativelanguage
 opentui
 oninitialized
+rewake

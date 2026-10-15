@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
@@ -63,25 +63,31 @@ export function findSessionFile(root: string, key: string): string | null {
   const dir = sessionsDir(root);
   if (!existsSync(dir)) return null;
   const suffix = `-${sessionSuffix(key)}.json`;
-  const match = readdirSync(dir).find((f) => f.endsWith(suffix));
+  const match = readdirSync(dir).find(
+    (f) => f.endsWith(suffix) && !f.endsWith('.wait')
+  );
   return match === undefined ? null : join(dir, match);
 }
 
-/** Runs one hook invocation end to end: stdin JSON in, hook JSON out. */
-export async function runHook(
-  client: HookClient,
-  event: string,
-  rawInput: string,
-  cwd: string
-): Promise<string> {
-  let input: HookInput = {};
+// A hook's stdin as HookInput; no input, or input that is not JSON, reads
+// as empty so the hook runs with what the environment says.
+function parseInput(rawInput: string): HookInput {
   try {
     const parsed = JSON.parse(rawInput) as unknown;
     if (typeof parsed === 'object' && parsed !== null)
-      input = parsed as HookInput;
+      return parsed as HookInput;
   } catch {
-    // No input, or not JSON: run with what the environment says.
+    // Fall through to empty input.
   }
+  return {};
+}
+
+// The project root and this session's token for a hook invocation, or null
+// when the session has not registered here.
+function hookSession(
+  input: HookInput,
+  cwd: string
+): { root: string; token: string; file: string } | null {
   const root = projectRoot(
     typeof input.cwd === 'string' && input.cwd !== '' ? input.cwd : cwd
   );
@@ -93,8 +99,22 @@ export async function runHook(
   const file =
     keys.map((k) => findSessionFile(root, k)).find((f) => f !== null) ?? null;
   const credential = file === null ? null : readStoredSession(file);
-  if (credential === null) return '';
-  const items = await fetchUnreadAs(root, credential.token);
+  return file === null || credential === null
+    ? null
+    : { root, token: credential.token, file };
+}
+
+/** Runs one hook invocation end to end: stdin JSON in, hook JSON out. */
+export async function runHook(
+  client: HookClient,
+  event: string,
+  rawInput: string,
+  cwd: string
+): Promise<string> {
+  const input = parseInput(rawInput);
+  const session = hookSession(input, cwd);
+  if (session === null) return '';
+  const items = await fetchUnreadAs(session.root, session.token);
   const output = hookOutput(
     client,
     event,
@@ -104,7 +124,62 @@ export async function runHook(
   return output === null ? '' : JSON.stringify(output);
 }
 
+export interface WaitOptions {
+  /** Give up after this long with nothing new. */
+  timeoutMs: number;
+  /** How often to look at the mailbox. */
+  pollMs: number;
+}
+
+/** `hook claude wait`: runs in the background after a turn and returns the
+ *  line to wake the session with once direct mail arrives that was not
+ *  already unread when it started, or null at the timeout. Mail already
+ *  unread is not re-announced, so a session that leaves it unread is not
+ *  woken over and over for it. */
+export async function waitForMail(
+  rawInput: string,
+  cwd: string,
+  opts: WaitOptions
+): Promise<string | null> {
+  const session = hookSession(parseInput(rawInput), cwd);
+  if (session === null) return null;
+  // Stop fires after every turn, so a newer wait supersedes this one: it
+  // stops at its next look once the claim file names another process.
+  const claim = `${session.file}.wait`;
+  writeFileSync(claim, String(process.pid), { mode: 0o600 });
+  const superseded = (): boolean => {
+    try {
+      return readFileSync(claim, 'utf8') !== String(process.pid);
+    } catch {
+      return true;
+    }
+  };
+  const baseline = new Set(
+    (await fetchUnreadAs(session.root, session.token))?.map(
+      (i) => i.deliveryId
+    ) ?? []
+  );
+  const deadline = Date.now() + opts.timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, opts.pollMs));
+    if (superseded()) return null;
+    const items = await fetchUnreadAs(session.root, session.token);
+    if (items === null) continue;
+    const fresh = items.filter(
+      (i) => i.via === 'direct' && !baseline.has(i.deliveryId)
+    );
+    if (fresh.length > 0) {
+      const line = unreadLine(summarize(items));
+      return line === null ? null : `${line} Read it now.`;
+    }
+  }
+  return null;
+}
+
 const HOOK_COMMAND = 'npx -y @dispatch-foo/mcp hook';
+
+/** How long one background wait listens; the next turn starts another. */
+export const WAIT_TIMEOUT_SEC = 3600;
 
 /** The hook configuration to paste into `client`'s settings. */
 export function hookConfig(client: HookClient): Record<string, unknown> {
@@ -122,8 +197,34 @@ export function hookConfig(client: HookClient): Record<string, unknown> {
         AfterAgent: entry('AfterAgent'),
       },
     };
+  if (client === 'codex')
+    return {
+      hooks: {
+        UserPromptSubmit: entry('UserPromptSubmit'),
+        Stop: entry('Stop'),
+      },
+    };
+  // Claude Code also waits in the background after each turn and wakes an
+  // idle session (asyncRewake, exit 2) when mail for it arrives.
   return {
-    hooks: { UserPromptSubmit: entry('UserPromptSubmit'), Stop: entry('Stop') },
+    hooks: {
+      UserPromptSubmit: entry('UserPromptSubmit'),
+      Stop: [
+        {
+          hooks: [
+            { type: 'command', command: `${HOOK_COMMAND} claude Stop` },
+            {
+              type: 'command',
+              command: `${HOOK_COMMAND} claude wait`,
+              asyncRewake: true,
+              timeout: WAIT_TIMEOUT_SEC,
+              rewakeMessage: 'Dispatch: another agent sent you mail.',
+              rewakeSummary: 'Dispatch mail',
+            },
+          ],
+        },
+      ],
+    },
   };
 }
 

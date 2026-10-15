@@ -9,6 +9,7 @@ import {
   hookConfig,
   hookOutput,
   runHook,
+  waitForMail,
 } from '../src/hook.js';
 import { sessionName, sessionTokenFilePath } from '../src/identity.js';
 
@@ -60,6 +61,17 @@ describe('hookOutput', () => {
       hookOutput('claude', 'Stop', { stop_hook_active: true }, mail)
     ).toBeNull();
     expect(hookOutput('codex', 'Stop', {}, { ...mail, direct: 0 })).toBeNull();
+  });
+
+  it('has Claude Code wait in the background to wake an idle session', () => {
+    const stop = (hookConfig('claude').hooks as Record<string, unknown[]>).Stop;
+    const hooks = (stop[0] as { hooks: Record<string, unknown>[] }).hooks;
+    expect(hooks[1]).toMatchObject({
+      command: 'npx -y @dispatch-foo/mcp hook claude wait',
+      asyncRewake: true,
+      timeout: 3600,
+    });
+    expect(JSON.stringify(hookConfig('codex'))).not.toContain('asyncRewake');
   });
 
   it('configures prompt and stop hooks for each client', () => {
@@ -163,5 +175,110 @@ describe('runHook', () => {
     ).toBe('');
     expect(await runHook('codex', 'Stop', 'not json', root)).toBe('');
     expect(seenAuth).toBeNull();
+  });
+});
+
+describe('waitForMail', () => {
+  let home: string;
+  let root: string;
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  let items: unknown[];
+  const saved = process.env.DISPATCH_HOME;
+
+  const item = (id: string, via: 'direct' | 'channel') => ({
+    delivery: { id, state: 'notified', via },
+    message: { id: `m-${id}`, from: 'agent:wyat/codex-19be04', body: 'hi' },
+  });
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'dispatch-wait-home-'));
+    root = mkdtempSync(join(tmpdir(), 'dispatch-wait-root-'));
+    process.env.DISPATCH_HOME = home;
+    items = [];
+    server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch: () => Response.json({ items }),
+    });
+    const daemonFile = daemonFilePath(root);
+    mkdirSync(dirname(daemonFile), { recursive: true });
+    writeFileSync(
+      daemonFile,
+      JSON.stringify({ port: server.port, pid: process.pid, rootDir: root })
+    );
+    const session = sessionTokenFilePath(
+      root,
+      sessionName('claude-code', 'wait-session')
+    );
+    mkdirSync(dirname(session), { recursive: true });
+    writeFileSync(
+      session,
+      JSON.stringify({ token: 't', address: 'agent:w/me', parent: 'agent:w/p' })
+    );
+  });
+
+  afterEach(() => {
+    void server?.stop(true);
+    if (saved === undefined) delete process.env.DISPATCH_HOME;
+    else process.env.DISPATCH_HOME = saved;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const input = () => JSON.stringify({ session_id: 'wait-session', cwd: root });
+
+  it('wakes for direct mail that arrives while it waits', async () => {
+    setTimeout(() => {
+      items = [item('d-new', 'direct')];
+    }, 60);
+    const line = await waitForMail(input(), '/', {
+      timeoutMs: 2000,
+      pollMs: 20,
+    });
+    expect(line).toBe(
+      '[dispatch] 1 unread (from agent:wyat/codex-19be04). Call inbox_read. Read it now.'
+    );
+  });
+
+  it('does not wake again for mail that was already unread', async () => {
+    items = [item('d-old', 'direct')];
+    expect(
+      await waitForMail(input(), '/', { timeoutMs: 150, pollMs: 20 })
+    ).toBeNull();
+  });
+
+  it('does not wake for channel traffic', async () => {
+    setTimeout(() => {
+      items = [item('d-chan', 'channel')];
+    }, 40);
+    expect(
+      await waitForMail(input(), '/', { timeoutMs: 200, pollMs: 20 })
+    ).toBeNull();
+  });
+
+  it('stands down when a newer wait takes the session over', async () => {
+    const first = waitForMail(input(), '/', { timeoutMs: 5000, pollMs: 20 });
+    await Bun.sleep(60);
+    // A second wait in another process would write its own pid to the claim.
+    const claim = `${sessionTokenFilePath(root, sessionName('claude-code', 'wait-session'))}.wait`;
+    writeFileSync(claim, '999999');
+    const started = Date.now();
+    expect(await first).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it('gives up at once for a session it cannot find', async () => {
+    const started = Date.now();
+    expect(
+      await waitForMail(
+        JSON.stringify({ session_id: 'nobody', cwd: root }),
+        '/',
+        {
+          timeoutMs: 5000,
+          pollMs: 20,
+        }
+      )
+    ).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1000);
   });
 });
