@@ -48,13 +48,22 @@ export async function fetchUnread(
   // A dispatched run's executor already hands it new mail mid-turn.
   if (credential === null || 'error' in credential || credential.kind === 'run')
     return null;
+  return fetchUnreadAs(root, credential.token);
+}
+
+/** The unread items `token`'s holder has in `root`'s daemon, oldest first;
+ *  null when there is no daemon or it would not answer. */
+export async function fetchUnreadAs(
+  root: string,
+  token: string
+): Promise<UnreadMessage[] | null> {
   const daemon = readDaemonFile(root);
   if (daemon === null) return null;
   try {
     const res = await fetch(
       `http://127.0.0.1:${daemon.port}/api/mailbox?state=${UNREAD_STATES}`,
       {
-        headers: { authorization: `Bearer ${credential.token}` },
+        headers: { authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       }
     );

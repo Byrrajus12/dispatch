@@ -356,6 +356,11 @@ export function sessionKey(env: NodeJS.ProcessEnv = process.env): string {
   return PROCESS_SESSION_KEY;
 }
 
+/** The 6 hex digits a session's name ends in, derived from its key. */
+export function sessionSuffix(key: string): string {
+  return createHash('sha256').update(key).digest('hex').slice(0, 6);
+}
+
 /** `<client>-<6 hex of sha256(key)>`, normalized like any agent name. */
 export function sessionName(
   clientName: string | undefined,
@@ -364,20 +369,24 @@ export function sessionName(
   const client = normalizeAgentName(
     clientName !== undefined && clientName.trim() !== '' ? clientName : 'agent'
   ).slice(0, 30);
-  const sid = createHash('sha256').update(key).digest('hex').slice(0, 6);
-  return normalizeAgentName(`${client}-${sid}`);
+  return normalizeAgentName(`${client}-${sessionSuffix(key)}`);
+}
+
+/** Where `rootDir`'s sessions cache their registrations. */
+export function sessionsDir(rootDir: string): string {
+  return join(agentsDir(rootDir), 'sessions');
 }
 
 /** Where a session's registration is cached, beside its client identity's. */
 export function sessionTokenFilePath(rootDir: string, name: string): string {
-  return join(agentsDir(rootDir), 'sessions', `${name}.json`);
+  return join(sessionsDir(rootDir), `${name}.json`);
 }
 
 interface StoredSession extends StoredAgentToken {
   parent: string;
 }
 
-function readStoredSession(path: string): MessagingCredential | null {
+export function readStoredSession(path: string): MessagingCredential | null {
   const stored = readStoredToken(path);
   if (stored === null) return null;
   try {
