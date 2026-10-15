@@ -208,6 +208,8 @@ describe('agent_list', () => {
         client: 'codex',
         status: 'approved',
         machine: 'sam',
+        kind: 'agent',
+        online: false,
       },
       {
         address: 'agent:wyat/claude-code',
@@ -215,6 +217,8 @@ describe('agent_list', () => {
         client: 'claude-code',
         status: 'approved',
         machine: 'this machine',
+        kind: 'agent',
+        online: false,
       },
     ]);
   });

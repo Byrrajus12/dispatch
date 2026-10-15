@@ -79,6 +79,7 @@ describe('server identity', () => {
       'record_evidence',
       'record_mutation',
       'run_list',
+      'session_label',
       'task_comment',
       'task_comments',
       'task_get',
@@ -86,6 +87,7 @@ describe('server identity', () => {
       'task_next',
       'task_save',
       'thread_read',
+      'whoami',
     ]);
   });
 

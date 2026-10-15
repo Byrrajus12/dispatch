@@ -146,6 +146,7 @@ describe('dispatch mcp (CLI entrypoint) stdio e2e', () => {
         'record_evidence',
         'record_mutation',
         'run_list',
+        'session_label',
         'task_comment',
         'task_comments',
         'task_get',
@@ -153,6 +154,7 @@ describe('dispatch mcp (CLI entrypoint) stdio e2e', () => {
         'task_next',
         'task_save',
         'thread_read',
+        'whoami',
       ]);
 
       const call = await send('tools/call', {

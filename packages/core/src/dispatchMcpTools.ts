@@ -22,6 +22,7 @@ export const DISPATCH_MCP_TOOLS = [
   'record_evidence',
   'record_mutation',
   'run_list',
+  'session_label',
   'task_comment',
   'task_comments',
   'task_get',
@@ -29,6 +30,7 @@ export const DISPATCH_MCP_TOOLS = [
   'task_next',
   'task_save',
   'thread_read',
+  'whoami',
 ] as const;
 
 // The messaging subset of DISPATCH_MCP_TOOLS. Executors auto-allow these:
@@ -42,5 +44,7 @@ export const DISPATCH_MESSAGING_TOOLS = [
   'msg_reply',
   'msg_send',
   'peer_list',
+  'session_label',
   'thread_read',
+  'whoami',
 ] as const satisfies readonly (typeof DISPATCH_MCP_TOOLS)[number][];
