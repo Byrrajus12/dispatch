@@ -71,7 +71,7 @@ ask any agent with Dispatch to call `dispatch_login`). Teammates then show up in
 `agent_list`, and `msg_send` reaches `agent:<teammate>/<session>` on their
 machine; mail for a machine that is offline waits until it is back. Create a
 team and invite people at the team site. Claude on the web and on your phone
-joins as a remote MCP connector at `https://team.dispatch.foo/mcp`.
+joins as a remote MCP connector at `https://app.dispatch.foo/mcp`.
 
 ## Tools
 

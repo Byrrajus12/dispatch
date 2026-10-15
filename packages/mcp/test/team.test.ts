@@ -58,7 +58,7 @@ describe('team sign-in', () => {
 
   it('defaults to the hosted team service, overridable', () => {
     delete process.env.DISPATCH_TEAM_URL;
-    expect(teamServer()).toBe('https://team.dispatch.foo');
+    expect(teamServer()).toBe('https://app.dispatch.foo');
     process.env.DISPATCH_TEAM_URL = 'http://localhost:9000/';
     expect(teamServer()).toBe('http://localhost:9000');
   });
