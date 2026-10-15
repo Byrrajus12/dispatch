@@ -207,11 +207,11 @@ each other and each sees the other's footer.
 
 1. **Hub ↔ dispatchd: loopback federation.** The hub and each project's
    dispatchd exchange messages as two local replicas through the protocol's
-   `engine.receive()` path, so threads span both stores and senders keep
-   their addresses. dispatchd keeps its store and gates; its `placement()`
-   homes `agent:` sessions at the hub.
-2. **Hub approval with no team: auto-approve same-OS-user clients.** A team
-   can require approval again.
+   `engine.receive()` path, so threads span both stores and senders keep their
+   addresses. dispatchd keeps its store and gates; its `placement()` homes
+   `agent:` sessions at the hub.
+2. **Hub approval with no team: auto-approve same-OS-user clients.** A team can
+   require approval again.
 3. **Web admin replica: opt-in at team creation.** Teams that decline keep
    admin-machine admission.
 4. **Team site: the private relay repo** (`wsoule/dispatch-relay`).
