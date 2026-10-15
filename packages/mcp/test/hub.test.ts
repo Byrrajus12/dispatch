@@ -1,3 +1,4 @@
+import { hubDir, readHubFile, writeHubFile } from '@dispatch-foo/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
@@ -5,7 +6,6 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { hubDir, writeHubFile } from '../src/hub/hubFile.js';
 import type { HubHandle } from '../src/hub/server.js';
 import { startHub } from '../src/hub/server.js';
 import { createDispatchMcpServer } from '../src/index.js';
@@ -282,7 +282,6 @@ describe('hub autostart', () => {
       };
       expect(who.structuredContent?.kind).toBe('session');
 
-      const { readHubFile } = await import('../src/hub/hubFile.js');
       const info = readHubFile();
       expect(info).not.toBeNull();
       pid = info!.pid;

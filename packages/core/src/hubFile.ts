@@ -12,7 +12,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 // Where the machine hub keeps its state, and the file that tells MCP servers
-// how to reach it: ~/.dispatch/hub/{messages.db,hub.json,hub.lock}.
+// and project daemons how to reach it: ~/.dispatch/hub/{messages.db,hub.json,
+// hub.lock}. The hub itself lives in @dispatch-foo/mcp.
 
 /** What a running hub publishes about itself, readable only by its user. */
 export interface HubFileInfo {
@@ -104,4 +105,20 @@ export function takeStartLock(): (() => void) | null {
     }
   }
   return null;
+}
+
+/** Whether the process on `hub.port` is the hub `hub` names: its /api/health
+ *  must echo the file's id, so no token goes to a port another process took
+ *  after the hub died. */
+export async function verifyHub(hub: HubFileInfo): Promise<boolean> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${hub.port}/api/health`, {
+      signal: AbortSignal.timeout(2000),
+    });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { hub?: unknown; id?: unknown };
+    return body.hub === true && body.id === hub.id;
+  } catch {
+    return false;
+  }
 }

@@ -1,9 +1,9 @@
+import { readHubFile, verifyHub } from '@dispatch-foo/core';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { daemonAuth, isDaemonHealthy, readDaemonFile } from './daemon.js';
-import { readHubFile } from './hub/hubFile.js';
 
 // Where an MCP session's agent mail goes: the project's dispatchd when one
 // serves this project, else the machine hub, which every session on this
@@ -104,15 +104,7 @@ async function verifiedHub(): Promise<Endpoint | null> {
     Date.now() - verified.at < VERIFIED_FOR_MS
   )
     return endpoint;
-  try {
-    const res = await fetch(`http://127.0.0.1:${hub.port}/api/health`, {
-      signal: AbortSignal.timeout(2000),
-    });
-    const body = (await res.json()) as { hub?: unknown; id?: unknown };
-    if (!res.ok || body.hub !== true || body.id !== hub.id) return null;
-  } catch {
-    return null;
-  }
+  if (!(await verifyHub(hub))) return null;
   verified = { port: hub.port, id: hub.id, at: Date.now() };
   return endpoint;
 }

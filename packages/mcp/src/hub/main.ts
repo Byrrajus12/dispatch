@@ -1,16 +1,16 @@
-import { handleFromEmail } from '@dispatch-foo/core';
-import { execFileSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
-import { userInfo } from 'node:os';
-
-import { MCP_SERVER_VERSION } from '../server.js';
 import {
+  handleFromEmail,
   hubDir,
   readHubFile,
   removeHubFile,
   takeStartLock,
   writeHubFile,
-} from './hubFile.js';
+} from '@dispatch-foo/core';
+import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { userInfo } from 'node:os';
+
+import { MCP_SERVER_VERSION } from '../server.js';
 import { startHub } from './server.js';
 
 // `dispatch-mcp hub`: runs the machine hub until it has sat idle for
