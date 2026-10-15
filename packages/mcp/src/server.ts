@@ -13,7 +13,7 @@ import type { UnreadProbe } from './unread.js';
 import { createUnreadProbe, withUnreadFooter } from './unread.js';
 
 export const MCP_SERVER_NAME = 'dispatch';
-export const MCP_SERVER_VERSION = '0.25.0';
+export const MCP_SERVER_VERSION = '0.26.0';
 
 // Builds a dispatch MCP server rooted at `rootDir`: the five task_* tools
 // (see tools.ts) plus a `workflow://onboarding` resource that briefs an
