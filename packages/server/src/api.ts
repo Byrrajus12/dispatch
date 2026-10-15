@@ -238,6 +238,7 @@ import {
   replyToMessage,
   revokeAgent,
   sendMessage,
+  setOwnAgentMeta,
   unmuteAgent,
   waitForAnswer,
 } from './messaging/routes.js';
@@ -4445,6 +4446,7 @@ const SELF_AUTHENTICATED_ROUTES: ReadonlyArray<{
   { method: 'DELETE', segments: ['channels', '*', 'members'] },
   { method: 'DELETE', segments: ['channels', '*', 'members', '*'] },
   { method: 'GET', segments: ['decisions', 'open'] },
+  { method: 'POST', segments: ['agents', 'me', 'meta'] },
   { method: 'GET', segments: ['memory'] },
   { method: 'GET', segments: ['memory', '*'] },
   { method: 'POST', segments: ['memory', 'import', 'ledger'] },
@@ -5880,6 +5882,14 @@ export async function handleApi(
         method === 'POST'
       ) {
         return await registerAgent(req, ctx);
+      }
+      if (
+        segments.length === 3 &&
+        segments[1] === 'me' &&
+        segments[2] === 'meta' &&
+        method === 'POST'
+      ) {
+        return await setOwnAgentMeta(req, ctx);
       }
       if (segments.length === 3 && method === 'POST') {
         const address = decodeURIComponent(segments[1]);

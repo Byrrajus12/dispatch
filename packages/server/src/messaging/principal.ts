@@ -100,7 +100,16 @@ export function resolvePrincipal(
         code: 'auth_a2a_client',
       };
     }
+    if (agent.status === 'approved' && parentRevoked(ctx, agent.parent)) {
+      return {
+        ok: false,
+        status: 401,
+        error: "this session's client identity was revoked",
+        code: 'auth_agent_revoked',
+      };
+    }
     if (agent.status === 'approved') {
+      touchSeen(ctx, agent.address, agent.lastSeen);
       return {
         ok: true,
         principal: {
@@ -131,6 +140,30 @@ export function resolvePrincipal(
     error: 'unknown token',
     code: 'auth_invalid_token',
   };
+}
+
+// A session stands only while the client identity that vouched for it is
+// approved, so revoking that identity cuts every one of its sessions at once.
+function parentRevoked(ctx: ApiContext, parent: string | undefined): boolean {
+  if (parent === undefined) return false;
+  return ctx.messaging.store.getAgent(parent)?.status !== 'approved';
+}
+
+// How stale last-seen may get before an authenticated call rewrites it.
+const SEEN_WRITE_INTERVAL_MS = 30_000;
+
+function touchSeen(
+  ctx: ApiContext,
+  address: string,
+  lastSeen: string | undefined
+): void {
+  const now = Date.now();
+  if (
+    lastSeen !== undefined &&
+    now - Date.parse(lastSeen) < SEEN_WRITE_INTERVAL_MS
+  )
+    return;
+  ctx.messaging.store.touchAgent(address, new Date(now).toISOString());
 }
 
 // Where a pending agent is approved: the project, its open registration gate,
