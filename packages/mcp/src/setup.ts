@@ -212,6 +212,17 @@ function addClaudeHooks(env: SetupEnv, launch: Launch): StepResult {
   return { client, status: 'added' };
 }
 
+/** Installs the server globally (best effort), so clients and hooks start
+ *  it instantly instead of through npx; true when it is installed. */
+export function installGlobally(env: SetupEnv, version: string): boolean {
+  if (env.has('dispatch-mcp')) return true;
+  if (!env.has('npm')) return false;
+  return (
+    env.run('npm', ['install', '--global', `@dispatch-foo/mcp@${version}`]) ===
+      0 && env.has('dispatch-mcp')
+  );
+}
+
 /** Connects every client found on this machine; one result per client. */
 export function connectClients(
   env: SetupEnv,

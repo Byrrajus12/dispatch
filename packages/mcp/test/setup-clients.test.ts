@@ -170,3 +170,29 @@ describe('opening the browser', () => {
     );
   });
 });
+
+describe('global install', () => {
+  it('installs the pinned version when npm is there, and uses it', async () => {
+    const { installGlobally } = await import('../src/setup.js');
+    const installed: string[] = [];
+    const e: SetupEnv = {
+      home,
+      platform: 'linux',
+      has: (b) => b === 'npm' || (b === 'dispatch-mcp' && installed.length > 0),
+      run: (command, args) => {
+        installed.push([command, ...args].join(' '));
+        return 0;
+      },
+    };
+    expect(installGlobally(e, '0.26.0')).toBe(true);
+    expect(installed).toEqual([
+      'npm install --global @dispatch-foo/mcp@0.26.0',
+    ]);
+    expect(launchFor(e)).toEqual({ command: 'dispatch-mcp', args: [] });
+  });
+
+  it('falls back quietly without npm', async () => {
+    const { installGlobally } = await import('../src/setup.js');
+    expect(installGlobally(env([]), '0.26.0')).toBe(false);
+  });
+});

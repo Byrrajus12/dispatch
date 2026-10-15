@@ -54,8 +54,16 @@ if (argv[0] === 'hooks') {
 if (argv[0] === 'login' || argv[0] === 'setup') {
   const { interactiveLogin } = await import('./login.js');
   if (argv[0] === 'setup') {
-    const { connectClients, defaultSetupEnv } = await import('./setup.js');
-    const results = connectClients(defaultSetupEnv());
+    const { connectClients, defaultSetupEnv, installGlobally } =
+      await import('./setup.js');
+    const { MCP_SERVER_VERSION } = await import('./server.js');
+    const setupEnv = defaultSetupEnv();
+    console.log(
+      installGlobally(setupEnv, MCP_SERVER_VERSION)
+        ? '  ✓  dispatch-mcp installed'
+        : '  -  dispatch-mcp not installed globally; clients will start it with npx'
+    );
+    const results = connectClients(setupEnv);
     if (results.length === 0)
       console.log(
         'No agent clients found (Claude Code, Codex, Cursor, Gemini CLI, Claude Desktop, Windsurf).'
