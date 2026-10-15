@@ -4,6 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CHANNEL_CAPABILITY, startChannelPush } from './channel.js';
 import type { DaemonStarter } from './daemon.js';
 import { setDaemonStarter } from './daemon.js';
+import { registerLoginTool } from './messaging.js';
 import { ONBOARDING_MARKDOWN } from './onboarding.js';
 import type { MessageBlockingTiming, ToolOutcome } from './toolKit.js';
 import { registerDispatchTools } from './tools.js';
@@ -11,7 +12,7 @@ import type { UnreadProbe } from './unread.js';
 import { createUnreadProbe, withUnreadFooter } from './unread.js';
 
 export const MCP_SERVER_NAME = 'dispatch';
-export const MCP_SERVER_VERSION = '0.24.0';
+export const MCP_SERVER_VERSION = '0.25.0';
 
 // Builds a dispatch MCP server rooted at `rootDir`: the five task_* tools
 // (see tools.ts) plus a `workflow://onboarding` resource that briefs an
@@ -39,6 +40,7 @@ export function createDispatchMcpServer(
     )
   );
   registerDispatchTools(server, rootDir, opts);
+  registerLoginTool(server);
 
   server.registerResource(
     'onboarding',

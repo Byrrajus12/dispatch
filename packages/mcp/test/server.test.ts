@@ -62,6 +62,7 @@ describe('server identity', () => {
       'channel_join',
       'channel_leave',
       'channel_list',
+      'dispatch_login',
       'dispatch_note',
       'doc_link',
       'doc_list',

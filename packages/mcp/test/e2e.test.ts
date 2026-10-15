@@ -104,6 +104,7 @@ describe('dispatch-mcp stdio e2e', () => {
         'channel_join',
         'channel_leave',
         'channel_list',
+        'dispatch_login',
         'dispatch_note',
         'doc_link',
         'doc_list',

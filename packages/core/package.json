@@ -1,6 +1,6 @@
 {
   "name": "@dispatch-foo/core",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "description": "Shared model and helpers for Dispatch: tasks, runs, git and SQLite, used by the daemon, the CLI and the protocol engine.",
   "homepage": "https://dispatch.foo/",
   "license": "MIT",

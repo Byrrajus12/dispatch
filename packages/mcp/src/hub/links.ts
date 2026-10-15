@@ -85,6 +85,17 @@ export class HubLinks {
     this.clock = new OpClock(this.replica, last === '' ? null : last);
   }
 
+  // The team this machine is signed in to, when it is: agents it homes are
+  // placed there.
+  private team: { replica: string; homes(address: string): boolean } | null =
+    null;
+
+  setTeam(
+    team: { replica: string; homes(address: string): boolean } | null
+  ): void {
+    this.team = team;
+  }
+
   /** The engine the links carry mail for; set once it exists. */
   attach(engine: DeliveryEngine): void {
     this.engine = engine;
@@ -178,6 +189,8 @@ export class HubLinks {
     message: Message,
     replyTarget: Message | null
   ): Placement {
+    if (recipient.startsWith('agent:') && this.team?.homes(recipient) === true)
+      return { kind: 'remote', homes: [this.team.replica], alsoLocal: false };
     if (recipient.startsWith('agent:') || recipient.startsWith('channel:repo/'))
       return { kind: 'local' };
     const fromReply =

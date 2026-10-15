@@ -1,6 +1,6 @@
 {
   "name": "@dispatch-foo/protocol",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Reference engine for the Dispatch Messaging Protocol: addresses, envelopes, gates, delivery and a SQLite store.",
   "homepage": "https://dispatch.foo/protocol/",
   "license": "MIT",
