@@ -203,9 +203,15 @@ each other and each sees the other's footer.
 1 → 2 → 3 → 4 → 5. Each lands as its own PR (or PR series) green on
 `root:format`, `root:lint`, typecheck and focused tests.
 
-## Open questions for Wyat
+## Decided (Wyat, 2026-10-15)
 
-1. Custodial web admin replica (piece 4) — acceptable as opt-in?
-2. Default hub approval: auto-approve same-OS-user clients when no team is
-   configured?
-3. Team site lives in the private relay repo (commercial) — confirm.
+1. **Hub ↔ dispatchd: loopback federation.** The hub and each project's
+   dispatchd exchange messages as two local replicas through the protocol's
+   `engine.receive()` path, so threads span both stores and senders keep
+   their addresses. dispatchd keeps its store and gates; its `placement()`
+   homes `agent:` sessions at the hub.
+2. **Hub approval with no team: auto-approve same-OS-user clients.** A team
+   can require approval again.
+3. **Web admin replica: opt-in at team creation.** Teams that decline keep
+   admin-machine admission.
+4. **Team site: the private relay repo** (`wsoule/dispatch-relay`).
