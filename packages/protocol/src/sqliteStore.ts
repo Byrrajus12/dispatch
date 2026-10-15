@@ -88,6 +88,7 @@ export function openMessagesDb(path: string): SqliteDatabase {
   addIdemKey(db);
   addFederationSchema(db);
   addMessageRefs(db);
+  addAgentSessionColumns(db);
   db.exec(`PRAGMA user_version = ${MESSAGES_DB_VERSION}`);
   return db;
 }
@@ -190,6 +191,28 @@ CREATE INDEX IF NOT EXISTS message_refs_target ON message_refs (type, ref_id);`)
       AND json_extract(j.value, '$.id') IS NOT NULL`);
 }
 
+const AGENT_SESSION_COLUMNS = ['parent', 'meta_json', 'last_seen'] as const;
+
+// Additive, like addFederationSchema: what an MCP session reports about itself
+// and its approved parent agent; an older build's upsert leaves them alone.
+function addAgentSessionColumns(db: SqliteDatabase): void {
+  const columns = (): Set<string> =>
+    new Set(
+      queryAll<{ name: string }>(db, 'PRAGMA table_info(agents)').map(
+        (c) => c.name
+      )
+    );
+  const have = columns();
+  for (const column of AGENT_SESSION_COLUMNS) {
+    if (have.has(column)) continue;
+    try {
+      db.exec(`ALTER TABLE agents ADD COLUMN ${column} TEXT`);
+    } catch (err) {
+      if (!columns().has(column)) throw err;
+    }
+  }
+}
+
 /** Which messages a conversation read matches: both parties of a pair, every
  *  thread an address took part in, or every thread referencing a ref. */
 export type ConversationMatch =
@@ -261,6 +284,24 @@ interface AgentRow {
   muted: number;
   approved_by: string | null;
   created_at: string;
+  parent: string | null;
+  meta_json: string | null;
+  last_seen: string | null;
+}
+
+// A stored meta_json as `{meta}`, or nothing when it is not a string map.
+function metaOf(json: string): { meta?: Record<string, string> } {
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+      return {};
+    const entries = Object.entries(parsed).filter(
+      (e): e is [string, string] => typeof e[1] === 'string'
+    );
+    return { meta: Object.fromEntries(entries) };
+  } catch {
+    return {};
+  }
 }
 
 function oneOf<T extends string>(
@@ -900,9 +941,10 @@ export class SqliteMessageStore implements MessageStore {
   putAgent(a: AgentRecord): void {
     this.db
       .prepare(
-        `INSERT INTO agents (addr, display_name, client, token_hash, status, muted, approved_by, created_at) VALUES (?,?,?,?,?,?,?,?)
+        `INSERT INTO agents (addr, display_name, client, token_hash, status, muted, approved_by, created_at, parent, meta_json, last_seen) VALUES (?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT (addr) DO UPDATE SET display_name = excluded.display_name, client = excluded.client, token_hash = excluded.token_hash,
-      status = excluded.status, muted = excluded.muted, approved_by = excluded.approved_by`
+      status = excluded.status, muted = excluded.muted, approved_by = excluded.approved_by, parent = excluded.parent,
+      meta_json = excluded.meta_json, last_seen = excluded.last_seen`
       )
       .run(
         a.address,
@@ -912,8 +954,21 @@ export class SqliteMessageStore implements MessageStore {
         a.status,
         a.muted ? 1 : 0,
         a.approvedBy,
-        a.createdAt
+        a.createdAt,
+        a.parent ?? null,
+        a.meta === undefined ? null : JSON.stringify(a.meta),
+        a.lastSeen ?? null
       );
+  }
+
+  touchAgent(address: Address, at: string): void {
+    this.db
+      .prepare('UPDATE agents SET last_seen = ? WHERE addr = ?')
+      .run(at, address);
+  }
+
+  deleteAgent(address: Address): void {
+    this.db.prepare('DELETE FROM agents WHERE addr = ?').run(address);
   }
 
   private toAgent(r: AgentRow): AgentRecord {
@@ -930,6 +985,9 @@ export class SqliteMessageStore implements MessageStore {
       muted: r.muted === 1,
       approvedBy: r.approved_by,
       createdAt: r.created_at,
+      ...(r.parent === null ? {} : { parent: r.parent }),
+      ...(r.meta_json === null ? {} : metaOf(r.meta_json)),
+      ...(r.last_seen === null ? {} : { lastSeen: r.last_seen }),
     };
   }
 

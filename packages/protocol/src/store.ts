@@ -79,6 +79,12 @@ export interface AgentRecord {
   muted: boolean;
   approvedBy: string | null;
   createdAt: string;
+  /** A session's approved client identity; absent for a top-level agent. */
+  parent?: string;
+  /** Session metadata (client, repo, branch, label, …) the agent reported. */
+  meta?: Record<string, string>;
+  /** When the agent last authenticated, ISO time. */
+  lastSeen?: string;
 }
 
 export interface ChannelRecord {
@@ -222,4 +228,7 @@ export interface MessageStore {
   getAgent(address: Address): AgentRecord | null;
   agentByTokenHash(hash: string): AgentRecord | null;
   agents(): AgentRecord[];
+  /** Records that `address` authenticated at `at`. */
+  touchAgent(address: Address, at: string): void;
+  deleteAgent(address: Address): void;
 }
