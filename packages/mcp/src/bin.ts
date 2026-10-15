@@ -49,27 +49,33 @@ if (argv[0] === 'hooks') {
   process.exit(0);
 }
 
-// `login` signs this machine in to a team: every agent on it can then reach
-// every teammate's agents.
-if (argv[0] === 'login') {
-  const { startDeviceLogin } = await import('./login.js');
-  const started = await startDeviceLogin();
-  if ('error' in started) {
-    console.error(`dispatch-mcp login: ${started.error}`);
-    process.exit(1);
+// `login` signs this machine in to a team; `setup` first connects every
+// agent client on the machine, then signs in.
+if (argv[0] === 'login' || argv[0] === 'setup') {
+  const { interactiveLogin } = await import('./login.js');
+  if (argv[0] === 'setup') {
+    const { connectClients, defaultSetupEnv, installGlobally } =
+      await import('./setup.js');
+    const { MCP_SERVER_VERSION } = await import('./server.js');
+    const setupEnv = defaultSetupEnv();
+    console.log(
+      installGlobally(setupEnv, MCP_SERVER_VERSION)
+        ? '  ✓  dispatch-mcp installed'
+        : '  -  dispatch-mcp not installed globally; clients will start it with npx'
+    );
+    const results = connectClients(setupEnv);
+    if (results.length === 0)
+      console.log(
+        'No agent clients found (Claude Code, Codex, Cursor, Gemini CLI, Claude Desktop, Windsurf).'
+      );
+    for (const r of results)
+      console.log(
+        r.status === 'skipped'
+          ? `  -  ${r.client}: skipped (${r.reason})`
+          : `  ✓  ${r.client}: ${r.status === 'added' ? 'connected' : 'already connected'}`
+      );
   }
-  console.log(
-    `Open ${started.verificationUriComplete}\nand confirm the code ${started.userCode}.`
-  );
-  const result = await started.done;
-  if (!result.ok) {
-    console.error(`dispatch-mcp login: ${result.error}`);
-    process.exit(1);
-  }
-  console.log(
-    `Signed in to ${result.team.team.name} as ${result.team.handle}. Your agents can now reach your teammates'.`
-  );
-  process.exit(0);
+  process.exit((await interactiveLogin(console.log)) ? 0 : 1);
 }
 
 if (argv[0] === 'logout') {

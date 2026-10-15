@@ -10,6 +10,7 @@ import {
   teamServer,
   writeTeamFile,
 } from './hub/team.js';
+import { openBrowser, safeToOpen } from './setup.js';
 
 // Signing this machine in to a team (RFC 8628 device flow against the team
 // service): the person approves a short code in their browser, and the
@@ -143,4 +144,36 @@ function restartHub(): void {
       // Already gone; the next MCP call starts a fresh hub.
     }
   }
+}
+
+/** Signs this machine in from a terminal: opens the browser at the code,
+ *  waits, and says how it went. Already signed in, it says so and stops. */
+export async function interactiveLogin(
+  say: (line: string) => void
+): Promise<boolean> {
+  const current = readTeamFile();
+  if (current !== null) {
+    say(`Signed in to ${current.team.name} as ${current.handle}.`);
+    return true;
+  }
+  const started = await startDeviceLogin();
+  if ('error' in started) {
+    say(`Could not start signing in: ${started.error}`);
+    return false;
+  }
+  const opened =
+    safeToOpen(started.verificationUriComplete, teamServer()) &&
+    openBrowser(started.verificationUriComplete);
+  say(
+    `${opened ? 'Your browser opened' : `Open ${started.verificationUriComplete}`}: confirm the code ${started.userCode} there.`
+  );
+  const result = await started.done;
+  if (!result.ok) {
+    say(`Not signed in: ${result.error}`);
+    return false;
+  }
+  say(
+    `Signed in to ${result.team.team.name} as ${result.team.handle}. Your agents can reach your teammates' agents now.`
+  );
+  return true;
 }

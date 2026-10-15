@@ -727,3 +727,4 @@ generativelanguage
 opentui
 oninitialized
 rewake
+rundll
