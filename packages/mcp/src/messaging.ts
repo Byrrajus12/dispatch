@@ -14,6 +14,7 @@ import {
   agentName,
   agentTokenFilePath,
   forgetAgentToken,
+  forgetSessionToken,
   messagingCredential,
 } from './identity.js';
 import type { MessagingCredential } from './identity.js';
@@ -140,7 +141,9 @@ export async function messagingFetch(
       };
     }
     if (code === 'auth_invalid_token') {
-      forgetAgentToken(projRoot, name, credential.token);
+      if (credential.parent !== undefined)
+        forgetSessionToken(projRoot, clientName);
+      else forgetAgentToken(projRoot, name, credential.token);
       const fresh = await messagingCredential(projRoot, clientName);
       if ('error' in fresh) {
         return { ok: false, transient: false, result: toolError(fresh.error) };

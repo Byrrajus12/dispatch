@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -7,6 +7,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir, hostname } from 'node:os';
@@ -27,6 +28,8 @@ export interface MessagingCredential {
   token: string;
   address: string | null;
   kind: 'run' | 'agent';
+  /** Set on a session credential: the client identity that vouched for it. */
+  parent?: string;
 }
 
 function dispatchHome(): string {
@@ -264,6 +267,12 @@ export function existingMessagingCredential(
 ): MessagingCredential | { error: string } | null {
   const run = runCredential();
   if (run !== null) return run;
+  if (sessionsEnabled(process.env)) {
+    const session = readStoredSession(
+      sessionTokenFilePath(rootDir, sessionName(clientName, sessionKey()))
+    );
+    if (session !== null) return session;
+  }
   const cached = readStoredToken(
     agentTokenFilePath(rootDir, agentName(process.env, clientName, hostname()))
   );
@@ -272,14 +281,32 @@ export function existingMessagingCredential(
     : { token: cached.token, address: cached.address, kind: 'agent' };
 }
 
-/** A run's own token, else this project's self-registered agent identity.
+/** A run's own token; else this session's own identity once its client
+ *  identity is approved; else that client identity, self-registering it.
  *  `rootDir` must already be the project root (toolKit.ts's `projectRoot`). */
 export async function messagingCredential(
   rootDir: string,
   clientName: string | undefined
 ): Promise<MessagingCredential | { error: string }> {
-  const existing = existingMessagingCredential(rootDir, clientName);
-  if (existing !== null) return existing;
+  const client = await clientCredential(rootDir, clientName);
+  if ('error' in client || client.kind !== 'agent') return client;
+  if (!sessionsEnabled(process.env)) return client;
+  return (await sessionCredential(rootDir, clientName, client)) ?? client;
+}
+
+// The run's token, or the client identity (`<client>.<host>`) for this
+// project: cached, or registered now and pending until a human approves it.
+async function clientCredential(
+  rootDir: string,
+  clientName: string | undefined
+): Promise<MessagingCredential | { error: string }> {
+  const run = runCredential();
+  if (run !== null) return run;
+  const cached = readStoredToken(
+    agentTokenFilePath(rootDir, agentName(process.env, clientName, hostname()))
+  );
+  if (cached !== null)
+    return { token: cached.token, address: cached.address, kind: 'agent' };
 
   const name = agentName(process.env, clientName, hostname());
   const daemon = readDaemonFile(rootDir);
@@ -293,4 +320,191 @@ export async function messagingCredential(
   // daemon retires the old token and issues this name a new one.
   const rekey = setAsideUnreadable(agentTokenFilePath(rootDir, name));
   return registerAgent(rootDir, daemon, name, clientName, rekey);
+}
+
+// ---------------------------------------------------------------------------
+// Sessions: each MCP server process speaks as its own agent,
+// agent:<operator>/<client>-<sid>, vouched for by its client identity, so two
+// sessions of one client in one project have separate inboxes.
+// ---------------------------------------------------------------------------
+
+/** Sessions are on unless a fixed name was asked for or they are switched off. */
+export function sessionsEnabled(env: NodeJS.ProcessEnv): boolean {
+  const fixed = env.DISPATCH_AGENT_NAME;
+  if (fixed !== undefined && fixed.trim() !== '') return false;
+  return env.DISPATCH_SESSIONS !== '0';
+}
+
+// The environment variables agent clients set to their own session id, most
+// specific first; an MCP server restarted inside one session keeps its address.
+const SESSION_KEY_VARS = [
+  'DISPATCH_SESSION_ID',
+  'CLAUDE_CODE_SESSION_ID',
+  'CODEX_SESSION_ID',
+  'GEMINI_SESSION_ID',
+] as const;
+
+const PROCESS_SESSION_KEY = randomUUID();
+
+/** The key a session's name is derived from: the client's session id, else
+ *  one random id for this process. */
+export function sessionKey(env: NodeJS.ProcessEnv = process.env): string {
+  for (const name of SESSION_KEY_VARS) {
+    const value = env[name];
+    if (value !== undefined && value.trim() !== '') return value.trim();
+  }
+  return PROCESS_SESSION_KEY;
+}
+
+/** `<client>-<6 hex of sha256(key)>`, normalized like any agent name. */
+export function sessionName(
+  clientName: string | undefined,
+  key: string
+): string {
+  const client = normalizeAgentName(
+    clientName !== undefined && clientName.trim() !== '' ? clientName : 'agent'
+  ).slice(0, 30);
+  const sid = createHash('sha256').update(key).digest('hex').slice(0, 6);
+  return normalizeAgentName(`${client}-${sid}`);
+}
+
+/** Where a session's registration is cached, beside its client identity's. */
+export function sessionTokenFilePath(rootDir: string, name: string): string {
+  return join(agentsDir(rootDir), 'sessions', `${name}.json`);
+}
+
+interface StoredSession extends StoredAgentToken {
+  parent: string;
+}
+
+function readStoredSession(path: string): MessagingCredential | null {
+  const stored = readStoredToken(path);
+  if (stored === null) return null;
+  try {
+    const parent = (JSON.parse(readFileSync(path, 'utf8')) as StoredSession)
+      .parent;
+    if (typeof parent !== 'string') return null;
+    return {
+      token: stored.token,
+      address: stored.address,
+      kind: 'agent',
+      parent,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Drops a session's cached token after the daemon refused it. */
+export function forgetSessionToken(
+  rootDir: string,
+  clientName: string | undefined
+): void {
+  rmSync(sessionTokenFilePath(rootDir, sessionName(clientName, sessionKey())), {
+    force: true,
+  });
+}
+
+// The branch checked out at `rootDir`, read from .git/HEAD (a worktree's .git
+// file points at its own HEAD); undefined when detached or unreadable.
+export function currentBranch(rootDir: string): string | undefined {
+  try {
+    let gitDir = join(rootDir, '.git');
+    if (!statSync(gitDir).isDirectory()) {
+      const pointer = readFileSync(gitDir, 'utf8').trim();
+      if (!pointer.startsWith('gitdir: ')) return undefined;
+      gitDir = pointer.slice('gitdir: '.length);
+    }
+    const head = readFileSync(join(gitDir, 'HEAD'), 'utf8').trim();
+    return head.startsWith('ref: refs/heads/')
+      ? head.slice('ref: refs/heads/'.length)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** What a session reports about itself when it registers. */
+export function sessionMetaFor(
+  rootDir: string,
+  clientName: string | undefined
+): Record<string, string> {
+  const branch = currentBranch(rootDir);
+  return {
+    kind: 'session',
+    client: clientName ?? 'unknown',
+    cwd: rootDir,
+    repo: basename(rootDir),
+    pid: String(process.pid),
+    ...(branch === undefined ? {} : { branch }),
+  };
+}
+
+// After a refused session registration (client identity not approved yet),
+// wait this long before asking again; meanwhile the client identity speaks.
+const SESSION_RETRY_MS = 30_000;
+const sessionRetryAt = new Map<string, number>();
+
+// This session's credential: cached, or registered now under `client`; null
+// when the daemon will not vouch for it yet.
+async function sessionCredential(
+  rootDir: string,
+  clientName: string | undefined,
+  client: MessagingCredential
+): Promise<MessagingCredential | null> {
+  const parent = client.address;
+  if (parent === null) return null;
+  const name = sessionName(clientName, sessionKey());
+  const path = sessionTokenFilePath(rootDir, name);
+  const cached = readStoredSession(path);
+  if (cached !== null && cached.parent === parent) return cached;
+
+  const retryKey = `${rootDir}\u0000${name}`;
+  if ((sessionRetryAt.get(retryKey) ?? 0) > Date.now()) return null;
+  const daemon = readDaemonFile(rootDir);
+  if (daemon === null) return null;
+  let res: Response;
+  try {
+    res = await fetch(`http://127.0.0.1:${daemon.port}/api/agents/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...daemonAuth(daemon) },
+      body: JSON.stringify({
+        name,
+        client:
+          clientName !== undefined && clientName.trim() !== ''
+            ? clientName
+            : 'unknown',
+        parent,
+        parentToken: client.token,
+        meta: sessionMetaFor(rootDir, clientName),
+      }),
+      signal: requestDeadline(),
+    });
+  } catch {
+    return null;
+  }
+  if (!res.ok) {
+    sessionRetryAt.set(retryKey, Date.now() + SESSION_RETRY_MS);
+    return null;
+  }
+  const created = (await res.json()) as { address: string; token: string };
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const temp = `${path}.tmp-${process.pid}`;
+  writeFileSync(
+    temp,
+    JSON.stringify({
+      token: created.token,
+      address: created.address,
+      parent,
+    } satisfies StoredSession),
+    { mode: 0o600 }
+  );
+  renameSync(temp, path);
+  sessionRetryAt.delete(retryKey);
+  return {
+    token: created.token,
+    address: created.address,
+    kind: 'agent',
+    parent,
+  };
 }
