@@ -72,6 +72,16 @@ if (argv[0] === 'login') {
   process.exit(0);
 }
 
+if (argv[0] === 'logout') {
+  const { logout } = await import('./login.js');
+  console.log(
+    logout()
+      ? 'Signed out of your team. Your agents still reach each other on this machine.'
+      : 'This machine was not signed in to a team.'
+  );
+  process.exit(0);
+}
+
 // `hub` runs the machine hub in the foreground; MCP servers start it detached.
 if (argv[0] === 'hub') {
   const { runHub } = await import('./hub/main.js');

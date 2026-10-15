@@ -4,7 +4,12 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 
 import type { TeamFile } from './hub/team.js';
-import { teamServer, writeTeamFile } from './hub/team.js';
+import {
+  readTeamFile,
+  removeTeamFile,
+  teamServer,
+  writeTeamFile,
+} from './hub/team.js';
 
 // Signing this machine in to a team (RFC 8628 device flow against the team
 // service): the person approves a short code in their browser, and the
@@ -109,10 +114,23 @@ export async function startDeviceLogin(
   };
 }
 
-/** Saves the sign-in and restarts the machine hub as a team member: its
- *  agents re-register under the team handle on their next call. */
-export function joinTeam(team: TeamFile): void {
+// Saves the sign-in and restarts the machine hub as a team member.
+function joinTeam(team: TeamFile): void {
   writeTeamFile(team);
+  restartHub();
+}
+
+/** Forgets the team sign-in and restarts the machine hub off the team. */
+export function logout(): boolean {
+  const had = readTeamFile() !== null;
+  removeTeamFile();
+  restartHub();
+  return had;
+}
+
+// The hub's agents re-register (under the new handle) on their next call,
+// against a fresh hub that reads the sign-in anew.
+function restartHub(): void {
   rmSync(join(hubDir(), '..', 'agents', 'hub'), {
     recursive: true,
     force: true,

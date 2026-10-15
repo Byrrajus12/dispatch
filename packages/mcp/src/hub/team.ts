@@ -40,7 +40,7 @@ export interface TeamFile {
 }
 
 /** The default team service; DISPATCH_TEAM_URL points elsewhere. */
-export const DEFAULT_TEAM_SERVER = 'https://team.dispatch.foo';
+const DEFAULT_TEAM_SERVER = 'https://team.dispatch.foo';
 
 export function teamServer(env: NodeJS.ProcessEnv = process.env): string {
   return (env.DISPATCH_TEAM_URL ?? DEFAULT_TEAM_SERVER).replace(/\/+$/, '');

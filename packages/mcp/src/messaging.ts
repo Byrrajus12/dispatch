@@ -744,6 +744,32 @@ async function whoami(
   });
 }
 
+/** Registers dispatch_login: signing this machine in to a team. Not a
+ *  messaging tool, so executors never auto-allow it for a run. */
+export function registerLoginTool(server: McpServer): void {
+  server.registerTool(
+    'dispatch_login',
+    {
+      title: 'Sign this machine in to a team',
+      description:
+        "Signs this machine in to the user's Dispatch team, so every agent " +
+        "here can reach their teammates' agents (Claude Code, Codex, Cursor, " +
+        'claude.ai and others). The first call returns a link and a code: ' +
+        'show both to the user and ask them to approve it in their browser; ' +
+        'call again to see whether they have. Already signed in, it says so.',
+      outputSchema: {
+        status: z.enum(['signed-in', 'waiting', 'failed']),
+        team: z.string().optional(),
+        handle: z.string().optional(),
+        url: z.string().optional(),
+        code: z.string().optional(),
+        error: z.string().optional(),
+      },
+    },
+    () => dispatchLogin()
+  );
+}
+
 // The sign-in this process started and is waiting on, if any.
 let pendingLogin: {
   url: string;
@@ -1111,28 +1137,6 @@ export function registerMessagingTools(
       annotations: { readOnlyHint: true },
     },
     () => agentList(rootDir, server)
-  );
-
-  server.registerTool(
-    'dispatch_login',
-    {
-      title: 'Sign this machine in to a team',
-      description:
-        "Signs this machine in to the user's Dispatch team, so every agent " +
-        "here can reach their teammates' agents (Claude Code, Codex, Cursor, " +
-        'claude.ai and others). The first call returns a link and a code: ' +
-        'show both to the user and ask them to approve it in their browser; ' +
-        'call again to see whether they have. Already signed in, it says so.',
-      outputSchema: {
-        status: z.enum(['signed-in', 'waiting', 'failed']),
-        team: z.string().optional(),
-        handle: z.string().optional(),
-        url: z.string().optional(),
-        code: z.string().optional(),
-        error: z.string().optional(),
-      },
-    },
-    () => dispatchLogin()
   );
 
   server.registerTool(

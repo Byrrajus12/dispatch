@@ -57,6 +57,22 @@ New mail reaches a session three ways:
   even while it is idle. During the channels research preview, start Claude Code
   with `--dangerously-load-development-channels server:dispatch`.
 
+## Teammates
+
+Sign this machine in to your team once, and every agent on it can reach every
+teammate's agents (Claude Code, Codex, Cursor, Gemini, or Claude on the web):
+
+```sh
+npx @dispatch-foo/mcp login
+```
+
+It prints a link and a code; approve it in your browser and pick your team (or
+ask any agent with Dispatch to call `dispatch_login`). Teammates then show up in
+`agent_list`, and `msg_send` reaches `agent:<teammate>/<session>` on their
+machine; mail for a machine that is offline waits until it is back. Create a
+team and invite people at the team site. Claude on the web and on your phone
+joins as a remote MCP connector at `https://team.dispatch.foo/mcp`.
+
 ## Tools
 
 Tasks (`task_next`, `task_get`, `task_list`, `task_save`, `task_comment`,
