@@ -7,6 +7,8 @@ import { z } from 'zod';
 import { daemonAuth, readDaemonFile, requestDeadline } from './daemon.js';
 import { knownEndpoint, liveEndpoint, scopeFor } from './endpoint.js';
 import type { Route } from './endpoint.js';
+import type { TeamFile } from './hub/team.js';
+import { readTeamFile } from './hub/team.js';
 import {
   agentName,
   agentTokenFilePath,
@@ -16,6 +18,7 @@ import {
   messagingCredential,
 } from './identity.js';
 import type { MessagingCredential } from './identity.js';
+import { startDeviceLogin } from './login.js';
 import type { MessageBlockingTiming } from './toolKit.js';
 import {
   DEFAULT_MESSAGE_BLOCKING_TIMING,
@@ -741,6 +744,57 @@ async function whoami(
   });
 }
 
+// The sign-in this process started and is waiting on, if any.
+let pendingLogin: {
+  url: string;
+  code: string;
+  result: { ok: true; team: TeamFile } | { ok: false; error: string } | null;
+} | null = null;
+
+// dispatch_login: already signed in, waiting on the person, or a new sign-in.
+async function dispatchLogin(): Promise<ToolOutcome> {
+  if (pendingLogin?.result?.ok === false) {
+    const error = pendingLogin.result.error;
+    pendingLogin = null;
+    return toolResult({ status: 'failed', error });
+  }
+  const signedIn = readTeamFile();
+  if (signedIn !== null && pendingLogin?.result === null) pendingLogin = null;
+  if (signedIn !== null && pendingLogin === null)
+    return toolResult({
+      status: 'signed-in',
+      team: signedIn.team.name,
+      handle: signedIn.handle,
+    });
+  if (pendingLogin !== null)
+    return toolResult({
+      status: 'waiting',
+      url: pendingLogin.url,
+      code: pendingLogin.code,
+    });
+  const started = await startDeviceLogin();
+  if ('error' in started)
+    return toolResult({ status: 'failed', error: started.error });
+  const pending = {
+    url: started.verificationUriComplete,
+    code: started.userCode,
+    result: null as
+      | { ok: true; team: TeamFile }
+      | { ok: false; error: string }
+      | null,
+  };
+  pendingLogin = pending;
+  void started.done.then((result) => {
+    pending.result = result;
+    if (result.ok && pendingLogin === pending) pendingLogin = null;
+  });
+  return toolResult({
+    status: 'waiting',
+    url: pending.url,
+    code: pending.code,
+  });
+}
+
 // POST /api/agents/me/meta {label}
 async function sessionLabel(
   rootDir: string,
@@ -1057,6 +1111,28 @@ export function registerMessagingTools(
       annotations: { readOnlyHint: true },
     },
     () => agentList(rootDir, server)
+  );
+
+  server.registerTool(
+    'dispatch_login',
+    {
+      title: 'Sign this machine in to a team',
+      description:
+        "Signs this machine in to the user's Dispatch team, so every agent " +
+        "here can reach their teammates' agents (Claude Code, Codex, Cursor, " +
+        'claude.ai and others). The first call returns a link and a code: ' +
+        'show both to the user and ask them to approve it in their browser; ' +
+        'call again to see whether they have. Already signed in, it says so.',
+      outputSchema: {
+        status: z.enum(['signed-in', 'waiting', 'failed']),
+        team: z.string().optional(),
+        handle: z.string().optional(),
+        url: z.string().optional(),
+        code: z.string().optional(),
+        error: z.string().optional(),
+      },
+    },
+    () => dispatchLogin()
   );
 
   server.registerTool(

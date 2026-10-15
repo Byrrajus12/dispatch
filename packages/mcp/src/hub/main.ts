@@ -12,6 +12,7 @@ import { userInfo } from 'node:os';
 
 import { MCP_SERVER_VERSION } from '../server.js';
 import { startHub } from './server.js';
+import { readTeamFile } from './team.js';
 
 // `dispatch-mcp hub`: runs the machine hub until it has sat idle for
 // IDLE_SHUTDOWN_MS, publishing ~/.dispatch/hub/hub.json while it serves.
@@ -51,7 +52,16 @@ export async function runHub(): Promise<void> {
   }
   const token = randomBytes(32).toString('hex');
   const id = randomBytes(16).toString('hex');
-  const hub = await startHub({ dir: hubDir(), token, id, handle: ownHandle() });
+  // Signed in to a team, this machine speaks under the team handle, the one
+  // teammates see; otherwise under the handle git gives it.
+  const team = readTeamFile();
+  const hub = await startHub({
+    dir: hubDir(),
+    token,
+    id,
+    handle: team?.handle ?? ownHandle(),
+    team,
+  });
   writeHubFile({
     port: hub.port,
     pid: process.pid,

@@ -26,6 +26,8 @@ import { normalizeAgentName } from '../identity.js';
 import { HubHost } from './host.js';
 import type { HubLink } from './links.js';
 import { HubLinks, projectAddress } from './links.js';
+import type { RosterAgent, TeamFile } from './team.js';
+import { isTeamRow, TeamLink } from './team.js';
 
 // The machine hub: one per OS user, it homes every MCP session's address and
 // mail, whatever repo the session works in. Its routes are the subset of
@@ -43,6 +45,8 @@ export interface HubOptions {
   /** This user's handle: agent addresses are agent:<handle>/<name>. */
   handle: string;
   port?: number;
+  /** The team this machine is signed in to, if any. */
+  team?: TeamFile | null;
 }
 
 export interface HubHandle {
@@ -116,6 +120,18 @@ export async function startHub(opts: HubOptions): Promise<HubHandle> {
   host.federation = links.hooks();
   const engine = new DeliveryEngine({ store, host });
   links.attach(engine);
+  // Signed in to a team: teammates' agents are reachable through it.
+  const team =
+    opts.team === undefined || opts.team === null
+      ? null
+      : new TeamLink(opts.team, {
+          engine,
+          store,
+          me: links.replica,
+          ownRoster: () => ownRoster() as unknown as RosterAgent[],
+        });
+  links.setTeam(team);
+  team?.start();
 
   // One call from this hub to a linked daemon's /api/hub-link/<kind>.
   async function callLink(
@@ -149,9 +165,20 @@ export async function startHub(opts: HubOptions): Promise<HubHandle> {
     if (rosterTimer !== null) return;
     rosterTimer = setTimeout(() => {
       rosterTimer = null;
-      for (const l of links.all())
-        void callLink(l, 'agents', { agents: roster() });
+      // A project mirrors only this machine's agents: teammates reach its
+      // runs through the team's own federation, not through its gate.
+      const own = ownRoster();
+      for (const l of links.all()) void callLink(l, 'agents', { agents: own });
+      team?.pushRoster();
     }, 200);
+  }
+
+  // This machine's own agents: everything but the team's mirrors.
+  function ownRoster(): Record<string, unknown>[] {
+    return roster().filter((a) => {
+      const row = store.getAgent(String(a.address));
+      return row !== null && !isTeamRow(row);
+    });
   }
   let lastActivity = Date.now();
 
@@ -259,7 +286,7 @@ export async function startHub(opts: HubOptions): Promise<HubHandle> {
         },
         (l, kind, payload) => callLink(l, kind, payload)
       );
-      void callLink(link, 'agents', { agents: roster() });
+      void callLink(link, 'agents', { agents: ownRoster() });
       return send(res, 201, { replica: links.replica, token: link.token });
     }
     if (route === 'POST link/mail' || route === 'POST link/state') {
@@ -652,6 +679,7 @@ export async function startHub(opts: HubOptions): Promise<HubHandle> {
         clearInterval(sweep);
         if (rosterTimer !== null) clearTimeout(rosterTimer);
         links.close();
+        team?.stop();
         server.closeAllConnections();
         server.close(() => {
           db.close();

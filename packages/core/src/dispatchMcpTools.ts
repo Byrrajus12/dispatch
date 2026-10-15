@@ -5,6 +5,7 @@ export const DISPATCH_MCP_TOOLS = [
   'channel_join',
   'channel_leave',
   'channel_list',
+  'dispatch_login',
   'dispatch_note',
   'doc_link',
   'doc_list',

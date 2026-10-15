@@ -49,6 +49,29 @@ if (argv[0] === 'hooks') {
   process.exit(0);
 }
 
+// `login` signs this machine in to a team: every agent on it can then reach
+// every teammate's agents.
+if (argv[0] === 'login') {
+  const { startDeviceLogin } = await import('./login.js');
+  const started = await startDeviceLogin();
+  if ('error' in started) {
+    console.error(`dispatch-mcp login: ${started.error}`);
+    process.exit(1);
+  }
+  console.log(
+    `Open ${started.verificationUriComplete}\nand confirm the code ${started.userCode}.`
+  );
+  const result = await started.done;
+  if (!result.ok) {
+    console.error(`dispatch-mcp login: ${result.error}`);
+    process.exit(1);
+  }
+  console.log(
+    `Signed in to ${result.team.team.name} as ${result.team.handle}. Your agents can now reach your teammates'.`
+  );
+  process.exit(0);
+}
+
 // `hub` runs the machine hub in the foreground; MCP servers start it detached.
 if (argv[0] === 'hub') {
   const { runHub } = await import('./hub/main.js');
