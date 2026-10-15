@@ -14,6 +14,7 @@ import { createDispatchMcpServer } from '../src/index.js';
 // sessions whatever repo they are in, and carries mail between them.
 
 const HUB_TOKEN = 'hub-token';
+const HUB_ID = 'hub-id';
 
 let home: string;
 let hub: HubHandle;
@@ -30,7 +31,12 @@ beforeEach(async () => {
   process.env.DISPATCH_HOME = home;
   process.env.DISPATCH_HUB = '1';
   delete process.env.DISPATCH_AGENT_NAME;
-  hub = await startHub({ dir: home, token: HUB_TOKEN, handle: 'wyat' });
+  hub = await startHub({
+    dir: home,
+    token: HUB_TOKEN,
+    id: HUB_ID,
+    handle: 'wyat',
+  });
   base = `http://127.0.0.1:${hub.port}`;
 });
 
@@ -151,6 +157,31 @@ describe('hub registration and mail', () => {
     expect(toNobody.status).toBe(400);
   });
 
+  it('re-keys a held client name only when asked, retiring its sessions', async () => {
+    const client = await register({ name: 'codex.mac', client: 'codex' });
+    const session = await register({
+      name: 'codex-dddddd',
+      client: 'codex',
+      parent: client.address,
+      parentToken: client.token,
+    });
+    const again = await post('/api/agents/register', HUB_TOKEN, {
+      name: 'codex.mac',
+      client: 'codex',
+    });
+    expect(again.status).toBe(409);
+    const rekeyed = await register({
+      name: 'codex.mac',
+      client: 'codex',
+      rekey: true,
+    });
+    expect(rekeyed.token).not.toBe(client.token);
+    const old = await fetch(`${base}/api/mailbox`, {
+      headers: { authorization: `Bearer ${session.token}` },
+    });
+    expect(old.status).toBe(401);
+  });
+
   it('lists a repo channel of the sessions working in that repo', async () => {
     const client = await register({
       name: 'claude.mac',
@@ -182,6 +213,7 @@ describe('MCP sessions over the hub', () => {
     writeHubFile({
       port: hub.port,
       pid: process.pid,
+      id: HUB_ID,
       token: HUB_TOKEN,
       version: 'test',
       startedAt: new Date().toISOString(),
@@ -280,6 +312,46 @@ describe('hub autostart', () => {
         }
       }
       rmSync(own, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+});
+
+describe('hub identity', () => {
+  it('sends no token to a port that cannot prove it is the hub', async () => {
+    let sawBearer = false;
+    const impostor = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch(req) {
+        if (req.headers.get('authorization') !== null) sawBearer = true;
+        return Response.json({ ok: true, hub: true, id: 'someone-else' });
+      },
+    });
+    const root = mkdtempSync(join(tmpdir(), 'dispatch-hub-impostor-'));
+    try {
+      writeHubFile({
+        port: impostor.port ?? 0,
+        pid: process.pid,
+        id: HUB_ID,
+        token: HUB_TOKEN,
+        version: 'test',
+        startedAt: new Date().toISOString(),
+      });
+      process.env.DISPATCH_SESSION_ID = 'impostor-session';
+      const server = createDispatchMcpServer(root);
+      const client = new Client({ name: 'codex', version: '1' });
+      const [x, y] = InMemoryTransport.createLinkedPair();
+      await Promise.all([client.connect(x), server.connect(y)]);
+      // The real hub file names a live pid, so no second hub starts either.
+      const result = (await client.callTool({
+        name: 'whoami',
+        arguments: {},
+      })) as { isError?: boolean };
+      expect(result.isError).toBe(true);
+      expect(sawBearer).toBe(false);
+    } finally {
+      void impostor.stop(true);
       rmSync(root, { recursive: true, force: true });
     }
   }, 20_000);

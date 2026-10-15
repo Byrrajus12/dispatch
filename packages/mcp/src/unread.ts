@@ -1,6 +1,6 @@
 import { untrustedInline } from '@dispatch-foo/core';
 
-import { currentEndpoint } from './endpoint.js';
+import { knownEndpoint } from './endpoint.js';
 import { existingMessagingCredential } from './identity.js';
 import type { ToolOutcome } from './toolKit.js';
 import { projectRoot } from './toolKit.js';
@@ -57,7 +57,7 @@ export async function fetchUnreadAs(
   root: string,
   token: string
 ): Promise<UnreadMessage[] | null> {
-  const endpoint = currentEndpoint(root);
+  const endpoint = await knownEndpoint(root);
   if (endpoint === null) return null;
   try {
     const res = await fetch(

@@ -5,7 +5,7 @@ import { hostname } from 'node:os';
 import { z } from 'zod';
 
 import { daemonAuth, readDaemonFile, requestDeadline } from './daemon.js';
-import { currentEndpoint, liveEndpoint } from './endpoint.js';
+import { knownEndpoint, liveEndpoint } from './endpoint.js';
 import {
   agentName,
   agentTokenFilePath,
@@ -185,7 +185,7 @@ async function agentBlockingTimeoutMs(
   rootDir: string,
   fallbackMs: number
 ): Promise<number> {
-  const endpoint = currentEndpoint(projectRoot(rootDir));
+  const endpoint = await knownEndpoint(projectRoot(rootDir));
   if (endpoint === null) return fallbackMs;
   try {
     const res = await fetch(`http://127.0.0.1:${endpoint.port}/api/config`, {

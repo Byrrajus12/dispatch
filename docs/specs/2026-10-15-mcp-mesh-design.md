@@ -161,6 +161,12 @@ runs and the hub otherwise (`packages/mcp/src/endpoint.ts`).
 
 ## Piece 3 — dispatchd becomes a hub client
 
+- **Approval at the boundary.** The hub auto-approves this OS user's clients
+  (decision 2), but a project that requires approval keeps it: dispatchd admits
+  a hub-homed sender only once that client identity is approved in the project
+  (its own `agent-registration` gate, keyed by the client name), so linking the
+  hub never bypasses a project's gate.
+
 - dispatchd connects to the hub as a **home** for the addresses it owns
   (`run:*`, `task:*`, `epic/<id>` channels, `human:` decision gates). The hub
   routes mail for those addresses to dispatchd over a long-lived connection;

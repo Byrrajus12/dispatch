@@ -16,9 +16,9 @@ import { basename, dirname, join } from 'node:path';
 import { requestDeadline } from './daemon.js';
 import type { Endpoint } from './endpoint.js';
 import {
-  currentEndpoint,
   currentScope,
   HUB_SCOPE,
+  knownEndpoint,
   liveEndpoint,
 } from './endpoint.js';
 
@@ -228,6 +228,10 @@ async function doRegisterAgent(
     if (cached !== null) {
       return { token: cached.token, address: cached.address, kind: 'agent' };
     }
+    // On the machine hub a name with no cache here lost its cache: re-key it
+    // (same OS user), which also retires the sessions of the lost key.
+    if (endpoint.kind === 'hub' && !rekey)
+      return doRegisterAgent(rootDir, endpoint, name, clientName, true);
     return {
       error:
         `${name} is already registered; revoke it in Dispatch → Settings → ` +
@@ -502,7 +506,7 @@ async function resolveSession(
 
   const retryKey = `${rootDir}\u0000${name}`;
   if ((sessionRetryAt.get(retryKey) ?? 0) > Date.now()) return null;
-  const endpoint = currentEndpoint(rootDir);
+  const endpoint = await knownEndpoint(rootDir);
   if (endpoint === null) return null;
   let res: Response;
   try {

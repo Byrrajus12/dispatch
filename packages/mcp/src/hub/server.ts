@@ -32,6 +32,8 @@ export interface HubOptions {
   dir: string;
   /** The request-tier token published in hub.json. */
   token: string;
+  /** The id /api/health answers with, published in hub.json. */
+  id: string;
   /** This user's handle: agent addresses are agent:<handle>/<name>. */
   handle: string;
   port?: number;
@@ -175,7 +177,8 @@ export async function startHub(opts: HubOptions): Promise<HubHandle> {
     if (seg[0] !== 'api') throw new HttpError(404, 'not found');
     const route = `${method} ${seg.slice(1).join('/')}`;
 
-    if (route === 'GET health') return send(res, 200, { ok: true, hub: true });
+    if (route === 'GET health')
+      return send(res, 200, { ok: true, hub: true, id: opts.id });
     if (route === 'GET config')
       return send(res, 200, { messaging: { agentBlockingTimeoutSec: 600 } });
 
@@ -356,7 +359,15 @@ export async function startHub(opts: HubOptions): Promise<HubHandle> {
     if (body.parent === undefined) {
       const address = `agent:${opts.handle}/${name}`;
       const existing = store.getAgent(address);
-      // Re-registering a name rotates its key; its sessions keep their own.
+      // A name already held is refused, so racing registrations cannot rotate
+      // each other's key; an explicit re-key rotates it and retires every
+      // session the old key vouched for.
+      if (existing !== null && body.rekey !== true)
+        throw new HttpError(409, `${address} is already registered`);
+      if (existing !== null)
+        for (const a of store.agents())
+          if (a.parent === address && a.status !== 'revoked')
+            store.putAgent({ ...a, status: 'revoked' });
       store.putAgent({
         address,
         displayName: printable(body.name),

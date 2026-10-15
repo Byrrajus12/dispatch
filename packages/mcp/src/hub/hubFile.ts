@@ -18,6 +18,9 @@ import { join } from 'node:path';
 export interface HubFileInfo {
   port: number;
   pid: number;
+  /** A random id the hub's /api/health echoes, so a client can tell the hub
+   *  from some other process that took its port after it died. */
+  id: string;
   /** The request-tier token: registers agents, never sends as anyone. */
   token: string;
   version: string;
@@ -43,7 +46,9 @@ export function readHubFile(): HubFileInfo | null {
   if (!existsSync(path)) return null;
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as HubFileInfo;
-    return typeof parsed.port === 'number' && typeof parsed.token === 'string'
+    return typeof parsed.port === 'number' &&
+      typeof parsed.token === 'string' &&
+      typeof parsed.id === 'string'
       ? parsed
       : null;
   } catch {

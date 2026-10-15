@@ -27,9 +27,11 @@ function hubEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.DISPATCH_HUB !== '0';
 }
 
-/** The endpoint as its files say, without probing it: the project's daemon
- *  file wins; else the hub's, when the hub is on. */
-export function currentEndpoint(projRoot: string): Endpoint | null {
+/** The endpoint already serving `projRoot`, without starting one: the
+ *  project's daemon file wins; else a hub that proves it is the hub. */
+export async function knownEndpoint(
+  projRoot: string
+): Promise<Endpoint | null> {
   const daemon = readDaemonFile(projRoot);
   if (daemon !== null)
     return {
@@ -38,16 +40,7 @@ export function currentEndpoint(projRoot: string): Endpoint | null {
       auth: daemonAuth(daemon),
       scope: projRoot,
     };
-  if (!hubEnabled()) return null;
-  const hub = readHubFile();
-  return hub === null
-    ? null
-    : {
-        kind: 'hub',
-        port: hub.port,
-        auth: { authorization: `Bearer ${hub.token}` },
-        scope: HUB_SCOPE,
-      };
+  return hubEnabled() ? verifiedHub() : null;
 }
 
 /** The scope agent identities for `projRoot` are cached under right now. */
@@ -77,27 +70,51 @@ export async function liveEndpoint(
   }
   if (!hubEnabled())
     return { error: 'dispatchd not running — start it with: dispatch serve' };
-  const running = await healthyHub();
+  const running = await verifiedHub();
   if (running !== null) return running;
   startHubProcess();
   const deadline = Date.now() + HUB_START_TIMEOUT_MS;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 100));
-    const started = await healthyHub();
+    const started = await verifiedHub();
     if (started !== null) return started;
   }
   return { error: 'the Dispatch machine hub did not start in time' };
 }
 
-async function healthyHub(): Promise<Endpoint | null> {
+// How long a hub's proof of identity is trusted before it is asked again.
+const VERIFIED_FOR_MS = 30_000;
+let verified: { port: number; id: string; at: number } | null = null;
+
+// The hub named in hub.json, once its /api/health echoes that file's id: no
+// token goes to a port some other process took after the hub died.
+async function verifiedHub(): Promise<Endpoint | null> {
   const hub = readHubFile();
-  if (hub === null || !(await isDaemonHealthy(hub.port))) return null;
-  return {
+  if (hub === null) return null;
+  const endpoint: Endpoint = {
     kind: 'hub',
     port: hub.port,
     auth: { authorization: `Bearer ${hub.token}` },
     scope: HUB_SCOPE,
   };
+  if (
+    verified !== null &&
+    verified.port === hub.port &&
+    verified.id === hub.id &&
+    Date.now() - verified.at < VERIFIED_FOR_MS
+  )
+    return endpoint;
+  try {
+    const res = await fetch(`http://127.0.0.1:${hub.port}/api/health`, {
+      signal: AbortSignal.timeout(2000),
+    });
+    const body = (await res.json()) as { hub?: unknown; id?: unknown };
+    if (!res.ok || body.hub !== true || body.id !== hub.id) return null;
+  } catch {
+    return null;
+  }
+  verified = { port: hub.port, id: hub.id, at: Date.now() };
+  return endpoint;
 }
 
 // This package's own entry point, built (dist/bin.js) or source (src/bin.ts).

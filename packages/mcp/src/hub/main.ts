@@ -50,10 +50,12 @@ export async function runHub(): Promise<void> {
     }
   }
   const token = randomBytes(32).toString('hex');
-  const hub = await startHub({ dir: hubDir(), token, handle: ownHandle() });
+  const id = randomBytes(16).toString('hex');
+  const hub = await startHub({ dir: hubDir(), token, id, handle: ownHandle() });
   writeHubFile({
     port: hub.port,
     pid: process.pid,
+    id,
     token,
     version: MCP_SERVER_VERSION,
     startedAt: new Date().toISOString(),
