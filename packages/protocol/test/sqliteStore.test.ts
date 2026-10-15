@@ -320,6 +320,53 @@ describe('SqliteMessageStore', () => {
     expect(store.agents()).toHaveLength(1);
   });
 
+  it('keeps a session agent’s parent, meta and last-seen time', () => {
+    const session = {
+      address: 'agent:wyat/claude-code-7f3a2c',
+      displayName: 'claude-code-7f3a2c',
+      client: 'claude-code',
+      tokenHash: 'h2',
+      status: 'approved' as const,
+      muted: false,
+      approvedBy: 'agent:wyat/claude-code.macbook',
+      createdAt: at,
+      parent: 'agent:wyat/claude-code.macbook',
+      meta: { kind: 'session', repo: 'dispatch', branch: 'main' },
+      lastSeen: at,
+    };
+    store.putAgent(session);
+    expect(store.getAgent(session.address)).toEqual(session);
+
+    store.touchAgent(session.address, '2026-09-23T11:00:00.000Z');
+    expect(store.getAgent(session.address)?.lastSeen).toBe(
+      '2026-09-23T11:00:00.000Z'
+    );
+
+    store.deleteAgent(session.address);
+    expect(store.getAgent(session.address)).toBeNull();
+  });
+
+  it('adds the session columns to an agents table created without them', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agents-'));
+    const path = join(dir, 'm.db');
+    const old = openMessagesDb(path);
+    old.exec('DROP TABLE agents');
+    old.exec(
+      'CREATE TABLE agents (addr TEXT PRIMARY KEY, display_name TEXT NOT NULL, client TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, status TEXT NOT NULL, muted INTEGER NOT NULL, approved_by TEXT, created_at TEXT NOT NULL)'
+    );
+    old.close();
+    const reopened = openMessagesDb(path);
+    const columns = queryAll<{ name: string }>(
+      reopened,
+      'PRAGMA table_info(agents)'
+    ).map((c) => c.name);
+    reopened.close();
+    rmSync(dir, { recursive: true, force: true });
+    expect(columns).toEqual(
+      expect.arrayContaining(['parent', 'meta_json', 'last_seen'])
+    );
+  });
+
   it('lists recent threads by their last message, with root and count', () => {
     store.insertMessage(msg({ id: 'm-01', thread: 'm-01' }));
     store.insertMessage(

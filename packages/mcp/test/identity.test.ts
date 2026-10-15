@@ -16,9 +16,23 @@ import { daemonFilePath } from '../src/daemon.js';
 import {
   agentName,
   agentTokenFilePath,
+  currentBranch,
+  existingMessagingCredential,
   forgetAgentToken,
   messagingCredential,
+  sessionKey,
+  sessionName,
+  sessionsEnabled,
+  sessionTokenFilePath,
 } from '../src/identity.js';
+
+interface SessionCall {
+  name: string;
+  client: string;
+  parent: string;
+  parentToken: string;
+  meta: Record<string, string>;
+}
 
 // A minimal stand-in for dispatchd's registration route — just enough to
 // drive messagingCredential's self-registration path deterministically.
@@ -30,6 +44,11 @@ class FakeDaemon {
     status: 'pending',
   };
   registerCalls: { name: string; client: string; rekey?: boolean }[] = [];
+  /** Session registrations (bodies with a parent); refused by default, as
+   *  for a client identity still awaiting approval. */
+  sessionCalls: SessionCall[] = [];
+  sessionStatus = 403;
+  sessionBody: unknown = { error: 'parent is not approved' };
   /** Delays the register response, to widen the window for a concurrent
    *  call's in-flight dedup to actually observe this one still pending. */
   registerDelayMs = 0;
@@ -51,7 +70,17 @@ class FakeDaemon {
           ) {
             return Response.json({ error: 'unauthorized' }, { status: 401 });
           }
-          const body = (await req.json()) as { name: string; client: string };
+          const body = (await req.json()) as {
+            name: string;
+            client: string;
+            parent?: string;
+          };
+          if (body.parent !== undefined) {
+            this.sessionCalls.push(body as SessionCall);
+            return Response.json(this.sessionBody, {
+              status: this.sessionStatus,
+            });
+          }
           this.registerCalls.push(body);
           this.onRegisterRequest?.();
           if (this.registerDelayMs > 0) {
@@ -81,6 +110,11 @@ const originalEnv = {
   DISPATCH_RUN_TOKEN_FILE: process.env.DISPATCH_RUN_TOKEN_FILE,
   DISPATCH_RUN_ID: process.env.DISPATCH_RUN_ID,
   DISPATCH_AGENT_NAME: process.env.DISPATCH_AGENT_NAME,
+  DISPATCH_SESSIONS: process.env.DISPATCH_SESSIONS,
+  DISPATCH_SESSION_ID: process.env.DISPATCH_SESSION_ID,
+  CLAUDE_CODE_SESSION_ID: process.env.CLAUDE_CODE_SESSION_ID,
+  CODEX_SESSION_ID: process.env.CODEX_SESSION_ID,
+  GEMINI_SESSION_ID: process.env.GEMINI_SESSION_ID,
 };
 
 beforeEach(() => {
@@ -91,6 +125,12 @@ beforeEach(() => {
   delete process.env.DISPATCH_RUN_TOKEN_FILE;
   delete process.env.DISPATCH_RUN_ID;
   delete process.env.DISPATCH_AGENT_NAME;
+  delete process.env.DISPATCH_SESSIONS;
+  // The test runner may itself run inside an agent session.
+  delete process.env.CLAUDE_CODE_SESSION_ID;
+  delete process.env.CODEX_SESSION_ID;
+  delete process.env.GEMINI_SESSION_ID;
+  process.env.DISPATCH_SESSION_ID = 'test-session';
 });
 
 afterEach(() => {
@@ -404,5 +444,132 @@ describe('forgetAgentToken', () => {
 
     forgetAgentToken(root, name, 'fresh-token');
     expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe('sessions', () => {
+  it('takes the most specific session id the environment offers', () => {
+    expect(
+      sessionKey({ CLAUDE_CODE_SESSION_ID: 'c', DISPATCH_SESSION_ID: 'd' })
+    ).toBe('d');
+    expect(sessionKey({ CODEX_SESSION_ID: 'x', GEMINI_SESSION_ID: 'g' })).toBe(
+      'x'
+    );
+    expect(sessionKey({})).toBe(sessionKey({}));
+    expect(sessionKey({})).not.toBe('');
+  });
+
+  it('names a session <client>-<6 hex>, stable for one key', () => {
+    const name = sessionName('Claude Code', 'abc');
+    expect(name).toMatch(/^claude-code-[0-9a-f]{6}$/);
+    expect(sessionName('Claude Code', 'abc')).toBe(name);
+    expect(sessionName('Claude Code', 'abd')).not.toBe(name);
+    expect(sessionName(undefined, 'abc')).toMatch(/^agent-[0-9a-f]{6}$/);
+  });
+
+  it('is off for a fixed agent name or DISPATCH_SESSIONS=0', () => {
+    expect(sessionsEnabled({})).toBe(true);
+    expect(sessionsEnabled({ DISPATCH_AGENT_NAME: 'reviewer' })).toBe(false);
+    expect(sessionsEnabled({ DISPATCH_SESSIONS: '0' })).toBe(false);
+  });
+
+  it('reads the branch from HEAD, through a worktree .git file too', () => {
+    const repo = join(root, 'repo');
+    mkdirSync(join(repo, '.git'), { recursive: true });
+    writeFileSync(join(repo, '.git', 'HEAD'), 'ref: refs/heads/feat/x\n');
+    expect(currentBranch(repo)).toBe('feat/x');
+
+    const wt = join(root, 'wt');
+    const wtGit = join(root, 'wt-git');
+    mkdirSync(wt);
+    mkdirSync(wtGit);
+    writeFileSync(join(wtGit, 'HEAD'), 'ref: refs/heads/side\n');
+    writeFileSync(join(wt, '.git'), `gitdir: ${wtGit}\n`);
+    expect(currentBranch(wt)).toBe('side');
+
+    writeFileSync(join(wtGit, 'HEAD'), 'deadbeef\n');
+    expect(currentBranch(wt)).toBeUndefined();
+    expect(currentBranch(join(root, 'nowhere'))).toBeUndefined();
+  });
+
+  it('speaks as the client identity while the daemon will not vouch for a session', async () => {
+    daemon = new FakeDaemon();
+    writeFakeDaemonFile(root, daemon.start());
+    const cred = await messagingCredential(root, 'Claude Code');
+    expect(cred).toEqual({
+      token: 'freshly-minted-token',
+      address: 'agent:wyat/claude-code.some-host',
+      kind: 'agent',
+    });
+    expect(daemon.sessionCalls).toHaveLength(1);
+    // Refused once, it waits before asking again.
+    await messagingCredential(root, 'Claude Code');
+    expect(daemon.sessionCalls).toHaveLength(1);
+  });
+
+  it('registers and caches a session under an approved client identity', async () => {
+    daemon = new FakeDaemon();
+    daemon.sessionStatus = 201;
+    daemon.sessionBody = {
+      address: 'agent:wyat/claude-code-aaaaaa',
+      token: 'session-token',
+      status: 'approved',
+    };
+    writeFakeDaemonFile(root, daemon.start());
+    process.env.DISPATCH_SESSION_ID = 'approved-session';
+
+    const cred = await messagingCredential(root, 'Claude Code');
+    expect(cred).toEqual({
+      token: 'session-token',
+      address: 'agent:wyat/claude-code-aaaaaa',
+      kind: 'agent',
+      parent: 'agent:wyat/claude-code.some-host',
+    });
+    const [call] = daemon.sessionCalls;
+    expect(call.name).toBe(sessionName('Claude Code', 'approved-session'));
+    expect(call.parent).toBe('agent:wyat/claude-code.some-host');
+    expect(call.parentToken).toBe('freshly-minted-token');
+    expect(call.meta.kind).toBe('session');
+    expect(call.meta.cwd).toBe(root);
+
+    const path = sessionTokenFilePath(root, call.name);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(existingMessagingCredential(root, 'Claude Code')).toEqual(cred);
+    await messagingCredential(root, 'Claude Code');
+    expect(daemon.sessionCalls).toHaveLength(1);
+  });
+
+  it('registers a session once when two calls race to it', async () => {
+    daemon = new FakeDaemon();
+    daemon.sessionStatus = 201;
+    daemon.sessionBody = {
+      address: 'agent:wyat/claude-code-bbbbbb',
+      token: 'raced-token',
+      status: 'approved',
+    };
+    writeFakeDaemonFile(root, daemon.start());
+    process.env.DISPATCH_SESSION_ID = 'raced-session';
+    await messagingCredential(root, 'Claude Code');
+    daemon.sessionCalls = [];
+    const path = sessionTokenFilePath(
+      root,
+      sessionName('Claude Code', 'raced-session')
+    );
+    rmSync(path);
+    const [a, b] = await Promise.all([
+      messagingCredential(root, 'Claude Code'),
+      messagingCredential(root, 'Claude Code'),
+    ]);
+    expect(daemon.sessionCalls).toHaveLength(1);
+    expect(a).toEqual(b);
+  });
+
+  it('never registers a session for a fixed agent name', async () => {
+    daemon = new FakeDaemon();
+    daemon.sessionStatus = 201;
+    writeFakeDaemonFile(root, daemon.start());
+    process.env.DISPATCH_AGENT_NAME = 'reviewer';
+    await messagingCredential(root, 'Claude Code');
+    expect(daemon.sessionCalls).toHaveLength(0);
   });
 });

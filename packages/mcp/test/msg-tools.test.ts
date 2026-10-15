@@ -290,9 +290,13 @@ const originalEnv = {
   DISPATCH_HOME: process.env.DISPATCH_HOME,
   DISPATCH_RUN_TOKEN_FILE: process.env.DISPATCH_RUN_TOKEN_FILE,
   DISPATCH_RUN_ID: process.env.DISPATCH_RUN_ID,
+  DISPATCH_SESSIONS: process.env.DISPATCH_SESSIONS,
 };
 
 beforeEach(() => {
+  // These pin the client identity's own behavior; sessions have their tests
+  // in identity.test.ts and e2e.test.ts.
+  process.env.DISPATCH_SESSIONS = '0';
   fakeHome = mkdtempSync(join(tmpdir(), 'dispatch-mcp-msg-home-'));
   root = mkdtempSync(join(tmpdir(), 'dispatch-mcp-msg-root-'));
   process.env.DISPATCH_HOME = fakeHome;

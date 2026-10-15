@@ -13,7 +13,9 @@ import {
 import {
   agentName,
   agentTokenFilePath,
+  existingMessagingCredential,
   forgetAgentToken,
+  forgetSessionToken,
   messagingCredential,
 } from './identity.js';
 import type { MessagingCredential } from './identity.js';
@@ -30,6 +32,7 @@ import {
   toolResult,
 } from './toolKit.js';
 import type { ToolOutcome } from './toolKit.js';
+import { fetchUnread, summarize } from './unread.js';
 
 // Messaging tools (spec §5–§8), each proxying a route under
 // packages/server/src/messaging/routes.ts, authenticated via identity.ts.
@@ -128,6 +131,18 @@ export async function messagingFetch(
   if (res.status === 401 && credential.kind === 'agent') {
     const code = await authErrorCode(res);
     const name = agentName(process.env, clientName, hostname());
+    if (code === 'auth_agent_revoked' && credential.parent !== undefined) {
+      return {
+        ok: false,
+        transient: false,
+        result: toolError(
+          `This session (${credential.address ?? 'unknown'}) was revoked, or ` +
+            `its client identity ${credential.parent} was. A new agent ` +
+            `session gets a new address; if the client identity was revoked, ` +
+            `delete ${agentTokenFilePath(projRoot, name)} to ask for approval again.`
+        ),
+      };
+    }
     if (code === 'auth_agent_revoked') {
       const filePath = agentTokenFilePath(projRoot, name);
       return {
@@ -140,7 +155,9 @@ export async function messagingFetch(
       };
     }
     if (code === 'auth_invalid_token') {
-      forgetAgentToken(projRoot, name, credential.token);
+      if (credential.parent !== undefined)
+        forgetSessionToken(projRoot, clientName, credential.token);
+      else forgetAgentToken(projRoot, name, credential.token);
       const fresh = await messagingCredential(projRoot, clientName);
       if ('error' in fresh) {
         return { ok: false, transient: false, result: toolError(fresh.error) };
@@ -619,11 +636,46 @@ interface RosterAgentWire {
   client: string;
   status: string;
   remote?: string | null;
+  parent?: string;
+  meta?: Record<string, string>;
+  lastSeen?: string;
+  online?: boolean;
+}
+
+// The session fields an agent reported about itself, each folded to one line.
+interface SessionFields {
+  repo?: string;
+  branch?: string;
+  label?: string;
+  lastSeen?: string;
+}
+
+function sessionFields(a: RosterAgentWire): SessionFields {
+  const fields: SessionFields = {};
+  for (const key of ['repo', 'branch', 'label'] as const) {
+    const value = a.meta?.[key];
+    if (value !== undefined) fields[key] = untrustedInline(value);
+  }
+  if (a.lastSeen !== undefined) fields.lastSeen = a.lastSeen;
+  return fields;
 }
 
 // GET /api/agents/roster on the shared request-tier token: every agent
 // address mail can reach, this machine's and teammates' synced ones.
-async function agentList(rootDir: string): Promise<ToolOutcome> {
+// Live sessions first, then by repo so one repo's sessions sit together.
+function byPresence(
+  a: { online: boolean; repo?: string; address: string },
+  b: { online: boolean; repo?: string; address: string }
+): number {
+  if (a.online !== b.online) return a.online ? -1 : 1;
+  const repo = (a.repo ?? '').localeCompare(b.repo ?? '');
+  return repo !== 0 ? repo : a.address.localeCompare(b.address);
+}
+
+async function agentList(
+  rootDir: string,
+  server: McpServer
+): Promise<ToolOutcome> {
   const daemon = readDaemonFile(projectRoot(rootDir));
   if (daemon === null)
     return toolError('dispatchd not running — cannot list agents');
@@ -638,6 +690,11 @@ async function agentList(rootDir: string): Promise<ToolOutcome> {
   }
   if (!res.ok) return toolError(await messagingErrorText(res));
   const body = (await res.json()) as { agents: RosterAgentWire[] };
+  const own = existingMessagingCredential(
+    projectRoot(rootDir),
+    server.server.getClientVersion()?.name
+  );
+  const self = own === null || 'error' in own ? null : own.address;
   return toolResult({
     agents: body.agents
       .filter((a) => a.status !== 'revoked')
@@ -648,9 +705,61 @@ async function agentList(rootDir: string): Promise<ToolOutcome> {
         client: untrustedInline(a.client),
         status: a.status,
         machine: a.remote ?? 'this machine',
+        kind: a.parent === undefined ? 'agent' : 'session',
+        online: a.online === true,
+        ...sessionFields(a),
+        ...(a.address === self ? { you: true } : {}),
       }))
-      .sort((a, b) => a.address.localeCompare(b.address)),
+      .sort(byPresence),
   });
+}
+
+// This session's address, as messagingCredential settles it (registering when
+// needed), plus its unread summary.
+async function whoami(
+  rootDir: string,
+  server: McpServer
+): Promise<ToolOutcome> {
+  const clientName = server.server.getClientVersion()?.name;
+  const credential = await messagingCredential(
+    projectRoot(rootDir),
+    clientName
+  );
+  if ('error' in credential) return toolError(credential.error);
+  const items = await fetchUnread(rootDir, clientName);
+  const summary = summarize(items ?? []);
+  return toolResult({
+    address: credential.address,
+    kind:
+      credential.kind === 'run'
+        ? 'run'
+        : credential.parent === undefined
+          ? 'agent'
+          : 'session',
+    ...(credential.parent === undefined ? {} : { parent: credential.parent }),
+    unread: summary.count,
+    unreadFrom: summary.from.map(untrustedInline),
+  });
+}
+
+// POST /api/agents/me/meta {label}
+async function sessionLabel(
+  rootDir: string,
+  server: McpServer,
+  label: string
+): Promise<ToolOutcome> {
+  const fetched = await messagingFetch(rootDir, server, '/api/agents/me/meta', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label }),
+  });
+  if (!fetched.ok) return fetchFailed(fetched, 'session_label');
+  if (!fetched.res.ok) return toolError(await messagingErrorText(fetched.res));
+  const body = (await fetched.res.json()) as {
+    address: string;
+    meta: { label: string };
+  };
+  return toolResult({ address: body.address, label: body.meta.label });
 }
 
 const ADDRESS_GRAMMAR =
@@ -936,12 +1045,53 @@ export function registerMessagingTools(
             client: z.string(),
             status: z.string(),
             machine: z.string(),
+            kind: z.enum(['agent', 'session']),
+            online: z.boolean(),
+            repo: z.string().optional(),
+            branch: z.string().optional(),
+            label: z.string().optional(),
+            lastSeen: z.string().optional(),
+            you: z.boolean().optional(),
           })
         ),
       },
       annotations: { readOnlyHint: true },
     },
-    () => agentList(rootDir)
+    () => agentList(rootDir, server)
+  );
+
+  server.registerTool(
+    'whoami',
+    {
+      title: 'Who am I',
+      description:
+        'Your own messaging address (other agents reach you there), the ' +
+        'client identity that vouches for it, and how much unread mail you ' +
+        'have. Each agent session has its own address while its client is ' +
+        'approved; until then it speaks as the client identity.',
+      outputSchema: {
+        address: z.string().nullable(),
+        kind: z.enum(['run', 'agent', 'session']),
+        parent: z.string().optional(),
+        unread: z.number(),
+        unreadFrom: z.array(z.string()),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    () => whoami(rootDir, server)
+  );
+
+  server.registerTool(
+    'session_label',
+    {
+      title: 'Label this session',
+      description:
+        'Say what this session is working on ("auth refactor", "release ' +
+        'notes"), so other agents can tell your session apart in agent_list.',
+      inputSchema: { label: z.string().min(1).max(200) },
+      outputSchema: { address: z.string(), label: z.string() },
+    },
+    ({ label }) => sessionLabel(rootDir, server, label)
   );
 
   server.registerTool(

@@ -981,16 +981,31 @@ function stripTokenHash(agent: AgentRecord): AgentSummary {
     muted: agent.muted,
     approvedBy: agent.approvedBy,
     createdAt: agent.createdAt,
+    ...(agent.parent === undefined ? {} : { parent: agent.parent }),
+    ...(agent.meta === undefined ? {} : { meta: agent.meta }),
+    ...(agent.lastSeen === undefined ? {} : { lastSeen: agent.lastSeen }),
   };
+}
+
+// An agent counts as online when it authenticated this recently.
+const ONLINE_WINDOW_MS = 2 * 60 * 1000;
+
+function isOnline(agent: AgentRecord, nowMs: number): boolean {
+  return (
+    agent.lastSeen !== undefined &&
+    nowMs - Date.parse(agent.lastSeen) <= ONLINE_WINDOW_MS
+  );
 }
 
 // GET /api/agents/roster — request tier, not self-authenticated: this is a
 // membership listing, not an action that needs to know who's asking.
 export function listAgentRoster(ctx: ApiContext): Response {
   const fed = ctx.federation;
+  const now = Date.now();
   return jsonResponse({
     agents: ctx.messaging.store.agents().map((a) => ({
       ...stripTokenHash(a),
+      online: isOnline(a, now),
       // A teammate's agent names its registering machine's handle.
       ...(fed === null
         ? {}
@@ -1048,6 +1063,9 @@ export async function registerAgent(
     name?: unknown;
     client?: unknown;
     rekey?: unknown;
+    parent?: unknown;
+    parentToken?: unknown;
+    meta?: unknown;
   };
   const displayName = registrationField(body.name, 'name');
   if (!displayName.ok) return errorResponse(400, displayName.error);
@@ -1066,6 +1084,15 @@ export async function registerAgent(
       `invalid name: ${displayName.value} has no valid characters once normalized`
     );
   }
+  if (body.parent !== undefined)
+    return registerSession(ctx, {
+      name,
+      displayName: displayName.value,
+      client: client.value,
+      parent: body.parent,
+      parentToken: body.parentToken,
+      meta: body.meta,
+    });
   const requester = humanActor(ctx);
   const address = `agent:${requester.slice('human:'.length)}/${name}`;
   if (body.rekey !== undefined && typeof body.rekey !== 'boolean')
@@ -1087,6 +1114,130 @@ export async function registerAgent(
     { address: reg.address, token: reg.token, status: reg.record.status },
     201
   );
+}
+
+// The keys a session may report about itself, and how long each value may be.
+const SESSION_META_KEYS = new Set([
+  'kind',
+  'client',
+  'cwd',
+  'repo',
+  'branch',
+  'label',
+  'pid',
+]);
+const MAX_SESSION_META_LENGTH = 200;
+
+// A session's self-reported meta: known keys only, printable string values
+// capped in length; anything else is dropped rather than refused.
+function sessionMeta(raw: unknown): Record<string, string> {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {};
+  const meta: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!SESSION_META_KEYS.has(key) || typeof value !== 'string') continue;
+    const printable = value
+      .replace(UNPRINTABLE, '')
+      .trim()
+      .slice(0, MAX_SESSION_META_LENGTH);
+    if (printable !== '') meta[key] = printable;
+  }
+  return meta;
+}
+
+// The operator segment of agent:<operator>/<name>.
+function operatorOf(address: string): string {
+  return address.slice('agent:'.length, address.indexOf('/'));
+}
+
+// Registers an MCP session under its client's approved agent identity, which
+// vouches for it with its own token: approved at once, no gate. The same
+// session registering again (a restarted MCP server) gets a fresh token.
+function registerSession(
+  ctx: ApiContext,
+  reg: {
+    name: string;
+    displayName: string;
+    client: string;
+    parent: unknown;
+    parentToken: unknown;
+    meta: unknown;
+  }
+): Response {
+  if (typeof reg.parent !== 'string' || typeof reg.parentToken !== 'string')
+    return errorResponse(
+      400,
+      'invalid parent: a session needs its parent address and parentToken'
+    );
+  const parent = ctx.messaging.store.getAgent(reg.parent);
+  if (parent === null || parent.tokenHash !== tokenHash(reg.parentToken))
+    return errorResponse(403, `parentToken does not match ${reg.parent}`);
+  if (parent.parent !== undefined)
+    return errorResponse(400, 'invalid parent: a session cannot be a parent');
+  if (isClientAddress(parent.address))
+    return errorResponse(
+      403,
+      'an A2A client cannot vouch for a session; its token works only on the A2A listener'
+    );
+  if (parent.status !== 'approved')
+    return errorResponse(
+      403,
+      `parent ${parent.address} is not approved; approve it in Dispatch first`
+    );
+
+  const address = `agent:${operatorOf(parent.address)}/${reg.name}`;
+  const existing = ctx.messaging.store.getAgent(address);
+  if (existing !== null && existing.parent !== parent.address)
+    return errorResponse(
+      409,
+      `${address} is already registered — choose another session name`
+    );
+  // Revoking is final (XH-R3) for a session as for any agent.
+  if (existing?.status === 'revoked')
+    return errorResponse(
+      409,
+      `${address} was revoked, which is final; start a new session`
+    );
+
+  const token = randomBytes(32).toString('hex');
+  const now = new Date().toISOString();
+  ctx.messaging.store.putAgent({
+    address,
+    displayName: reg.displayName,
+    client: reg.client,
+    tokenHash: tokenHash(token),
+    status: 'approved',
+    muted: parent.muted || (existing?.muted ?? false),
+    approvedBy: parent.address,
+    createdAt: existing?.createdAt ?? now,
+    parent: parent.address,
+    meta: sessionMeta(reg.meta),
+    lastSeen: now,
+  });
+  return jsonResponse({ address, token, status: 'approved' }, 201);
+}
+
+// POST /api/agents/me/meta {label} — self-authenticated: an agent names what
+// it is working on so peers can tell its sessions apart.
+export async function setOwnAgentMeta(
+  req: Request,
+  ctx: ApiContext
+): Promise<Response> {
+  const principal = requirePrincipal(ctx);
+  if (principal.kind !== 'agent')
+    return errorResponse(403, 'only a registered agent has its own meta');
+  const parsed = await readJsonBody(req);
+  if (!parsed.ok) return parsed.response;
+  const label = sessionMeta({
+    label: (parsed.value as { label?: unknown }).label,
+  }).label;
+  if (label === undefined)
+    return invalidField('label', 'invalid label: expected a non-empty string');
+  const agent = ctx.messaging.store.getAgent(principal.address);
+  if (agent === null)
+    return errorResponse(404, `no agent ${principal.address}`);
+  const meta = { ...agent.meta, label };
+  ctx.messaging.store.putAgent({ ...agent, meta });
+  return jsonResponse({ address: agent.address, meta });
 }
 
 // Retires `address`'s row so the same name can register again: an agent on
@@ -1194,6 +1345,10 @@ export async function registerAgentRow(
     };
   }
 
+  // A revoked name registering again starts over: sessions its old key
+  // vouched for stay revoked rather than coming back under the new one.
+  if (existing !== null) revokeSessionsOf(ctx, address);
+
   const token = randomBytes(32).toString('hex');
   const record: AgentRecord = {
     address,
@@ -1239,6 +1394,12 @@ export async function registerAgentRow(
   }
 
   return { ok: true, address, token, record };
+}
+
+function revokeSessionsOf(ctx: ApiContext, parent: string): void {
+  for (const agent of ctx.messaging.store.agents())
+    if (agent.parent === parent && agent.status !== 'revoked')
+      ctx.messaging.store.putAgent({ ...agent, status: 'revoked' });
 }
 
 // The open (unanswered) agent-registration gate for `address`, if any.
@@ -1363,12 +1524,25 @@ function updateAgent(
 
 // POST /api/agents/:addr/mute
 export function muteAgent(ctx: ApiContext, address: string): Response {
+  setSessionsMuted(ctx, address, true);
   return updateAgent(ctx, address, (agent) => ({ ...agent, muted: true }));
 }
 
 // POST /api/agents/:addr/unmute
 export function unmuteAgent(ctx: ApiContext, address: string): Response {
+  setSessionsMuted(ctx, address, false);
   return updateAgent(ctx, address, (agent) => ({ ...agent, muted: false }));
+}
+
+// A muted agent's sessions are muted with it, and unmuted with it.
+function setSessionsMuted(
+  ctx: ApiContext,
+  parent: string,
+  muted: boolean
+): void {
+  for (const agent of ctx.messaging.store.agents())
+    if (agent.parent === parent && agent.muted !== muted)
+      ctx.messaging.store.putAgent({ ...agent, muted });
 }
 
 // GET /api/decisions/open — open blocking questions addressed to a human.

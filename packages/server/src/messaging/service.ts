@@ -96,6 +96,28 @@ interface OverseerGateTarget {
   list(): { id: string }[];
 }
 
+// An MCP session (an agent row with a parent) idle this long leaves the roster.
+const SESSION_MAX_IDLE_MS = 24 * 60 * 60 * 1000;
+const SESSION_SWEEP_MS = 60 * 60 * 1000;
+
+/** Deletes session rows not seen for `maxIdleMs` before `nowMs`; returns how
+ *  many. Top-level agents are never pruned. */
+export function pruneIdleSessions(
+  store: MessageStore,
+  nowMs: number,
+  maxIdleMs: number
+): number {
+  let pruned = 0;
+  for (const agent of store.agents()) {
+    if (agent.parent === undefined) continue;
+    const seen = Date.parse(agent.lastSeen ?? agent.createdAt);
+    if (nowMs - seen <= maxIdleMs) continue;
+    store.deleteAgent(agent.address);
+    pruned++;
+  }
+  return pruned;
+}
+
 export interface Messaging {
   engine: DeliveryEngine;
   store: SqliteMessageStore;
@@ -587,6 +609,11 @@ export function openMessaging(deps: {
     );
   }, deps.scopeExpiry?.sweepMs ?? SCOPE_EXPIRY_SWEEP_MS);
   scopeSweep.unref();
+  const sessionSweep = setInterval(
+    () => pruneIdleSessions(store, Date.now(), SESSION_MAX_IDLE_MS),
+    SESSION_SWEEP_MS
+  );
+  sessionSweep.unref();
 
   // A run's end closes the gates nobody can act on any more, and retries (a
   // tick later, after its other end-of-run hooks) the wakes it blocked.
@@ -667,6 +694,7 @@ export function openMessaging(deps: {
       overseer = null;
       host.setExternalPolicy(null);
       clearInterval(scopeSweep);
+      clearInterval(sessionSweep);
       uninstallScopePolicy();
       uninstallOperatorNotices();
       unsubscribeRunStarted();
