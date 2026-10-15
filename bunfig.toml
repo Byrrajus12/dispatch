@@ -2,4 +2,8 @@
 
 # Covers `bun test <path>` run from the repo root; each listed package's own
 # bunfig.toml carries the matching preload for runs whose cwd is that package.
-preload = ["./packages/server/test/setup.ts", "./packages/cli/test/setup.ts"]
+preload = [
+  "./packages/server/test/setup.ts",
+  "./packages/cli/test/setup.ts",
+  "./packages/mcp/test/setup.ts",
+]

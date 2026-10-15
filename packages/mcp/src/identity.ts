@@ -13,13 +13,14 @@ import {
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
-import type { DaemonFileInfo } from './daemon.js';
+import { requestDeadline } from './daemon.js';
+import type { Endpoint } from './endpoint.js';
 import {
-  daemonAuth,
-  isDaemonHealthy,
-  readDaemonFile,
-  requestDeadline,
-} from './daemon.js';
+  currentEndpoint,
+  currentScope,
+  HUB_SCOPE,
+  liveEndpoint,
+} from './endpoint.js';
 
 // Messaging identity: who an MCP tool call speaks as — a live run speaks as
 // itself; everything else self-registers a per-project cached agent identity.
@@ -49,8 +50,15 @@ function projectKey(rootDir: string): string {
   return createHash('sha256').update(real).digest('hex').slice(0, 12);
 }
 
+// A project's cache, or the machine hub's when the hub serves `rootDir`.
 function agentsDir(rootDir: string): string {
-  return join(dispatchHome(), '.dispatch', 'agents', projectKey(rootDir));
+  const scope = currentScope(rootDir);
+  return join(
+    dispatchHome(),
+    '.dispatch',
+    'agents',
+    scope === HUB_SCOPE ? 'hub' : projectKey(rootDir)
+  );
 }
 
 /** Where `rootDir` caches `name`'s registration — exported so a tool error
@@ -133,7 +141,7 @@ export function forgetAgentToken(
 
 // Mirrors packages/server/src/messaging/routes.ts's normalizeAgentName
 // exactly (not imported — MIT must not depend on the FSL server).
-function normalizeAgentName(raw: string): string {
+export function normalizeAgentName(raw: string): string {
   const lowered = raw.toLowerCase().replace(/[^a-z0-9._-]/g, '-');
   return lowered.replace(/^[^a-z0-9]+/, '').slice(0, 40);
 }
@@ -170,7 +178,7 @@ const inFlightRegistrations = new Map<
 
 async function registerAgent(
   rootDir: string,
-  daemon: DaemonFileInfo,
+  endpoint: Endpoint,
   name: string,
   clientName: string | undefined,
   rekey = false
@@ -178,7 +186,7 @@ async function registerAgent(
   const key = `${rootDir}\u0000${name}`;
   const existing = inFlightRegistrations.get(key);
   if (existing !== undefined) return existing;
-  const promise = doRegisterAgent(rootDir, daemon, name, clientName, rekey);
+  const promise = doRegisterAgent(rootDir, endpoint, name, clientName, rekey);
   inFlightRegistrations.set(key, promise);
   try {
     return await promise;
@@ -191,16 +199,16 @@ async function registerAgent(
 // in-flight dedup). A 409 re-checks the cache first — a parallel writer.
 async function doRegisterAgent(
   rootDir: string,
-  daemon: DaemonFileInfo,
+  endpoint: Endpoint,
   name: string,
   clientName: string | undefined,
   rekey: boolean
 ): Promise<MessagingCredential | { error: string }> {
   let res: Response;
   try {
-    res = await fetch(`http://127.0.0.1:${daemon.port}/api/agents/register`, {
+    res = await fetch(`http://127.0.0.1:${endpoint.port}/api/agents/register`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...daemonAuth(daemon) },
+      headers: { 'content-type': 'application/json', ...endpoint.auth },
       body: JSON.stringify({
         name,
         client:
@@ -309,17 +317,15 @@ async function clientCredential(
     return { token: cached.token, address: cached.address, kind: 'agent' };
 
   const name = agentName(process.env, clientName, hostname());
-  const daemon = readDaemonFile(rootDir);
-  if (daemon === null || !(await isDaemonHealthy(daemon.port))) {
+  const endpoint = await liveEndpoint(rootDir);
+  if ('error' in endpoint)
     return {
-      error:
-        'dispatchd not running — cannot register this agent identity. Start it with: dispatch serve',
+      error: `cannot register this agent identity: ${endpoint.error}`,
     };
-  }
   // The name still holds the lost token, so a damaged cache re-keys it: the
   // daemon retires the old token and issues this name a new one.
   const rekey = setAsideUnreadable(agentTokenFilePath(rootDir, name));
-  return registerAgent(rootDir, daemon, name, clientName, rekey);
+  return registerAgent(rootDir, endpoint, name, clientName, rekey);
 }
 
 // ---------------------------------------------------------------------------
@@ -496,13 +502,13 @@ async function resolveSession(
 
   const retryKey = `${rootDir}\u0000${name}`;
   if ((sessionRetryAt.get(retryKey) ?? 0) > Date.now()) return null;
-  const daemon = readDaemonFile(rootDir);
-  if (daemon === null) return null;
+  const endpoint = currentEndpoint(rootDir);
+  if (endpoint === null) return null;
   let res: Response;
   try {
-    res = await fetch(`http://127.0.0.1:${daemon.port}/api/agents/register`, {
+    res = await fetch(`http://127.0.0.1:${endpoint.port}/api/agents/register`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...daemonAuth(daemon) },
+      headers: { 'content-type': 'application/json', ...endpoint.auth },
       body: JSON.stringify({
         name,
         client:

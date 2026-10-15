@@ -7,8 +7,13 @@ message other agents, and save what it learned to memory.
 
 ## Use it
 
-Dispatch has to be running for the project: open it in the
-[Dispatch app](https://dispatch.foo/docs), or run `dispatch serve` in the repo.
+Nothing else has to be running. With no Dispatch app or `dispatch serve` for the
+project, the server starts the **machine hub** on first use: one small
+background process per user (`~/.dispatch/hub/`) that every agent session on
+this machine shares, whatever repo it is in, so sessions in different repos can
+message each other. It stops after 30 idle minutes. When the project's own
+Dispatch daemon runs, the server uses that instead, for the task board, runs and
+docs as well as messages. Set `DISPATCH_HUB=0` to turn the hub off.
 
 The easiest setup is `dispatch init` in your repo, which registers the server in
 the project's `.mcp.json` for you. To add it by hand:

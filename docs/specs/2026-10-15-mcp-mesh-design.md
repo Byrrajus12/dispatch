@@ -126,7 +126,12 @@ present/absent, hook output shapes per client. Server: parent auto-approval,
 revoke cascade, prune, count route. One e2e: two MCP servers in one repo message
 each other and each sees the other's footer.
 
-## Piece 2 — The machine hub (`packages/hub`, MIT core)
+## Piece 2 — The machine hub (inside `@dispatch-foo/mcp`, MIT)
+
+Built as `packages/mcp/src/hub/` rather than a new package, so
+`npx @dispatch-foo/mcp` stays the only install and no new npm package needs
+publishing. Until piece 3, an MCP server uses its project's dispatchd when one
+runs and the hub otherwise (`packages/mcp/src/endpoint.ts`).
 
 - **What:** a Node (≥22.13, `node:sqlite`) process built on
   `@dispatch-foo/protocol`'s `DeliveryEngine` + `SqliteMessageStore`, with a
@@ -207,11 +212,11 @@ each other and each sees the other's footer.
 
 1. **Hub ↔ dispatchd: loopback federation.** The hub and each project's
    dispatchd exchange messages as two local replicas through the protocol's
-   `engine.receive()` path, so threads span both stores and senders keep
-   their addresses. dispatchd keeps its store and gates; its `placement()`
-   homes `agent:` sessions at the hub.
-2. **Hub approval with no team: auto-approve same-OS-user clients.** A team
-   can require approval again.
+   `engine.receive()` path, so threads span both stores and senders keep their
+   addresses. dispatchd keeps its store and gates; its `placement()` homes
+   `agent:` sessions at the hub.
+2. **Hub approval with no team: auto-approve same-OS-user clients.** A team can
+   require approval again.
 3. **Web admin replica: opt-in at team creation.** Teams that decline keep
    admin-machine admission.
 4. **Team site: the private relay repo** (`wsoule/dispatch-relay`).

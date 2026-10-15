@@ -30,6 +30,13 @@ if (argv[0] === 'hooks') {
   process.exit(0);
 }
 
+// `hub` runs the machine hub in the foreground; MCP servers start it detached.
+if (argv[0] === 'hub') {
+  const { runHub } = await import('./hub/main.js');
+  await runHub();
+  process.exit(0);
+}
+
 const parsed = parseRootArg(argv);
 if (!parsed.ok) {
   console.error(`dispatch-mcp: ${parsed.error}`);

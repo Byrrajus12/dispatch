@@ -4,12 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { z } from 'zod';
 
-import {
-  daemonAuth,
-  isDaemonHealthy,
-  readDaemonFile,
-  requestDeadline,
-} from './daemon.js';
+import { daemonAuth, readDaemonFile, requestDeadline } from './daemon.js';
+import { currentEndpoint, liveEndpoint } from './endpoint.js';
 import {
   agentName,
   agentTokenFilePath,
@@ -100,12 +96,12 @@ export async function messagingFetch(
   init: RequestInit | RequestFor = {}
 ): Promise<MessagingFetchOutcome> {
   const projRoot = projectRoot(rootDir);
-  const daemon = readDaemonFile(projRoot);
-  if (daemon === null || !(await isDaemonHealthy(daemon.port))) {
+  const endpoint = await liveEndpoint(projRoot);
+  if ('error' in endpoint) {
     return {
       ok: false,
       transient: false,
-      result: toolError('dispatchd not running — no one to message'),
+      result: toolError(`${endpoint.error} — no one to message`),
       daemonDown: true,
     };
   }
@@ -115,7 +111,7 @@ export async function messagingFetch(
     return { ok: false, transient: false, result: toolError(credential.error) };
   }
 
-  const url = `http://127.0.0.1:${daemon.port}${path}`;
+  const url = `http://127.0.0.1:${endpoint.port}${path}`;
   const requestFor: RequestFor = typeof init === 'function' ? init : () => init;
   const attempt = (cred: MessagingCredential): Promise<Response> =>
     fetch(url, withBearer(requestFor(cred), cred.token));
@@ -189,11 +185,11 @@ async function agentBlockingTimeoutMs(
   rootDir: string,
   fallbackMs: number
 ): Promise<number> {
-  const daemon = readDaemonFile(projectRoot(rootDir));
-  if (daemon === null) return fallbackMs;
+  const endpoint = currentEndpoint(projectRoot(rootDir));
+  if (endpoint === null) return fallbackMs;
   try {
-    const res = await fetch(`http://127.0.0.1:${daemon.port}/api/config`, {
-      headers: daemonAuth(daemon),
+    const res = await fetch(`http://127.0.0.1:${endpoint.port}/api/config`, {
+      headers: endpoint.auth,
       signal: requestDeadline(),
     });
     if (!res.ok) return fallbackMs;
@@ -676,13 +672,13 @@ async function agentList(
   rootDir: string,
   server: McpServer
 ): Promise<ToolOutcome> {
-  const daemon = readDaemonFile(projectRoot(rootDir));
-  if (daemon === null)
-    return toolError('dispatchd not running — cannot list agents');
+  const endpoint = await liveEndpoint(projectRoot(rootDir));
+  if ('error' in endpoint)
+    return toolError(`${endpoint.error} — cannot list agents`);
   let res: Response;
   try {
-    res = await fetch(`http://127.0.0.1:${daemon.port}/api/agents/roster`, {
-      headers: daemonAuth(daemon),
+    res = await fetch(`http://127.0.0.1:${endpoint.port}/api/agents/roster`, {
+      headers: endpoint.auth,
       signal: requestDeadline(),
     });
   } catch (err) {
