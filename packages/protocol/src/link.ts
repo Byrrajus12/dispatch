@@ -88,6 +88,16 @@ export class LoopbackLink {
     for (const d of which) this.delivery(d, true);
   }
 
+  /** A message the peer sent that this side refused: the peer hears why. */
+  refused(messageId: string, reason: string): void {
+    this.pending.push({
+      t: 'refused',
+      message: messageId,
+      reason,
+      at: new Date().toISOString(),
+    });
+  }
+
   /** Sends what is due: unacknowledged mail homed at the peer, then state. */
   async flush(): Promise<void> {
     if (this.flushing) return;
@@ -183,19 +193,28 @@ export class LoopbackLink {
   }
 }
 
-/** Receives one message the peer sent over the link, reporting back. */
+/** Receives one message the peer sent over the link, reporting back. A
+ *  message the engine refuses is reported refused, so the peer marks it and
+ *  tells its sender instead of sending it again. */
 export async function applyLinkMail(
   engine: DeliveryEngine,
   link: LoopbackLink,
   peer: string,
   body: LinkMail
-): Promise<ReceiveResult> {
-  const result = await engine.receive(body.message, {
-    replica: peer,
-    targets: body.targets,
-  });
-  link.received(body.message, result);
-  return result;
+): Promise<ReceiveResult | { status: 'refused'; reason: string }> {
+  try {
+    const result = await engine.receive(body.message, {
+      replica: peer,
+      targets: body.targets,
+    });
+    link.received(body.message, result);
+    return result;
+  } catch (err) {
+    if (!(err instanceof MessagingError)) throw err;
+    const id = (body.message as { id?: unknown }).id;
+    if (typeof id === 'string') link.refused(id, err.message);
+    return { status: 'refused', reason: err.message };
+  }
 }
 
 /** Applies the peer's state entries the engine accepts from it: delivery

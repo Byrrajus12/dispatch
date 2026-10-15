@@ -120,7 +120,9 @@ export class DaemonHubLink {
   private hub: { id: string; replica: string; token: string } | null = null;
   private link: LoopbackLink | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
-  private lastRoster: HubAgent[] = [];
+  // Null until the hub's first roster arrives: mirroring an empty roster
+  // would drop every session row, revocations included.
+  private lastRoster: HubAgent[] | null = null;
   private linking = false;
 
   constructor(private readonly deps: HubLinkDeps) {
@@ -198,6 +200,15 @@ export class DaemonHubLink {
     if (engine === null || link === null || hub === null)
       throw new Error('not linked to the hub');
     if (kind === 'mail') {
+      // The hub speaks only for the agents it homes: mail from anyone else
+      // (a person, a run, an agent of this project) is refused.
+      const from = (body as { message?: { from?: unknown } }).message?.from;
+      if (!hubMaySpeakFor(this.deps.messages(), from)) {
+        const id = (body as { message?: { id?: unknown } }).message?.id;
+        if (typeof id === 'string')
+          link.refused(id, `the hub does not speak for ${String(from)}`);
+        return { status: 'refused' };
+      }
       const result = await applyLinkMail(
         engine,
         link,
@@ -253,7 +264,7 @@ export class DaemonHubLink {
       if (file === null) return;
       if (this.hub?.id !== file.id || this.link === null)
         await this.linkTo(file);
-      await this.mirror(this.lastRoster);
+      if (this.lastRoster !== null) await this.mirror(this.lastRoster);
     } finally {
       this.linking = false;
     }
@@ -288,7 +299,7 @@ export class DaemonHubLink {
     this.link?.stop();
     this.hub = { id: file.id, replica: answer.replica, token: answer.token };
     const hub = this.hub;
-    this.link = new LoopbackLink({
+    const link: LoopbackLink = new LoopbackLink({
       engine: this.engine,
       store: this.deps.messages(),
       me: this.replica,
@@ -307,15 +318,20 @@ export class DaemonHubLink {
               signal: AbortSignal.timeout(10_000),
             }
           );
-          // The hub restarted and forgot this link: link again next tick.
-          if (res.status === 401) this.link = null;
+          // The hub restarted and forgot this link: retire it and link again
+          // next tick, leaving any newer link alone.
+          if (res.status === 401) {
+            link.stop();
+            if (this.link === link) this.link = null;
+          }
           return res.ok;
         } catch {
           return false;
         }
       },
     });
-    this.link.start();
+    this.link = link;
+    link.start();
   }
 
   // Mirrors the hub's roster: a client new to this project raises the
@@ -329,7 +345,13 @@ export class DaemonHubLink {
     for (const a of agents) {
       if (a.status !== 'approved' || !a.address.startsWith('agent:')) continue;
       listed.add(a.address);
-      const existing = store.getAgent(a.address);
+      let existing = store.getAgent(a.address);
+      // A session this project knew directly (before the hub, or with the
+      // hub off) now lives on the hub: its row becomes a mirror, status kept.
+      if (existing !== null && !isHubRow(existing) && a.parent !== undefined) {
+        existing = { ...existing, tokenHash: hubTokenHash() };
+        store.putAgent(existing);
+      }
       if (existing !== null && !isHubRow(existing)) continue;
       if (a.parent === undefined) {
         if (existing !== null) {
@@ -364,8 +386,15 @@ export class DaemonHubLink {
         ...(a.lastSeen === undefined ? {} : { lastSeen: a.lastSeen }),
       });
     }
+    // A revoked row stays as a tombstone, so a later roster cannot bring it
+    // back approved.
     for (const row of store.agents())
-      if (isHubRow(row) && row.parent !== undefined && !listed.has(row.address))
+      if (
+        isHubRow(row) &&
+        row.parent !== undefined &&
+        row.status !== 'revoked' &&
+        !listed.has(row.address)
+      )
         store.deleteAgent(row.address);
   }
 
@@ -413,6 +442,15 @@ export class DaemonHubLink {
       );
     }
   }
+}
+
+/** Whether hub mail may come from `from`: an agent the hub homes (a mirror
+ *  row) or a system notice; never a person, a run or this project's agents. */
+export function hubMaySpeakFor(store: MessageStore, from: unknown): boolean {
+  if (from === SYSTEM_ADDRESS) return true;
+  if (typeof from !== 'string') return false;
+  const agent = store.getAgent(from);
+  return agent !== null && isHubRow(agent);
 }
 
 // A mirror row's hash: unique, so its gate key is too, and matching no token.

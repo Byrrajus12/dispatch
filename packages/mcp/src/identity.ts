@@ -281,7 +281,7 @@ export function existingMessagingCredential(
   const run = runCredential();
   if (run !== null) return run;
   const rootDir = scopeFor(projRoot, route);
-  if (sessionsEnabled(process.env)) {
+  if (sessionsEnabled(process.env) && sessionScope(projRoot, route)) {
     const session = readStoredSession(
       sessionTokenFilePath(rootDir, sessionName(clientName, sessionKey()))
     );
@@ -306,7 +306,8 @@ export async function messagingCredential(
   const scope = scopeFor(projRoot, route);
   const client = await clientCredential(scope, clientName);
   if ('error' in client || client.kind !== 'agent') return client;
-  if (!sessionsEnabled(process.env)) return client;
+  if (!sessionsEnabled(process.env) || !sessionScope(projRoot, route))
+    return client;
   return (
     (await sessionCredential(scope, projRoot, clientName, client)) ?? client
   );
@@ -343,6 +344,13 @@ async function clientCredential(
 // agent:<operator>/<client>-<sid>, vouched for by its client identity, so two
 // sessions of one client in one project have separate inboxes.
 // ---------------------------------------------------------------------------
+
+// Sessions live where mail goes: on the hub when it is on, so a project
+// call (docs, memory) speaks as the client identity there, never as a second
+// session at the same address the hub's mirror holds.
+function sessionScope(projRoot: string, route: Route): boolean {
+  return route === 'mail' || scopeFor(projRoot, 'mail') === projRoot;
+}
 
 /** Sessions are on unless a fixed name was asked for or they are switched off. */
 export function sessionsEnabled(env: NodeJS.ProcessEnv): boolean {

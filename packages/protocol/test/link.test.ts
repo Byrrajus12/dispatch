@@ -145,3 +145,24 @@ describe('LoopbackLink', () => {
     expect(daemon.engine.inbox('agent:wyat/session-b')).toHaveLength(1);
   });
 });
+
+describe('LoopbackLink refusals', () => {
+  it('marks a message the peer refuses as refused, and stops sending it', async () => {
+    const hub = side('@hub-00000001', (a) => a.endsWith('/session-a'));
+    const daemon = side('@local-00000002', (a) => a.endsWith('/session-b'));
+    // The daemon has never approved this sender.
+    daemon.store.putAgent({
+      ...daemon.store.getAgent('agent:wyat/session-a')!,
+      status: 'pending',
+    });
+    const sent = await hub.engine.send(
+      { to: ['agent:wyat/session-b'], kind: 'message', body: 'let me in' },
+      { address: 'agent:wyat/session-a', canDecide: false }
+    );
+    await hub.link.flush();
+    expect(daemon.engine.inbox('agent:wyat/session-b')).toHaveLength(0);
+    await daemon.link.flush();
+    const row = hub.store.remoteDeliveries({ messageId: sent.message.id })[0];
+    expect(row.state).toBe('refused');
+  });
+});
