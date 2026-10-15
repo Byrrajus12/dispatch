@@ -119,6 +119,7 @@ import {
   SYSTEM_SENDER,
 } from './messaging/gates.js';
 import { implicitEpicMembers } from './messaging/host.js';
+import { DaemonHubLink } from './messaging/hubLink.js';
 import { teamDeciders } from './messaging/operatorRouting.js';
 import {
   createOverseerBus,
@@ -243,6 +244,8 @@ export interface ServerHandle {
   orchestrator: Orchestrator;
   // Exposed the same way, so a test can mint a run token or seed a message.
   messaging: Messaging;
+  /** The link to the machine hub, when this daemon makes one. */
+  hubLink: DaemonHubLink | null;
   // The A2A bridge: its listener status, store and port.
   a2a: A2ABridge;
   // Exposed for introspection/tests — e.g. calling pollOnce() directly to
@@ -261,6 +264,8 @@ export interface ServerHandle {
 
 export interface StartServerOptions {
   rootDir: string;
+  /** Link to the machine hub (default: unless DISPATCH_HUB=0). */
+  hubLink?: boolean;
   // 0 = ephemeral port, assigned by the OS; tests always pass this so
   // multiple server instances can run concurrently without colliding.
   port?: number;
@@ -1598,6 +1603,19 @@ async function bootServer(
   // Messaging opens once the orchestrator exists (it mints run tokens and
   // hears onRunStarted); its recover() waits for reconcileOnBoot() below.
   const appendPolicyActivity = policyActivityAppender({ store, cache, events });
+  // The machine hub homes MCP sessions; this project links to it so runs and
+  // sessions reach each other (messaging/hubLink.ts).
+  const hubLink =
+    (opts.hubLink ?? process.env.DISPATCH_HUB !== '0')
+      ? new DaemonHubLink({
+          rootDir,
+          stateDir: dirname(boardSyncDir(rootDir)),
+          messages: () => messaging.store,
+          team: mailFederation?.hooks ?? null,
+          owner: actorContext.humanRef,
+        })
+      : null;
+  const messagingFederation = hubLink?.hooks() ?? mailFederation?.hooks;
   const messaging = openMessaging({
     rootDir,
     orchestrator,
@@ -1607,12 +1625,12 @@ async function bootServer(
     ledgerStore,
     appendPolicyActivity,
     deciders: teamDeciders(team.teammates),
+    ...(messagingFederation === undefined
+      ? {}
+      : { federation: messagingFederation }),
     ...(mailFederation === null
       ? {}
-      : {
-          federation: mailFederation.hooks,
-          onFederatedMessage: () => boardSync?.notifyLocalChange(),
-        }),
+      : { onFederatedMessage: () => boardSync?.notifyLocalChange() }),
   });
   messagesRef.current = messaging;
   if (federationContext !== null && mailFederation !== null) {
@@ -2361,6 +2379,7 @@ async function bootServer(
     epicEngine,
     taskAuthorship,
     messaging,
+    hubLink,
     docs: docs.service,
     memory,
     a2a,
@@ -2758,6 +2777,7 @@ async function bootServer(
   // defined in practice. Falling back to 0 keeps the types honest without an
   // assertion.
   const port = server.port ?? 0;
+  hubLink?.start(messaging.engine, port);
   const tlsPort = tlsServer === null ? undefined : (tlsServer.port ?? 0);
   await a2a.start();
   if (shared) {
@@ -2794,11 +2814,13 @@ async function bootServer(
     mergeQueue,
     orchestrator,
     messaging,
+    hubLink,
     a2a,
     prManager,
     prWorktrees,
     memory,
     async stop() {
+      hubLink?.stop();
       sharing.clear();
       watchdog.stop();
       idle?.stop();

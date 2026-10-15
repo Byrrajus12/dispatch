@@ -1,6 +1,6 @@
 import { untrustedInline } from '@dispatch-foo/core';
 
-import { readDaemonFile } from './daemon.js';
+import { knownEndpoint, scopeFor } from './endpoint.js';
 import { existingMessagingCredential } from './identity.js';
 import type { ToolOutcome } from './toolKit.js';
 import { projectRoot } from './toolKit.js';
@@ -48,20 +48,20 @@ export async function fetchUnread(
   // A dispatched run's executor already hands it new mail mid-turn.
   if (credential === null || 'error' in credential || credential.kind === 'run')
     return null;
-  return fetchUnreadAs(root, credential.token);
+  return fetchUnreadAs(scopeFor(root, 'mail'), credential.token);
 }
 
-/** The unread items `token`'s holder has in `root`'s daemon, oldest first;
- *  null when there is no daemon or it would not answer. */
+/** The unread items `token`'s holder has at `scope`'s endpoint (the hub, or
+ *  a project's daemon), oldest first; null when it would not answer. */
 export async function fetchUnreadAs(
-  root: string,
+  scope: string,
   token: string
 ): Promise<UnreadMessage[] | null> {
-  const daemon = readDaemonFile(root);
-  if (daemon === null) return null;
+  const endpoint = await knownEndpoint(scope);
+  if (endpoint === null) return null;
   try {
     const res = await fetch(
-      `http://127.0.0.1:${daemon.port}/api/mailbox?state=${UNREAD_STATES}`,
+      `http://127.0.0.1:${endpoint.port}/api/mailbox?state=${UNREAD_STATES}`,
       {
         headers: { authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),

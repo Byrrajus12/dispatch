@@ -15,6 +15,10 @@ process.env.DISPATCH_HOME = fallbackHome;
 // Tests that exercise the watchdog itself pass their own threshold.
 process.env.DISPATCH_WATCHDOG_STALL_MS = '30000';
 
+// No daemon here links to a machine hub unless its test asks for one
+// (startServer's hubLink option): the link changes how mail is stamped.
+process.env.DISPATCH_HUB = '0';
+
 // The daemon defaults to the database now, but most of this suite drives an
 // in-process daemon through the markdown files it writes into a fixture
 // board — the files backend, still supported as the explicit escape hatch.

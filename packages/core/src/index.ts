@@ -462,3 +462,12 @@ export type { PathIo } from './setup/path.js';
 export { agentEnv, readAgentKeys, writeAgentKey } from './setup/agentEnv.js';
 export { defaultSetupCheckDeps, runSetupCheck } from './setup/check.js';
 export type { SetupCheckDeps, SetupCheckInput } from './setup/check.js';
+export {
+  hubDir,
+  readHubFile,
+  removeHubFile,
+  takeStartLock,
+  verifyHub,
+  writeHubFile,
+} from './hubFile.js';
+export type { HubFileInfo } from './hubFile.js';

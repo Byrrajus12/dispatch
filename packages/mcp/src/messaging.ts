@@ -4,12 +4,9 @@ import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { z } from 'zod';
 
-import {
-  daemonAuth,
-  isDaemonHealthy,
-  readDaemonFile,
-  requestDeadline,
-} from './daemon.js';
+import { daemonAuth, readDaemonFile, requestDeadline } from './daemon.js';
+import { knownEndpoint, liveEndpoint, scopeFor } from './endpoint.js';
+import type { Route } from './endpoint.js';
 import {
   agentName,
   agentTokenFilePath,
@@ -97,25 +94,27 @@ export async function messagingFetch(
   rootDir: string,
   server: McpServer,
   path: string,
-  init: RequestInit | RequestFor = {}
+  init: RequestInit | RequestFor = {},
+  route: Route = 'mail'
 ): Promise<MessagingFetchOutcome> {
   const projRoot = projectRoot(rootDir);
-  const daemon = readDaemonFile(projRoot);
-  if (daemon === null || !(await isDaemonHealthy(daemon.port))) {
+  const scope = scopeFor(projRoot, route);
+  const endpoint = await liveEndpoint(scope);
+  if ('error' in endpoint) {
     return {
       ok: false,
       transient: false,
-      result: toolError('dispatchd not running — no one to message'),
+      result: toolError(`${endpoint.error} — no one to message`),
       daemonDown: true,
     };
   }
   const clientName = server.server.getClientVersion()?.name;
-  const credential = await messagingCredential(projRoot, clientName);
+  const credential = await messagingCredential(projRoot, clientName, route);
   if ('error' in credential) {
     return { ok: false, transient: false, result: toolError(credential.error) };
   }
 
-  const url = `http://127.0.0.1:${daemon.port}${path}`;
+  const url = `http://127.0.0.1:${endpoint.port}${path}`;
   const requestFor: RequestFor = typeof init === 'function' ? init : () => init;
   const attempt = (cred: MessagingCredential): Promise<Response> =>
     fetch(url, withBearer(requestFor(cred), cred.token));
@@ -139,12 +138,12 @@ export async function messagingFetch(
           `This session (${credential.address ?? 'unknown'}) was revoked, or ` +
             `its client identity ${credential.parent} was. A new agent ` +
             `session gets a new address; if the client identity was revoked, ` +
-            `delete ${agentTokenFilePath(projRoot, name)} to ask for approval again.`
+            `delete ${agentTokenFilePath(scope, name)} to ask for approval again.`
         ),
       };
     }
     if (code === 'auth_agent_revoked') {
-      const filePath = agentTokenFilePath(projRoot, name);
+      const filePath = agentTokenFilePath(scope, name);
       return {
         ok: false,
         transient: false,
@@ -156,9 +155,9 @@ export async function messagingFetch(
     }
     if (code === 'auth_invalid_token') {
       if (credential.parent !== undefined)
-        forgetSessionToken(projRoot, clientName, credential.token);
-      else forgetAgentToken(projRoot, name, credential.token);
-      const fresh = await messagingCredential(projRoot, clientName);
+        forgetSessionToken(scope, clientName, credential.token);
+      else forgetAgentToken(scope, name, credential.token);
+      const fresh = await messagingCredential(projRoot, clientName, route);
       if ('error' in fresh) {
         return { ok: false, transient: false, result: toolError(fresh.error) };
       }
@@ -189,11 +188,11 @@ async function agentBlockingTimeoutMs(
   rootDir: string,
   fallbackMs: number
 ): Promise<number> {
-  const daemon = readDaemonFile(projectRoot(rootDir));
-  if (daemon === null) return fallbackMs;
+  const endpoint = await knownEndpoint(scopeFor(projectRoot(rootDir), 'mail'));
+  if (endpoint === null) return fallbackMs;
   try {
-    const res = await fetch(`http://127.0.0.1:${daemon.port}/api/config`, {
-      headers: daemonAuth(daemon),
+    const res = await fetch(`http://127.0.0.1:${endpoint.port}/api/config`, {
+      headers: endpoint.auth,
       signal: requestDeadline(),
     });
     if (!res.ok) return fallbackMs;
@@ -676,13 +675,13 @@ async function agentList(
   rootDir: string,
   server: McpServer
 ): Promise<ToolOutcome> {
-  const daemon = readDaemonFile(projectRoot(rootDir));
-  if (daemon === null)
-    return toolError('dispatchd not running — cannot list agents');
+  const endpoint = await liveEndpoint(scopeFor(projectRoot(rootDir), 'mail'));
+  if ('error' in endpoint)
+    return toolError(`${endpoint.error} — cannot list agents`);
   let res: Response;
   try {
-    res = await fetch(`http://127.0.0.1:${daemon.port}/api/agents/roster`, {
-      headers: daemonAuth(daemon),
+    res = await fetch(`http://127.0.0.1:${endpoint.port}/api/agents/roster`, {
+      headers: endpoint.auth,
       signal: requestDeadline(),
     });
   } catch (err) {

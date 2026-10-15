@@ -607,6 +607,9 @@ importers:
       '@dispatch-foo/core':
         specifier: workspace:*
         version: link:../core
+      '@dispatch-foo/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       '@modelcontextprotocol/sdk':
         specifier: 'catalog:'
         version: 1.29.0(zod@4.4.3)

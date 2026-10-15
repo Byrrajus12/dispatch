@@ -126,7 +126,12 @@ present/absent, hook output shapes per client. Server: parent auto-approval,
 revoke cascade, prune, count route. One e2e: two MCP servers in one repo message
 each other and each sees the other's footer.
 
-## Piece 2 — The machine hub (`packages/hub`, MIT core)
+## Piece 2 — The machine hub (inside `@dispatch-foo/mcp`, MIT)
+
+Built as `packages/mcp/src/hub/` rather than a new package, so
+`npx @dispatch-foo/mcp` stays the only install and no new npm package needs
+publishing. Until piece 3, an MCP server uses its project's dispatchd when one
+runs and the hub otherwise (`packages/mcp/src/endpoint.ts`).
 
 - **What:** a Node (≥22.13, `node:sqlite`) process built on
   `@dispatch-foo/protocol`'s `DeliveryEngine` + `SqliteMessageStore`, with a
@@ -155,6 +160,12 @@ each other and each sees the other's footer.
   `scripts/check-licenses.ts`.
 
 ## Piece 3 — dispatchd becomes a hub client
+
+- **Approval at the boundary.** The hub auto-approves this OS user's clients
+  (decision 2), but a project that requires approval keeps it: dispatchd admits
+  a hub-homed sender only once that client identity is approved in the project
+  (its own `agent-registration` gate, keyed by the client name), so linking the
+  hub never bypasses a project's gate.
 
 - dispatchd connects to the hub as a **home** for the addresses it owns
   (`run:*`, `task:*`, `epic/<id>` channels, `human:` decision gates). The hub

@@ -13,13 +13,15 @@ import {
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
-import type { DaemonFileInfo } from './daemon.js';
+import { requestDeadline } from './daemon.js';
+import type { Endpoint } from './endpoint.js';
 import {
-  daemonAuth,
-  isDaemonHealthy,
-  readDaemonFile,
-  requestDeadline,
-} from './daemon.js';
+  HUB_SCOPE,
+  knownEndpoint,
+  liveEndpoint,
+  scopeFor,
+} from './endpoint.js';
+import type { Route } from './endpoint.js';
 
 // Messaging identity: who an MCP tool call speaks as — a live run speaks as
 // itself; everything else self-registers a per-project cached agent identity.
@@ -49,8 +51,14 @@ function projectKey(rootDir: string): string {
   return createHash('sha256').update(real).digest('hex').slice(0, 12);
 }
 
-function agentsDir(rootDir: string): string {
-  return join(dispatchHome(), '.dispatch', 'agents', projectKey(rootDir));
+// A scope's cache: a project root's, or the machine hub's for HUB_SCOPE.
+function agentsDir(scope: string): string {
+  return join(
+    dispatchHome(),
+    '.dispatch',
+    'agents',
+    scope === HUB_SCOPE ? 'hub' : projectKey(scope)
+  );
 }
 
 /** Where `rootDir` caches `name`'s registration — exported so a tool error
@@ -133,7 +141,7 @@ export function forgetAgentToken(
 
 // Mirrors packages/server/src/messaging/routes.ts's normalizeAgentName
 // exactly (not imported — MIT must not depend on the FSL server).
-function normalizeAgentName(raw: string): string {
+export function normalizeAgentName(raw: string): string {
   const lowered = raw.toLowerCase().replace(/[^a-z0-9._-]/g, '-');
   return lowered.replace(/^[^a-z0-9]+/, '').slice(0, 40);
 }
@@ -170,7 +178,7 @@ const inFlightRegistrations = new Map<
 
 async function registerAgent(
   rootDir: string,
-  daemon: DaemonFileInfo,
+  endpoint: Endpoint,
   name: string,
   clientName: string | undefined,
   rekey = false
@@ -178,7 +186,7 @@ async function registerAgent(
   const key = `${rootDir}\u0000${name}`;
   const existing = inFlightRegistrations.get(key);
   if (existing !== undefined) return existing;
-  const promise = doRegisterAgent(rootDir, daemon, name, clientName, rekey);
+  const promise = doRegisterAgent(rootDir, endpoint, name, clientName, rekey);
   inFlightRegistrations.set(key, promise);
   try {
     return await promise;
@@ -191,16 +199,16 @@ async function registerAgent(
 // in-flight dedup). A 409 re-checks the cache first — a parallel writer.
 async function doRegisterAgent(
   rootDir: string,
-  daemon: DaemonFileInfo,
+  endpoint: Endpoint,
   name: string,
   clientName: string | undefined,
   rekey: boolean
 ): Promise<MessagingCredential | { error: string }> {
   let res: Response;
   try {
-    res = await fetch(`http://127.0.0.1:${daemon.port}/api/agents/register`, {
+    res = await fetch(`http://127.0.0.1:${endpoint.port}/api/agents/register`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...daemonAuth(daemon) },
+      headers: { 'content-type': 'application/json', ...endpoint.auth },
       body: JSON.stringify({
         name,
         client:
@@ -220,6 +228,10 @@ async function doRegisterAgent(
     if (cached !== null) {
       return { token: cached.token, address: cached.address, kind: 'agent' };
     }
+    // On the machine hub a name with no cache here lost its cache: re-key it
+    // (same OS user), which also retires the sessions of the lost key.
+    if (endpoint.kind === 'hub' && !rekey)
+      return doRegisterAgent(rootDir, endpoint, name, clientName, true);
     return {
       error:
         `${name} is already registered; revoke it in Dispatch → Settings → ` +
@@ -262,12 +274,14 @@ function runCredential(): MessagingCredential | { error: string } | null {
 // A credential this process already holds (a run's token file, or a cached
 // agent registration), without registering; null when there is none.
 export function existingMessagingCredential(
-  rootDir: string,
-  clientName: string | undefined
+  projRoot: string,
+  clientName: string | undefined,
+  route: Route = 'mail'
 ): MessagingCredential | { error: string } | null {
   const run = runCredential();
   if (run !== null) return run;
-  if (sessionsEnabled(process.env)) {
+  const rootDir = scopeFor(projRoot, route);
+  if (sessionsEnabled(process.env) && sessionScope(projRoot, route)) {
     const session = readStoredSession(
       sessionTokenFilePath(rootDir, sessionName(clientName, sessionKey()))
     );
@@ -285,13 +299,18 @@ export function existingMessagingCredential(
  *  identity is approved; else that client identity, self-registering it.
  *  `rootDir` must already be the project root (toolKit.ts's `projectRoot`). */
 export async function messagingCredential(
-  rootDir: string,
-  clientName: string | undefined
+  projRoot: string,
+  clientName: string | undefined,
+  route: Route = 'mail'
 ): Promise<MessagingCredential | { error: string }> {
-  const client = await clientCredential(rootDir, clientName);
+  const scope = scopeFor(projRoot, route);
+  const client = await clientCredential(scope, clientName);
   if ('error' in client || client.kind !== 'agent') return client;
-  if (!sessionsEnabled(process.env)) return client;
-  return (await sessionCredential(rootDir, clientName, client)) ?? client;
+  if (!sessionsEnabled(process.env) || !sessionScope(projRoot, route))
+    return client;
+  return (
+    (await sessionCredential(scope, projRoot, clientName, client)) ?? client
+  );
 }
 
 // The run's token, or the client identity (`<client>.<host>`) for this
@@ -309,17 +328,15 @@ async function clientCredential(
     return { token: cached.token, address: cached.address, kind: 'agent' };
 
   const name = agentName(process.env, clientName, hostname());
-  const daemon = readDaemonFile(rootDir);
-  if (daemon === null || !(await isDaemonHealthy(daemon.port))) {
+  const endpoint = await liveEndpoint(rootDir);
+  if ('error' in endpoint)
     return {
-      error:
-        'dispatchd not running — cannot register this agent identity. Start it with: dispatch serve',
+      error: `cannot register this agent identity: ${endpoint.error}`,
     };
-  }
   // The name still holds the lost token, so a damaged cache re-keys it: the
   // daemon retires the old token and issues this name a new one.
   const rekey = setAsideUnreadable(agentTokenFilePath(rootDir, name));
-  return registerAgent(rootDir, daemon, name, clientName, rekey);
+  return registerAgent(rootDir, endpoint, name, clientName, rekey);
 }
 
 // ---------------------------------------------------------------------------
@@ -327,6 +344,13 @@ async function clientCredential(
 // agent:<operator>/<client>-<sid>, vouched for by its client identity, so two
 // sessions of one client in one project have separate inboxes.
 // ---------------------------------------------------------------------------
+
+// Sessions live where mail goes: on the hub when it is on, so a project
+// call (docs, memory) speaks as the client identity there, never as a second
+// session at the same address the hub's mirror holds.
+function sessionScope(projRoot: string, route: Route): boolean {
+  return route === 'mail' || scopeFor(projRoot, 'mail') === projRoot;
+}
 
 /** Sessions are on unless a fixed name was asked for or they are switched off. */
 export function sessionsEnabled(env: NodeJS.ProcessEnv): boolean {
@@ -467,13 +491,14 @@ const inFlightSessions = new Map<string, Promise<MessagingCredential | null>>();
 // when the daemon will not vouch for it yet.
 async function sessionCredential(
   rootDir: string,
+  projRoot: string,
   clientName: string | undefined,
   client: MessagingCredential
 ): Promise<MessagingCredential | null> {
   const key = `${rootDir}\u0000${sessionName(clientName, sessionKey())}`;
   const existing = inFlightSessions.get(key);
   if (existing !== undefined) return existing;
-  const promise = resolveSession(rootDir, clientName, client);
+  const promise = resolveSession(rootDir, projRoot, clientName, client);
   inFlightSessions.set(key, promise);
   try {
     return await promise;
@@ -484,6 +509,7 @@ async function sessionCredential(
 
 async function resolveSession(
   rootDir: string,
+  projRoot: string,
   clientName: string | undefined,
   client: MessagingCredential
 ): Promise<MessagingCredential | null> {
@@ -496,13 +522,13 @@ async function resolveSession(
 
   const retryKey = `${rootDir}\u0000${name}`;
   if ((sessionRetryAt.get(retryKey) ?? 0) > Date.now()) return null;
-  const daemon = readDaemonFile(rootDir);
-  if (daemon === null) return null;
+  const endpoint = await knownEndpoint(rootDir);
+  if (endpoint === null) return null;
   let res: Response;
   try {
-    res = await fetch(`http://127.0.0.1:${daemon.port}/api/agents/register`, {
+    res = await fetch(`http://127.0.0.1:${endpoint.port}/api/agents/register`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...daemonAuth(daemon) },
+      headers: { 'content-type': 'application/json', ...endpoint.auth },
       body: JSON.stringify({
         name,
         client:
@@ -511,7 +537,7 @@ async function resolveSession(
             : 'unknown',
         parent,
         parentToken: client.token,
-        meta: sessionMetaFor(rootDir, clientName),
+        meta: sessionMetaFor(projRoot, clientName),
       }),
       signal: requestDeadline(),
     });

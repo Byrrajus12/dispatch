@@ -178,13 +178,17 @@ export async function taskDocLines(
   taskId: string
 ): Promise<string[] | undefined> {
   const clientName = server.server.getClientVersion()?.name;
-  if (existingMessagingCredential(projectRoot(rootDir), clientName) === null)
+  if (
+    existingMessagingCredential(projectRoot(rootDir), clientName, 'project') ===
+    null
+  )
     return undefined;
   const out = await messagingFetch(
     rootDir,
     server,
     `/api/docs/index?taskId=${encodeURIComponent(taskId)}`,
-    { signal: requestDeadline() }
+    { signal: requestDeadline() },
+    'project'
   );
   if (!out.ok || !out.res.ok) return undefined;
   const body = (await out.res.json().catch(() => null)) as {
@@ -210,11 +214,13 @@ export function registerDocTools(server: McpServer, rootDir: string): void {
     const headers = new Headers(init.headers);
     if (write) headers.set('idempotency-key', randomUUID());
     const attempt = () =>
-      messagingFetch(rootDir, server, path, {
-        ...init,
-        headers,
-        signal: requestDeadline(),
-      });
+      messagingFetch(
+        rootDir,
+        server,
+        path,
+        { ...init, headers, signal: requestDeadline() },
+        'project'
+      );
     let out = await attempt();
     if (!out.ok && out.transient && write) out = await attempt();
     if (!out.ok) return { ok: false, result: fetchFailed(out, name) };

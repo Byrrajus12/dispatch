@@ -46,6 +46,7 @@
   },
   "dependencies": {
     "@dispatch-foo/core": "workspace:*",
+    "@dispatch-foo/protocol": "workspace:*",
     "@modelcontextprotocol/sdk": "catalog:",
     "zod": "catalog:"
   },

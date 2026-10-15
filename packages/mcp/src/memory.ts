@@ -27,9 +27,13 @@ async function getJson<T = Record<string, unknown>>(
   path: string,
   tool: string
 ): Promise<JsonOutcome<T>> {
-  const fetched = await messagingFetch(rootDir, server, path, {
-    signal: requestDeadline(),
-  });
+  const fetched = await messagingFetch(
+    rootDir,
+    server,
+    path,
+    { signal: requestDeadline() },
+    'project'
+  );
   if (!fetched.ok) return { ok: false, result: fetchFailed(fetched, tool) };
   if (!fetched.res.ok)
     return {
@@ -96,9 +100,9 @@ async function postWrite(
     body,
     signal: requestDeadline(),
   });
-  let sent = await messagingFetch(rootDir, server, path, init);
+  let sent = await messagingFetch(rootDir, server, path, init, 'project');
   if (!sent.ok && sent.transient)
-    sent = await messagingFetch(rootDir, server, path, init);
+    sent = await messagingFetch(rootDir, server, path, init, 'project');
   if (!sent.ok) return fetchFailed(sent, tool);
   if (!sent.res.ok) return toolError(await messagingErrorText(sent.res));
   return toolResult((await sent.res.json()) as Record<string, unknown>);

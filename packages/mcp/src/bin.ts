@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 import { parseRootArg } from './argv.js';
 import type { HookClient } from './hook.js';
-import { HOOK_CLIENTS, hookConfigText, runHook } from './hook.js';
+import {
+  HOOK_CLIENTS,
+  hookConfigText,
+  runHook,
+  WAIT_TIMEOUT_SEC,
+  waitForMail,
+} from './hook.js';
 import { runStdioServer } from './server.js';
 
 const argv = process.argv.slice(2);
@@ -10,6 +16,19 @@ const argv = process.argv.slice(2);
 // valid hook output or nothing, and never fail the client's turn.
 if (argv[0] === 'hook') {
   const client = argv[1] as HookClient;
+  // `hook claude wait` runs in the background (asyncRewake): it exits 2 with
+  // the wake line on stderr when mail arrives, else 0 when its time is up.
+  if (client === 'claude' && argv[2] === 'wait') {
+    const line = await waitForMail(await readStdin(), process.cwd(), {
+      timeoutMs: (WAIT_TIMEOUT_SEC - 30) * 1000,
+      pollMs: 3000,
+    }).catch(() => null);
+    if (line !== null) {
+      process.stderr.write(`${line}\n`);
+      process.exit(2);
+    }
+    process.exit(0);
+  }
   if (HOOK_CLIENTS.includes(client) && argv[2] !== undefined) {
     const input = await readStdin();
     const output = await runHook(client, argv[2], input, process.cwd()).catch(
@@ -27,6 +46,13 @@ if (argv[0] === 'hooks') {
     process.exit(1);
   }
   process.stdout.write(hookConfigText(client));
+  process.exit(0);
+}
+
+// `hub` runs the machine hub in the foreground; MCP servers start it detached.
+if (argv[0] === 'hub') {
+  const { runHub } = await import('./hub/main.js');
+  await runHub();
   process.exit(0);
 }
 
