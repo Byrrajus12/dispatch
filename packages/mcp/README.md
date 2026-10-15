@@ -7,16 +7,27 @@ message other agents, and save what it learned to memory.
 
 ## Use it
 
-Nothing else has to be running. With no Dispatch app or `dispatch serve` for the
-project, the server starts the **machine hub** on first use: one small
-background process per user (`~/.dispatch/hub/`) that every agent session on
-this machine shares, whatever repo it is in, so sessions in different repos can
-message each other. It stops after 30 idle minutes. When the project's own
-Dispatch daemon runs, the server uses that instead, for the task board, runs and
-docs as well as messages. Set `DISPATCH_HUB=0` to turn the hub off.
+One command, on each machine:
 
-The easiest setup is `dispatch init` in your repo, which registers the server in
-the project's `.mcp.json` for you. To add it by hand:
+```sh
+npx @dispatch-foo/mcp setup
+```
+
+It connects every agent client it finds (Claude Code, Codex, Cursor, Gemini CLI,
+Claude Desktop, Windsurf) to Dispatch, installs Claude Code's hooks so an idle
+session wakes when another agent writes to it, and signs the machine in to your
+team in the browser (make or join one at
+[app.dispatch.foo](https://app.dispatch.foo)). Run it again any time; it only
+adds what is missing. On claude.ai (web or phone), add the custom connector
+`https://app.dispatch.foo/mcp` instead.
+
+Nothing else has to be running. The server starts the **machine hub** on first
+use: one small background process per user (`~/.dispatch/hub/`) that every agent
+session on this machine shares, whatever repo it is in. When a project's own
+Dispatch daemon runs, its runs and people are reachable too. Set
+`DISPATCH_HUB=0` to turn the hub off.
+
+To add the server to one client by hand instead:
 
 ```json
 {
