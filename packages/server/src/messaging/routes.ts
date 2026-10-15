@@ -1072,15 +1072,6 @@ export async function registerAgent(
   const client = registrationField(body.client, 'client');
   if (!client.ok) return errorResponse(400, client.error);
   const name = normalizeAgentName(displayName.value);
-  if (body.parent !== undefined)
-    return registerSession(ctx, {
-      name,
-      displayName: displayName.value,
-      client: client.value,
-      parent: body.parent,
-      parentToken: body.parentToken,
-      meta: body.meta,
-    });
   if (isReservedName(name)) {
     return errorResponse(
       400,
@@ -1093,6 +1084,15 @@ export async function registerAgent(
       `invalid name: ${displayName.value} has no valid characters once normalized`
     );
   }
+  if (body.parent !== undefined)
+    return registerSession(ctx, {
+      name,
+      displayName: displayName.value,
+      client: client.value,
+      parent: body.parent,
+      parentToken: body.parentToken,
+      meta: body.meta,
+    });
   const requester = humanActor(ctx);
   const address = `agent:${requester.slice('human:'.length)}/${name}`;
   if (body.rekey !== undefined && typeof body.rekey !== 'boolean')
@@ -1173,6 +1173,11 @@ function registerSession(
     return errorResponse(403, `parentToken does not match ${reg.parent}`);
   if (parent.parent !== undefined)
     return errorResponse(400, 'invalid parent: a session cannot be a parent');
+  if (isClientAddress(parent.address))
+    return errorResponse(
+      403,
+      'an A2A client cannot vouch for a session; its token works only on the A2A listener'
+    );
   if (parent.status !== 'approved')
     return errorResponse(
       403,
@@ -1186,6 +1191,12 @@ function registerSession(
       409,
       `${address} is already registered — choose another session name`
     );
+  // Revoking is final (XH-R3) for a session as for any agent.
+  if (existing?.status === 'revoked')
+    return errorResponse(
+      409,
+      `${address} was revoked, which is final; start a new session`
+    );
 
   const token = randomBytes(32).toString('hex');
   const now = new Date().toISOString();
@@ -1195,7 +1206,7 @@ function registerSession(
     client: reg.client,
     tokenHash: tokenHash(token),
     status: 'approved',
-    muted: false,
+    muted: parent.muted,
     approvedBy: parent.address,
     createdAt: existing?.createdAt ?? now,
     parent: parent.address,
@@ -1503,12 +1514,25 @@ function updateAgent(
 
 // POST /api/agents/:addr/mute
 export function muteAgent(ctx: ApiContext, address: string): Response {
+  setSessionsMuted(ctx, address, true);
   return updateAgent(ctx, address, (agent) => ({ ...agent, muted: true }));
 }
 
 // POST /api/agents/:addr/unmute
 export function unmuteAgent(ctx: ApiContext, address: string): Response {
+  setSessionsMuted(ctx, address, false);
   return updateAgent(ctx, address, (agent) => ({ ...agent, muted: false }));
+}
+
+// A muted agent's sessions are muted with it, and unmuted with it.
+function setSessionsMuted(
+  ctx: ApiContext,
+  parent: string,
+  muted: boolean
+): void {
+  for (const agent of ctx.messaging.store.agents())
+    if (agent.parent === parent && agent.muted !== muted)
+      ctx.messaging.store.putAgent({ ...agent, muted });
 }
 
 // GET /api/decisions/open — open blocking questions addressed to a human.

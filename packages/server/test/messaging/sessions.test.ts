@@ -199,6 +199,76 @@ describe('session registration', () => {
     expect(Object.keys(row?.meta ?? {}).sort()).toEqual(['label', 'repo']);
     expect(row?.meta?.label).toBe(`ab${'x'.repeat(198)}`);
   });
+
+  it('holds a session name to the same rules as any agent name', async () => {
+    const parent = await approvedParent();
+    expect((await registerSession(parent, { name: 'a2a.sneaky' })).status).toBe(
+      400
+    );
+    expect((await registerSession(parent, { name: '---' })).status).toBe(400);
+  });
+
+  it('keeps a revoked session revoked', async () => {
+    const parent = await approvedParent();
+    const session = await json<{ address: string }>(
+      await registerSession(parent)
+    );
+    await fetch(
+      `${baseUrl}/api/agents/${encodeURIComponent(session.address)}/revoke`,
+      { method: 'POST', headers: { 'content-type': 'application/json' } }
+    );
+    expect((await registerSession(parent)).status).toBe(409);
+  });
+
+  it('mutes a muted parent’s sessions', async () => {
+    const parent = await approvedParent();
+    await fetch(
+      `${baseUrl}/api/agents/${encodeURIComponent(parent.address)}/mute`,
+      { method: 'POST', headers: { 'content-type': 'application/json' } }
+    );
+    const session = await json<{ address: string }>(
+      await registerSession(parent)
+    );
+    expect(handle.messaging.store.getAgent(session.address)?.muted).toBe(true);
+  });
+
+  it('mutes and unmutes existing sessions with their parent', async () => {
+    const parent = await approvedParent();
+    const session = await json<{ address: string }>(
+      await registerSession(parent)
+    );
+    const toggle = (verb: string) =>
+      fetch(
+        `${baseUrl}/api/agents/${encodeURIComponent(parent.address)}/${verb}`,
+        { method: 'POST', headers: { 'content-type': 'application/json' } }
+      );
+    const muted = () => handle.messaging.store.getAgent(session.address)?.muted;
+    await toggle('mute');
+    expect(muted()).toBe(true);
+    await toggle('unmute');
+    expect(muted()).toBe(false);
+  });
+
+  it('refuses a parent that may not use messaging itself', async () => {
+    const parent = await approvedParent();
+    const store = handle.messaging.store;
+    const row = store.getAgent(parent.address)!;
+    // An A2A client's token works only on the A2A listener.
+    const client = { ...row, address: 'agent:test/a2a.partner' };
+    store.putAgent({ ...row, tokenHash: 'retired' });
+    store.putAgent(client);
+    const asClient = await registerSession({
+      address: client.address,
+      token: parent.token,
+    });
+    expect(asClient.status).toBe(403);
+    // A teammate's replicated agent is approved only on its own machine.
+    store.putAgent({ ...client, tokenHash: `remote:${row.tokenHash}` });
+    expect(
+      (await registerSession({ address: client.address, token: parent.token }))
+        .status
+    ).toBe(403);
+  });
 });
 
 describe('session lifecycle', () => {
