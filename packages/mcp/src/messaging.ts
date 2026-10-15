@@ -8,7 +8,7 @@ import { daemonAuth, readDaemonFile, requestDeadline } from './daemon.js';
 import { knownEndpoint, liveEndpoint, scopeFor } from './endpoint.js';
 import type { Route } from './endpoint.js';
 import type { TeamFile } from './hub/team.js';
-import { readTeamFile } from './hub/team.js';
+import { readTeamFile, teamServer } from './hub/team.js';
 import {
   agentName,
   agentTokenFilePath,
@@ -19,6 +19,7 @@ import {
 } from './identity.js';
 import type { MessagingCredential } from './identity.js';
 import { startDeviceLogin } from './login.js';
+import { openBrowser, safeToOpen } from './setup.js';
 import type { MessageBlockingTiming } from './toolKit.js';
 import {
   DEFAULT_MESSAGE_BLOCKING_TIMING,
@@ -698,6 +699,7 @@ async function agentList(
   );
   const self = own === null || 'error' in own ? null : own.address;
   return toolResult({
+    ...teamStatus(),
     agents: body.agents
       .filter((a) => a.status !== 'revoked')
       .map((a) => ({
@@ -741,6 +743,7 @@ async function whoami(
     ...(credential.parent === undefined ? {} : { parent: credential.parent }),
     unread: summary.count,
     unreadFrom: summary.from.map(untrustedInline),
+    ...teamStatus(),
   });
 }
 
@@ -754,8 +757,8 @@ export function registerLoginTool(server: McpServer): void {
       description:
         "Signs this machine in to the user's Dispatch team, so every agent " +
         "here can reach their teammates' agents (Claude Code, Codex, Cursor, " +
-        'claude.ai and others). The first call returns a link and a code: ' +
-        'show both to the user and ask them to approve it in their browser; ' +
+        'claude.ai and others). The first call opens the browser at a code ' +
+        '(and returns the link and code): tell the user to confirm it there; ' +
         'call again to see whether they have. Already signed in, it says so.',
       outputSchema: {
         status: z.enum(['signed-in', 'waiting', 'failed']),
@@ -763,11 +766,24 @@ export function registerLoginTool(server: McpServer): void {
         handle: z.string().optional(),
         url: z.string().optional(),
         code: z.string().optional(),
+        browser: z.literal('opened').optional(),
         error: z.string().optional(),
       },
     },
     () => dispatchLogin()
   );
+}
+
+// Which team this machine is in, or a pointer to joining one: agents learn
+// whether their teammates are reachable without having to ask.
+function teamStatus(): { team: string } | { team: null; hint: string } {
+  const team = readTeamFile();
+  return team === null
+    ? {
+        team: null,
+        hint: 'This machine is not signed in to a team, so only agents on it are reachable. Call dispatch_login to reach teammates.',
+      }
+    : { team: team.team.name };
 }
 
 // The sign-in this process started and is waiting on, if any.
@@ -810,6 +826,9 @@ async function dispatchLogin(): Promise<ToolOutcome> {
       | null,
   };
   pendingLogin = pending;
+  // The MCP runs on the person's machine, so it can open their browser.
+  const opened =
+    safeToOpen(pending.url, teamServer()) && openBrowser(pending.url);
   void started.done.then((result) => {
     pending.result = result;
     if (result.ok && pendingLogin === pending) pendingLogin = null;
@@ -818,6 +837,7 @@ async function dispatchLogin(): Promise<ToolOutcome> {
     status: 'waiting',
     url: pending.url,
     code: pending.code,
+    ...(opened ? { browser: 'opened' } : {}),
   });
 }
 
@@ -1117,6 +1137,8 @@ export function registerMessagingTools(
         'agent gets mail once a human approves it. To reach work running on ' +
         "a teammate's machine, message its `task:<id>` or `run:<id>` instead.",
       outputSchema: {
+        team: z.string().nullable(),
+        hint: z.string().optional(),
         agents: z.array(
           z.object({
             address: z.string(),
@@ -1154,6 +1176,8 @@ export function registerMessagingTools(
         parent: z.string().optional(),
         unread: z.number(),
         unreadFrom: z.array(z.string()),
+        team: z.string().nullable(),
+        hint: z.string().optional(),
       },
       annotations: { readOnlyHint: true },
     },
