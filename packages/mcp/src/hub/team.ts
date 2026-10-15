@@ -214,7 +214,7 @@ export class TeamLink {
 
   private request(
     kind: 'mail' | 'state' | 'agents',
-    body: LinkMail | LinkState | unknown
+    body: unknown
   ): Promise<boolean> {
     const socket = this.socket;
     if (socket === null || !this.connected) return Promise.resolve(false);

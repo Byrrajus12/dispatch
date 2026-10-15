@@ -1,4 +1,4 @@
-export const CORE_VERSION = '0.24.0';
+export const CORE_VERSION = '0.25.0';
 export * from './status.js';
 export * from './kinds.js';
 export * from './containerRef.js';
