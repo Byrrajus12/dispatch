@@ -49,6 +49,8 @@ export class AgentSync implements Collector, OpHandler {
     }
     for (const a of messages.agents()) {
       if (a.tokenHash.startsWith(REMOTE_TOKEN_PREFIX)) continue;
+      // Sessions come and go by the hour; teammates see their client agent.
+      if (a.parent !== undefined) continue;
       if (isFederationLocalAddress(a.address)) continue;
       if (!this.ownOperator(a.address)) continue;
       const body: AgentBody = {

@@ -539,6 +539,31 @@ describe('sessions', () => {
     expect(daemon.sessionCalls).toHaveLength(1);
   });
 
+  it('registers a session once when two calls race to it', async () => {
+    daemon = new FakeDaemon();
+    daemon.sessionStatus = 201;
+    daemon.sessionBody = {
+      address: 'agent:wyat/claude-code-bbbbbb',
+      token: 'raced-token',
+      status: 'approved',
+    };
+    writeFakeDaemonFile(root, daemon.start());
+    process.env.DISPATCH_SESSION_ID = 'raced-session';
+    await messagingCredential(root, 'Claude Code');
+    daemon.sessionCalls = [];
+    const path = sessionTokenFilePath(
+      root,
+      sessionName('Claude Code', 'raced-session')
+    );
+    rmSync(path);
+    const [a, b] = await Promise.all([
+      messagingCredential(root, 'Claude Code'),
+      messagingCredential(root, 'Claude Code'),
+    ]);
+    expect(daemon.sessionCalls).toHaveLength(1);
+    expect(a).toEqual(b);
+  });
+
   it('never registers a session for a fixed agent name', async () => {
     daemon = new FakeDaemon();
     daemon.sessionStatus = 201;

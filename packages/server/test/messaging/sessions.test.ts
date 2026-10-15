@@ -272,6 +272,32 @@ describe('session registration', () => {
 });
 
 describe('session lifecycle', () => {
+  it('keeps sessions cut when a revoked parent name registers again', async () => {
+    const parent = await approvedParent();
+    const session = await json<{ token: string }>(
+      await registerSession(parent)
+    );
+    await fetch(
+      `${baseUrl}/api/agents/${encodeURIComponent(parent.address)}/revoke`,
+      { method: 'POST', headers: { 'content-type': 'application/json' } }
+    );
+    await approvedParent();
+    expect((await sendAs(session.token)).status).toBe(401);
+  });
+
+  it('keeps a session’s own mute when it registers again', async () => {
+    const parent = await approvedParent();
+    const session = await json<{ address: string }>(
+      await registerSession(parent)
+    );
+    await fetch(
+      `${baseUrl}/api/agents/${encodeURIComponent(session.address)}/mute`,
+      { method: 'POST', headers: { 'content-type': 'application/json' } }
+    );
+    await registerSession(parent);
+    expect(handle.messaging.store.getAgent(session.address)?.muted).toBe(true);
+  });
+
   it('stops a session authenticating once its parent is revoked', async () => {
     const parent = await approvedParent();
     const session = await json<{ token: string }>(

@@ -1206,7 +1206,7 @@ function registerSession(
     client: reg.client,
     tokenHash: tokenHash(token),
     status: 'approved',
-    muted: parent.muted,
+    muted: parent.muted || (existing?.muted ?? false),
     approvedBy: parent.address,
     createdAt: existing?.createdAt ?? now,
     parent: parent.address,
@@ -1345,6 +1345,10 @@ export async function registerAgentRow(
     };
   }
 
+  // A revoked name registering again starts over: sessions its old key
+  // vouched for stay revoked rather than coming back under the new one.
+  if (existing !== null) revokeSessionsOf(ctx, address);
+
   const token = randomBytes(32).toString('hex');
   const record: AgentRecord = {
     address,
@@ -1390,6 +1394,12 @@ export async function registerAgentRow(
   }
 
   return { ok: true, address, token, record };
+}
+
+function revokeSessionsOf(ctx: ApiContext, parent: string): void {
+  for (const agent of ctx.messaging.store.agents())
+    if (agent.parent === parent && agent.status !== 'revoked')
+      ctx.messaging.store.putAgent({ ...agent, status: 'revoked' });
 }
 
 // The open (unanswered) agent-registration gate for `address`, if any.

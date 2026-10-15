@@ -85,11 +85,13 @@ export async function runHook(
   const root = projectRoot(
     typeof input.cwd === 'string' && input.cwd !== '' ? input.cwd : cwd
   );
-  const key =
-    typeof input.session_id === 'string' && input.session_id !== ''
-      ? input.session_id
-      : sessionKey();
-  const file = findSessionFile(root, key);
+  // The hook's session_id first; the MCP server's own key covers a client
+  // that gave the hook a new id (Claude Code after /clear).
+  const keys = [input.session_id, sessionKey()].filter(
+    (k): k is string => typeof k === 'string' && k !== ''
+  );
+  const file =
+    keys.map((k) => findSessionFile(root, k)).find((f) => f !== null) ?? null;
   const credential = file === null ? null : readStoredSession(file);
   if (credential === null) return '';
   const items = await fetchUnreadAs(root, credential.token);

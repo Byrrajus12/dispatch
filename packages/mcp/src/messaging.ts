@@ -131,6 +131,18 @@ export async function messagingFetch(
   if (res.status === 401 && credential.kind === 'agent') {
     const code = await authErrorCode(res);
     const name = agentName(process.env, clientName, hostname());
+    if (code === 'auth_agent_revoked' && credential.parent !== undefined) {
+      return {
+        ok: false,
+        transient: false,
+        result: toolError(
+          `This session (${credential.address ?? 'unknown'}) was revoked, or ` +
+            `its client identity ${credential.parent} was. A new agent ` +
+            `session gets a new address; if the client identity was revoked, ` +
+            `delete ${agentTokenFilePath(projRoot, name)} to ask for approval again.`
+        ),
+      };
+    }
     if (code === 'auth_agent_revoked') {
       const filePath = agentTokenFilePath(projRoot, name);
       return {
@@ -144,7 +156,7 @@ export async function messagingFetch(
     }
     if (code === 'auth_invalid_token') {
       if (credential.parent !== undefined)
-        forgetSessionToken(projRoot, clientName);
+        forgetSessionToken(projRoot, clientName, credential.token);
       else forgetAgentToken(projRoot, name, credential.token);
       const fresh = await messagingCredential(projRoot, clientName);
       if ('error' in fresh) {

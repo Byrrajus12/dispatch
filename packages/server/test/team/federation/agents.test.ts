@@ -56,6 +56,18 @@ describe('agents across daemons', () => {
     expect(JSON.stringify(ops)).not.toContain('a'.repeat(64));
   });
 
+  it('keeps MCP sessions on their own machine', async () => {
+    open = await foundedTeam('ada', 'bob');
+    at(1).messages.putAgent(agent('agent:bob/codex'));
+    at(1).messages.putAgent({
+      ...agent('agent:bob/codex-19be04', 'approved', 'b'.repeat(64)),
+      parent: 'agent:bob/codex',
+    });
+    await at(0).settleWith(at(1));
+    expect(at(0).messages.getAgent('agent:bob/codex')).not.toBeNull();
+    expect(at(0).messages.getAgent('agent:bob/codex-19be04')).toBeNull();
+  });
+
   it('publishes no agent while the founding pin is not firm', async () => {
     open = await foundedTeam('ada', 'bob');
     at(1).fed.setMeta('founder_pin', 'auto');

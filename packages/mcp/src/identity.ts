@@ -404,14 +404,19 @@ export function readStoredSession(path: string): MessagingCredential | null {
   }
 }
 
-/** Drops a session's cached token after the daemon refused it. */
+/** Drops a session's cached token after the daemon refused it, unless a
+ *  parallel heal already cached a newer one in its place. */
 export function forgetSessionToken(
   rootDir: string,
-  clientName: string | undefined
+  clientName: string | undefined,
+  rejectedToken: string
 ): void {
-  rmSync(sessionTokenFilePath(rootDir, sessionName(clientName, sessionKey())), {
-    force: true,
-  });
+  const path = sessionTokenFilePath(
+    rootDir,
+    sessionName(clientName, sessionKey())
+  );
+  if (readStoredSession(path)?.token !== rejectedToken) return;
+  rmSync(path, { force: true });
 }
 
 // The branch checked out at `rootDir`, read from .git/HEAD (a worktree's .git
@@ -454,9 +459,30 @@ function sessionMetaFor(
 const SESSION_RETRY_MS = 30_000;
 const sessionRetryAt = new Map<string, number>();
 
+// Dedupes concurrent registrations of one session: each issues a new token
+// and retires the last, so two racing calls would cancel each other out.
+const inFlightSessions = new Map<string, Promise<MessagingCredential | null>>();
+
 // This session's credential: cached, or registered now under `client`; null
 // when the daemon will not vouch for it yet.
 async function sessionCredential(
+  rootDir: string,
+  clientName: string | undefined,
+  client: MessagingCredential
+): Promise<MessagingCredential | null> {
+  const key = `${rootDir}\u0000${sessionName(clientName, sessionKey())}`;
+  const existing = inFlightSessions.get(key);
+  if (existing !== undefined) return existing;
+  const promise = resolveSession(rootDir, clientName, client);
+  inFlightSessions.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    inFlightSessions.delete(key);
+  }
+}
+
+async function resolveSession(
   rootDir: string,
   clientName: string | undefined,
   client: MessagingCredential
