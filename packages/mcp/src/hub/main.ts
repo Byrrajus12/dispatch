@@ -26,6 +26,7 @@ function ownHandle(): string {
   try {
     const email = execFileSync('git', ['config', '--global', 'user.email'], {
       encoding: 'utf8',
+      env: process.env,
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
     if (email !== '') return handleFromEmail(email, new Set());
