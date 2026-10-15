@@ -16,11 +16,12 @@ import { basename, dirname, join } from 'node:path';
 import { requestDeadline } from './daemon.js';
 import type { Endpoint } from './endpoint.js';
 import {
-  currentScope,
   HUB_SCOPE,
   knownEndpoint,
   liveEndpoint,
+  scopeFor,
 } from './endpoint.js';
+import type { Route } from './endpoint.js';
 
 // Messaging identity: who an MCP tool call speaks as — a live run speaks as
 // itself; everything else self-registers a per-project cached agent identity.
@@ -50,14 +51,13 @@ function projectKey(rootDir: string): string {
   return createHash('sha256').update(real).digest('hex').slice(0, 12);
 }
 
-// A project's cache, or the machine hub's when the hub serves `rootDir`.
-function agentsDir(rootDir: string): string {
-  const scope = currentScope(rootDir);
+// A scope's cache: a project root's, or the machine hub's for HUB_SCOPE.
+function agentsDir(scope: string): string {
   return join(
     dispatchHome(),
     '.dispatch',
     'agents',
-    scope === HUB_SCOPE ? 'hub' : projectKey(rootDir)
+    scope === HUB_SCOPE ? 'hub' : projectKey(scope)
   );
 }
 
@@ -274,11 +274,13 @@ function runCredential(): MessagingCredential | { error: string } | null {
 // A credential this process already holds (a run's token file, or a cached
 // agent registration), without registering; null when there is none.
 export function existingMessagingCredential(
-  rootDir: string,
-  clientName: string | undefined
+  projRoot: string,
+  clientName: string | undefined,
+  route: Route = 'mail'
 ): MessagingCredential | { error: string } | null {
   const run = runCredential();
   if (run !== null) return run;
+  const rootDir = scopeFor(projRoot, route);
   if (sessionsEnabled(process.env)) {
     const session = readStoredSession(
       sessionTokenFilePath(rootDir, sessionName(clientName, sessionKey()))
@@ -297,13 +299,17 @@ export function existingMessagingCredential(
  *  identity is approved; else that client identity, self-registering it.
  *  `rootDir` must already be the project root (toolKit.ts's `projectRoot`). */
 export async function messagingCredential(
-  rootDir: string,
-  clientName: string | undefined
+  projRoot: string,
+  clientName: string | undefined,
+  route: Route = 'mail'
 ): Promise<MessagingCredential | { error: string }> {
-  const client = await clientCredential(rootDir, clientName);
+  const scope = scopeFor(projRoot, route);
+  const client = await clientCredential(scope, clientName);
   if ('error' in client || client.kind !== 'agent') return client;
   if (!sessionsEnabled(process.env)) return client;
-  return (await sessionCredential(rootDir, clientName, client)) ?? client;
+  return (
+    (await sessionCredential(scope, projRoot, clientName, client)) ?? client
+  );
 }
 
 // The run's token, or the client identity (`<client>.<host>`) for this
@@ -477,13 +483,14 @@ const inFlightSessions = new Map<string, Promise<MessagingCredential | null>>();
 // when the daemon will not vouch for it yet.
 async function sessionCredential(
   rootDir: string,
+  projRoot: string,
   clientName: string | undefined,
   client: MessagingCredential
 ): Promise<MessagingCredential | null> {
   const key = `${rootDir}\u0000${sessionName(clientName, sessionKey())}`;
   const existing = inFlightSessions.get(key);
   if (existing !== undefined) return existing;
-  const promise = resolveSession(rootDir, clientName, client);
+  const promise = resolveSession(rootDir, projRoot, clientName, client);
   inFlightSessions.set(key, promise);
   try {
     return await promise;
@@ -494,6 +501,7 @@ async function sessionCredential(
 
 async function resolveSession(
   rootDir: string,
+  projRoot: string,
   clientName: string | undefined,
   client: MessagingCredential
 ): Promise<MessagingCredential | null> {
@@ -521,7 +529,7 @@ async function resolveSession(
             : 'unknown',
         parent,
         parentToken: client.token,
-        meta: sessionMetaFor(rootDir, clientName),
+        meta: sessionMetaFor(projRoot, clientName),
       }),
       signal: requestDeadline(),
     });

@@ -14,6 +14,7 @@ import type {
   MailTarget,
 } from '@dispatch-foo/protocol/federation';
 
+import { isHubReplica } from '../../messaging/hubLink.js';
 import type { Homes } from './homes.js';
 import type { RosterService } from './roster.js';
 import type { Collector } from './service.js';
@@ -65,7 +66,10 @@ function targetsOf(
 ): MailTarget[] {
   const targets: MailTarget[] = [];
   for (const row of messages.remoteDeliveries({ messageId: message.id })) {
-    const homes = [...new Set(row.homes)].filter((h) => h !== me).sort();
+    // The machine hub is a loopback link of this machine, not a teammate.
+    const homes = [...new Set(row.homes)]
+      .filter((h) => h !== me && !isHubReplica(h))
+      .sort();
     if (homes.length === 0) continue;
     targets.push({
       recipient: row.recipient,

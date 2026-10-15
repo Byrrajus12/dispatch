@@ -5,7 +5,8 @@ import { hostname } from 'node:os';
 import { z } from 'zod';
 
 import { daemonAuth, readDaemonFile, requestDeadline } from './daemon.js';
-import { knownEndpoint, liveEndpoint } from './endpoint.js';
+import { knownEndpoint, liveEndpoint, scopeFor } from './endpoint.js';
+import type { Route } from './endpoint.js';
 import {
   agentName,
   agentTokenFilePath,
@@ -93,10 +94,12 @@ export async function messagingFetch(
   rootDir: string,
   server: McpServer,
   path: string,
-  init: RequestInit | RequestFor = {}
+  init: RequestInit | RequestFor = {},
+  route: Route = 'mail'
 ): Promise<MessagingFetchOutcome> {
   const projRoot = projectRoot(rootDir);
-  const endpoint = await liveEndpoint(projRoot);
+  const scope = scopeFor(projRoot, route);
+  const endpoint = await liveEndpoint(scope);
   if ('error' in endpoint) {
     return {
       ok: false,
@@ -106,7 +109,7 @@ export async function messagingFetch(
     };
   }
   const clientName = server.server.getClientVersion()?.name;
-  const credential = await messagingCredential(projRoot, clientName);
+  const credential = await messagingCredential(projRoot, clientName, route);
   if ('error' in credential) {
     return { ok: false, transient: false, result: toolError(credential.error) };
   }
@@ -135,12 +138,12 @@ export async function messagingFetch(
           `This session (${credential.address ?? 'unknown'}) was revoked, or ` +
             `its client identity ${credential.parent} was. A new agent ` +
             `session gets a new address; if the client identity was revoked, ` +
-            `delete ${agentTokenFilePath(projRoot, name)} to ask for approval again.`
+            `delete ${agentTokenFilePath(scope, name)} to ask for approval again.`
         ),
       };
     }
     if (code === 'auth_agent_revoked') {
-      const filePath = agentTokenFilePath(projRoot, name);
+      const filePath = agentTokenFilePath(scope, name);
       return {
         ok: false,
         transient: false,
@@ -152,9 +155,9 @@ export async function messagingFetch(
     }
     if (code === 'auth_invalid_token') {
       if (credential.parent !== undefined)
-        forgetSessionToken(projRoot, clientName, credential.token);
-      else forgetAgentToken(projRoot, name, credential.token);
-      const fresh = await messagingCredential(projRoot, clientName);
+        forgetSessionToken(scope, clientName, credential.token);
+      else forgetAgentToken(scope, name, credential.token);
+      const fresh = await messagingCredential(projRoot, clientName, route);
       if ('error' in fresh) {
         return { ok: false, transient: false, result: toolError(fresh.error) };
       }
@@ -185,7 +188,7 @@ async function agentBlockingTimeoutMs(
   rootDir: string,
   fallbackMs: number
 ): Promise<number> {
-  const endpoint = await knownEndpoint(projectRoot(rootDir));
+  const endpoint = await knownEndpoint(scopeFor(projectRoot(rootDir), 'mail'));
   if (endpoint === null) return fallbackMs;
   try {
     const res = await fetch(`http://127.0.0.1:${endpoint.port}/api/config`, {
@@ -672,7 +675,7 @@ async function agentList(
   rootDir: string,
   server: McpServer
 ): Promise<ToolOutcome> {
-  const endpoint = await liveEndpoint(projectRoot(rootDir));
+  const endpoint = await liveEndpoint(scopeFor(projectRoot(rootDir), 'mail'));
   if ('error' in endpoint)
     return toolError(`${endpoint.error} — cannot list agents`);
   let res: Response;

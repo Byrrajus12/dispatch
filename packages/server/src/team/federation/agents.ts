@@ -5,6 +5,7 @@ import { canonicalize, hlcWallMs } from '@dispatch-foo/protocol/federation';
 import type { AgentBody, FederatedOp } from '@dispatch-foo/protocol/federation';
 import { createHash } from 'node:crypto';
 
+import { isHubRow } from '../../messaging/hubLink.js';
 import type { RosterService } from './roster.js';
 import type { Collector, OpHandler, StageContext } from './service.js';
 import type { FedStore } from './store.js';
@@ -50,7 +51,8 @@ export class AgentSync implements Collector, OpHandler {
     for (const a of messages.agents()) {
       if (a.tokenHash.startsWith(REMOTE_TOKEN_PREFIX)) continue;
       // Sessions come and go by the hour; teammates see their client agent.
-      if (a.parent !== undefined) continue;
+      // The hub's agents are mirrors, published by no one here.
+      if (a.parent !== undefined || isHubRow(a)) continue;
       if (isFederationLocalAddress(a.address)) continue;
       if (!this.ownOperator(a.address)) continue;
       const body: AgentBody = {

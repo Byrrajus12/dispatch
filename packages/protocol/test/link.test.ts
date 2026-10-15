@@ -133,7 +133,7 @@ describe('LoopbackLink', () => {
     expect(reply.message.thread).toBe(sent.message.thread);
   });
 
-  it('resends unacknowledged mail and the peer stores it once', async () => {
+  it('sends unacknowledged mail again and the peer stores it once', async () => {
     const hub = side('@hub-00000001', (a) => a.endsWith('/session-a'));
     const daemon = side('@local-00000002', (a) => a.endsWith('/session-b'));
     await hub.engine.send(

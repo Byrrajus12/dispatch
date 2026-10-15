@@ -35,8 +35,11 @@ export class HubHost implements MessagingHost {
   async push(): Promise<void> {}
   async notify(): Promise<void> {}
   notifyHuman(): void {}
-  async wake(): Promise<WakeResult> {
-    return { ok: false, reason: 'the machine hub runs no agents to wake' };
+  wake(): Promise<WakeResult> {
+    return Promise.resolve({
+      ok: false,
+      reason: 'the machine hub runs no agents to wake',
+    });
   }
   decide(): PolicyRuling {
     return 'allow';

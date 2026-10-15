@@ -27,49 +27,53 @@ function hubEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.DISPATCH_HUB !== '0';
 }
 
-/** The endpoint already serving `projRoot`, without starting one: the
- *  project's daemon file wins; else a hub that proves it is the hub. */
-export async function knownEndpoint(
-  projRoot: string
-): Promise<Endpoint | null> {
-  const daemon = readDaemonFile(projRoot);
-  if (daemon !== null)
+/** Which way a call goes: agent mail to the machine hub whenever it is on,
+ *  so every session on this machine shares one roster; project features
+ *  (docs, memory) to the project's own dispatchd. */
+export type Route = 'mail' | 'project';
+
+/** The scope identities for `projRoot`'s `route` calls are cached under:
+ *  the project root, or HUB_SCOPE. */
+export function scopeFor(projRoot: string, route: Route): string {
+  // A dispatched run speaks with the token its own daemon minted.
+  const inRun = (process.env.DISPATCH_RUN_TOKEN_FILE ?? '') !== '';
+  return route === 'mail' && hubEnabled() && !inRun ? HUB_SCOPE : projRoot;
+}
+
+/** The endpoint already serving `scope`, without starting one: the hub once
+ *  it proves it is the hub, else the project's daemon file. */
+export async function knownEndpoint(scope: string): Promise<Endpoint | null> {
+  if (scope === HUB_SCOPE) return verifiedHub();
+  const daemon = readDaemonFile(scope);
+  return daemon === null
+    ? null
+    : {
+        kind: 'daemon',
+        port: daemon.port,
+        auth: daemonAuth(daemon),
+        scope,
+      };
+}
+
+const HUB_START_TIMEOUT_MS = 5000;
+const NO_DAEMON = 'dispatchd not running — start it with: dispatch serve';
+
+/** A live endpoint for `scope`: the machine hub, started when none runs, or
+ *  the project's dispatchd if it answers; an error says why there is none. */
+export async function liveEndpoint(
+  scope: string
+): Promise<Endpoint | { error: string }> {
+  if (scope !== HUB_SCOPE) {
+    const daemon = readDaemonFile(scope);
+    if (daemon === null || !(await isDaemonHealthy(daemon.port)))
+      return { error: NO_DAEMON };
     return {
       kind: 'daemon',
       port: daemon.port,
       auth: daemonAuth(daemon),
-      scope: projRoot,
+      scope,
     };
-  return hubEnabled() ? verifiedHub() : null;
-}
-
-/** The scope agent identities for `projRoot` are cached under right now. */
-export function currentScope(projRoot: string): string {
-  return readDaemonFile(projRoot) !== null || !hubEnabled()
-    ? projRoot
-    : HUB_SCOPE;
-}
-
-const HUB_START_TIMEOUT_MS = 5000;
-
-/** A live endpoint: the project's dispatchd if it answers, else the machine
- *  hub, started when none runs; an error says why there is neither. */
-export async function liveEndpoint(
-  projRoot: string
-): Promise<Endpoint | { error: string }> {
-  const daemon = readDaemonFile(projRoot);
-  if (daemon !== null) {
-    if (await isDaemonHealthy(daemon.port))
-      return {
-        kind: 'daemon',
-        port: daemon.port,
-        auth: daemonAuth(daemon),
-        scope: projRoot,
-      };
-    return { error: 'dispatchd not running — start it with: dispatch serve' };
   }
-  if (!hubEnabled())
-    return { error: 'dispatchd not running — start it with: dispatch serve' };
   const running = await verifiedHub();
   if (running !== null) return running;
   startHubProcess();

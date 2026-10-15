@@ -17,6 +17,7 @@ import type {
   StatePayload,
 } from '@dispatch-foo/protocol/federation';
 
+import { isHubReplica } from '../../messaging/hubLink.js';
 import type { Homes } from './homes.js';
 import { UNVERIFIABLE } from './inbound.js';
 import type { MailOut } from './mail.js';
@@ -271,7 +272,9 @@ export class StateOut implements Collector {
 
   private queue(entry: Entry, to: string[]): void {
     const { fed } = this.deps;
-    const recipients = [...new Set(to)].filter((r) => r !== fed.replica).sort();
+    const recipients = [...new Set(to)]
+      .filter((r) => r !== fed.replica && !isHubReplica(r))
+      .sort();
     if (recipients.length === 0) return;
     fed.db
       .query('INSERT INTO fed_state_out (recipients, entry_json) VALUES (?, ?)')

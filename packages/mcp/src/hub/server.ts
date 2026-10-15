@@ -117,7 +117,7 @@ export async function startHub(opts: HubOptions): Promise<HubHandle> {
   const engine = new DeliveryEngine({ store, host });
   links.attach(engine);
 
-  // One call from this hub to a linked daemon's /api/hublink/<kind>.
+  // One call from this hub to a linked daemon's /api/hub-link/<kind>.
   async function callLink(
     link: HubLink,
     kind: 'mail' | 'state' | 'agents',
@@ -125,7 +125,7 @@ export async function startHub(opts: HubOptions): Promise<HubHandle> {
   ): Promise<boolean> {
     try {
       const res = await fetch(
-        `http://127.0.0.1:${link.port}/api/hublink/${kind}`,
+        `http://127.0.0.1:${link.port}/api/hub-link/${kind}`,
         {
           method: 'POST',
           headers: {

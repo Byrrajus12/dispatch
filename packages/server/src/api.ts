@@ -39,7 +39,7 @@ import type {
   TaskStorePort,
 } from '@dispatch-foo/core';
 import type { Sender } from '@dispatch-foo/protocol';
-import { gateOf, MessagingError } from '@dispatch-foo/protocol';
+import { ERROR_CODES, gateOf, MessagingError } from '@dispatch-foo/protocol';
 import { MemoryBusyError, MemoryError } from '@dispatch/memory';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -219,6 +219,7 @@ import {
 } from './memory/routes.js';
 import type { MemoryService } from './memory/service.js';
 import { listBusConversation } from './messaging/conversations.js';
+import type { DaemonHubLink } from './messaging/hubLink.js';
 import type { Principal } from './messaging/principal.js';
 import { resolvePrincipal } from './messaging/principal.js';
 import {
@@ -356,6 +357,8 @@ export interface ApiContext {
   // dispatchd's own messaging engine host — messaging routes read/write
   // through it directly.
   messaging: Messaging;
+  /** The link to the machine hub, when this daemon makes one. */
+  hubLink?: DaemonHubLink | null;
   // The docs service (docs/service.ts); unavailable when docs.db did not open.
   docs: DocsService;
   /** The memory store and engine (memory/service.ts). */
@@ -4752,6 +4755,10 @@ export async function handleApi(
   if (isLinearWebhook(method, segments)) {
     return await linearWebhook(req, daemonCtx);
   }
+  // The machine hub's calls carry the token this daemon gave it when they
+  // linked, not a daemon token (messaging/hubLink.ts).
+  if (method === 'POST' && segments.length === 2 && segments[0] === 'hub-link')
+    return await hubLinkRoute(req, daemonCtx, segments[1]);
 
   const presented = presentedCredential(req, daemonCtx.sessionOrigins);
 
@@ -6626,5 +6633,33 @@ export async function handleApi(
     const storage = storageErrorResponse(err);
     if (storage !== null) return storage;
     throw err;
+  }
+}
+
+// POST /api/hub-link/{mail,state,agents}: one call from the linked machine hub.
+async function hubLinkRoute(
+  req: Request,
+  ctx: ApiContext,
+  kind: string
+): Promise<Response> {
+  const link = ctx.hubLink ?? null;
+  const header = req.headers.get('authorization') ?? '';
+  const presented = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (link === null || !link.authorizes(presented))
+    return jsonResponse(
+      { error: 'unknown hub link token', code: 'auth_invalid_token' },
+      401
+    );
+  const parsed = await readJsonBody(req);
+  if (!parsed.ok) return parsed.response;
+  try {
+    return jsonResponse(await link.receive(kind, parsed.value));
+  } catch (err) {
+    if (err instanceof MessagingError) {
+      const body: { error: string; field?: string } = { error: err.message };
+      if (err.field !== undefined) body.field = err.field;
+      return jsonResponse(body, ERROR_CODES[err.code]);
+    }
+    return jsonResponse({ error: (err as Error).message }, 409);
   }
 }

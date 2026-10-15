@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { scopeFor } from './endpoint.js';
 import {
   readStoredSession,
   sessionKey,
@@ -88,8 +89,13 @@ function hookSession(
   input: HookInput,
   cwd: string
 ): { root: string; token: string; file: string } | null {
-  const root = projectRoot(
-    typeof input.cwd === 'string' && input.cwd !== '' ? input.cwd : cwd
+  // The scope the session's mail identity lives in: the hub's, or the
+  // project's when the hub is off.
+  const root = scopeFor(
+    projectRoot(
+      typeof input.cwd === 'string' && input.cwd !== '' ? input.cwd : cwd
+    ),
+    'mail'
   );
   // The hook's session_id first; the MCP server's own key covers a client
   // that gave the hook a new id (Claude Code after /clear).

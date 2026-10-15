@@ -11,7 +11,7 @@ import type { Delivery, MessageStore } from './store.js';
 // payloads to applyLinkMail / applyLinkState.
 //
 // Mail needs no watermark: a remote row stays `forwarded` until the peer
-// reports a state for it, so the link resends exactly those rows until it
+// reports a state for it, so the link sends again exactly those rows until it
 // does, and the peer's engine stores each message id once.
 
 /** One message for the peer, with the targets it homes there. */
