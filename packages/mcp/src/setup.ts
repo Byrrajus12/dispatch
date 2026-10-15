@@ -1,9 +1,11 @@
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
   renameSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
@@ -78,11 +80,23 @@ function readJson(
   }
 }
 
+// The mode a config keeps: its own, or owner-only for a new one, since
+// client configs carry other servers' tokens.
+function modeOf(path: string): number {
+  try {
+    return statSync(path).mode & 0o777;
+  } catch {
+    return 0o600;
+  }
+}
+
 // Through a temp file, so a crash never leaves half a config behind.
 function writeJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
+  const mode = modeOf(path);
   const temp = `${path}.dispatch-${process.pid}`;
-  writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`);
+  writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode });
+  chmodSync(temp, mode);
   renameSync(temp, path);
 }
 
@@ -261,14 +275,31 @@ export function connectClients(
   return results;
 }
 
-/** Opens a URL in the person's browser; false when there is no way to. */
+/** Whether `url` may be opened for a sign-in at `server`: the same origin,
+ *  over https (or http to this machine). */
+export function safeToOpen(url: string, server: string): boolean {
+  try {
+    const u = new URL(url);
+    const s = new URL(server);
+    const loopback = u.hostname === 'localhost' || u.hostname === '127.0.0.1';
+    return (
+      u.origin === s.origin &&
+      (u.protocol === 'https:' || (u.protocol === 'http:' && loopback))
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Opens a URL in the person's browser, never through a shell; false when
+ *  there is no way to. Callers pass only URLs safeToOpen accepts. */
 export function openBrowser(url: string): boolean {
   if (process.env.DISPATCH_NO_BROWSER === '1') return false;
   const [command, args] =
     process.platform === 'darwin'
       ? ['open', [url]]
       : process.platform === 'win32'
-        ? ['cmd', ['/c', 'start', '', url]]
+        ? ['rundll32', ['url.dll,FileProtocolHandler', url]]
         : ['xdg-open', [url]];
   try {
     const child = spawnSync(command, args, {

@@ -134,3 +134,39 @@ describe('setup', () => {
     ).toContain('npx -y @dispatch-foo/mcp hook claude UserPromptSubmit');
   });
 });
+
+describe('opening the browser', () => {
+  it('opens only https URLs on the team server', async () => {
+    const { safeToOpen } = await import('../src/setup.js');
+    expect(
+      safeToOpen(
+        'https://app.dispatch.foo/device?code=AB',
+        'https://app.dispatch.foo'
+      )
+    ).toBe(true);
+    expect(
+      safeToOpen('https://evil.example/device', 'https://app.dispatch.foo')
+    ).toBe(false);
+    expect(
+      safeToOpen('http://app.dispatch.foo/device', 'http://app.dispatch.foo')
+    ).toBe(false);
+    expect(
+      safeToOpen('http://localhost:9000/device', 'http://localhost:9000')
+    ).toBe(true);
+    expect(safeToOpen('file:///etc/passwd', 'https://app.dispatch.foo')).toBe(
+      false
+    );
+  });
+
+  it('keeps a config file’s own permissions', () => {
+    const { chmodSync, statSync } =
+      require('node:fs') as typeof import('node:fs');
+    mkdirSync(join(home, '.cursor'), { recursive: true });
+    writeFileSync(join(home, '.cursor', 'mcp.json'), '{}');
+    chmodSync(join(home, '.cursor', 'mcp.json'), 0o600);
+    connectClients(env([]));
+    expect(statSync(join(home, '.cursor', 'mcp.json')).mode & 0o777).toBe(
+      0o600
+    );
+  });
+});

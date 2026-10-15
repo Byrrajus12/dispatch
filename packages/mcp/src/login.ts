@@ -10,7 +10,7 @@ import {
   teamServer,
   writeTeamFile,
 } from './hub/team.js';
-import { openBrowser } from './setup.js';
+import { openBrowser, safeToOpen } from './setup.js';
 
 // Signing this machine in to a team (RFC 8628 device flow against the team
 // service): the person approves a short code in their browser, and the
@@ -161,7 +161,9 @@ export async function interactiveLogin(
     say(`Could not start signing in: ${started.error}`);
     return false;
   }
-  const opened = openBrowser(started.verificationUriComplete);
+  const opened =
+    safeToOpen(started.verificationUriComplete, teamServer()) &&
+    openBrowser(started.verificationUriComplete);
   say(
     `${opened ? 'Your browser opened' : `Open ${started.verificationUriComplete}`}: confirm the code ${started.userCode} there.`
   );

@@ -8,7 +8,7 @@ import { daemonAuth, readDaemonFile, requestDeadline } from './daemon.js';
 import { knownEndpoint, liveEndpoint, scopeFor } from './endpoint.js';
 import type { Route } from './endpoint.js';
 import type { TeamFile } from './hub/team.js';
-import { readTeamFile } from './hub/team.js';
+import { readTeamFile, teamServer } from './hub/team.js';
 import {
   agentName,
   agentTokenFilePath,
@@ -19,7 +19,7 @@ import {
 } from './identity.js';
 import type { MessagingCredential } from './identity.js';
 import { startDeviceLogin } from './login.js';
-import { openBrowser } from './setup.js';
+import { openBrowser, safeToOpen } from './setup.js';
 import type { MessageBlockingTiming } from './toolKit.js';
 import {
   DEFAULT_MESSAGE_BLOCKING_TIMING,
@@ -827,7 +827,8 @@ async function dispatchLogin(): Promise<ToolOutcome> {
   };
   pendingLogin = pending;
   // The MCP runs on the person's machine, so it can open their browser.
-  const opened = openBrowser(pending.url);
+  const opened =
+    safeToOpen(pending.url, teamServer()) && openBrowser(pending.url);
   void started.done.then((result) => {
     pending.result = result;
     if (result.ok && pendingLogin === pending) pendingLogin = null;
