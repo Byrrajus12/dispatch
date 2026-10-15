@@ -494,7 +494,9 @@ export async function startHub(opts: HubOptions): Promise<HubHandle> {
 
     if (body.parent === undefined) {
       const address = `agent:${opts.handle}/${name}`;
-      const existing = store.getAgent(address);
+      // A teammate's mirror never holds a name here: registering locally
+      // takes it over (the team then mirrors this machine's agent instead).
+      const existing = localRow(store.getAgent(address));
       // A name already held is refused, so racing registrations cannot rotate
       // each other's key; an explicit re-key rotates it and retires every
       // session the old key vouched for.
@@ -531,7 +533,7 @@ export async function startHub(opts: HubOptions): Promise<HubHandle> {
     if (parent.status !== 'approved')
       throw new HttpError(403, `parent ${parent.address} is not approved`);
     const address = `agent:${opts.handle}/${name}`;
-    const existing = store.getAgent(address);
+    const existing = localRow(store.getAgent(address));
     if (existing !== null && existing.parent !== parent.address)
       throw new HttpError(409, `${address} is already registered`);
     if (existing?.status === 'revoked')
@@ -687,6 +689,12 @@ export async function startHub(opts: HubOptions): Promise<HubHandle> {
         });
       }),
   };
+}
+
+// A row this machine owns, or null for none or for the team's mirror of an
+// agent homed elsewhere, which a local registration replaces.
+function localRow(row: AgentRecord | null): AgentRecord | null {
+  return row === null || isTeamRow(row) ? null : row;
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {

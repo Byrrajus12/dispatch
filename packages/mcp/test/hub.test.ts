@@ -182,6 +182,24 @@ describe('hub registration and mail', () => {
     expect(old.status).toBe(401);
   });
 
+  it('lets a local registration take a name over from a team mirror', async () => {
+    hub.store.putAgent({
+      address: 'agent:wyat/codex.mac',
+      displayName: 'codex.mac',
+      client: 'codex',
+      tokenHash: 'team:abc',
+      status: 'approved',
+      muted: false,
+      approvedBy: 'team',
+      createdAt: new Date().toISOString(),
+    });
+    const client = await register({ name: 'codex.mac', client: 'codex' });
+    expect(client.address).toBe('agent:wyat/codex.mac');
+    expect(
+      hub.store.getAgent(client.address)?.tokenHash.startsWith('team:')
+    ).toBe(false);
+  });
+
   it('lists a repo channel of the sessions working in that repo', async () => {
     const client = await register({
       name: 'claude.mac',
