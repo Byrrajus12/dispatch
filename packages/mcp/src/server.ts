@@ -4,6 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CHANNEL_CAPABILITY, startChannelPush } from './channel.js';
 import type { DaemonStarter } from './daemon.js';
 import { setDaemonStarter } from './daemon.js';
+import { registerLinearTools } from './linear.js';
 import { registerLoginTool } from './messaging.js';
 import { ONBOARDING_MARKDOWN } from './onboarding.js';
 import type { MessageBlockingTiming, ToolOutcome } from './toolKit.js';
@@ -41,6 +42,7 @@ export function createDispatchMcpServer(
   );
   registerDispatchTools(server, rootDir, opts);
   registerLoginTool(server);
+  registerLinearTools(server, rootDir);
 
   server.registerResource(
     'onboarding',
