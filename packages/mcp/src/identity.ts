@@ -434,7 +434,7 @@ export function currentBranch(rootDir: string): string | undefined {
 }
 
 /** What a session reports about itself when it registers. */
-export function sessionMetaFor(
+function sessionMetaFor(
   rootDir: string,
   clientName: string | undefined
 ): Record<string, string> {

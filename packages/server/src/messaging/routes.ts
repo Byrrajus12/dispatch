@@ -1130,7 +1130,7 @@ const MAX_SESSION_META_LENGTH = 200;
 
 // A session's self-reported meta: known keys only, printable string values
 // capped in length; anything else is dropped rather than refused.
-export function sessionMeta(raw: unknown): Record<string, string> {
+function sessionMeta(raw: unknown): Record<string, string> {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {};
   const meta: Record<string, string> = {};
   for (const [key, value] of Object.entries(raw)) {

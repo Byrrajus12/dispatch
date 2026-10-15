@@ -725,3 +725,4 @@ charmbracelet
 charmland
 generativelanguage
 opentui
+oninitialized
