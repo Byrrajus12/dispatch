@@ -1,5 +1,6 @@
 import type {
   Address,
+  FederationHooks,
   Message,
   MessageStore,
   MessagingHost,
@@ -14,6 +15,9 @@ import type {
 const REPO_CHANNEL = 'repo/';
 
 export class HubHost implements MessagingHost {
+  /** Set once the hub's links exist: placement for project mail. */
+  federation?: FederationHooks;
+
   constructor(
     private readonly store: MessageStore,
     private readonly ownerRef: Address

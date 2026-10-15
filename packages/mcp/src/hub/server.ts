@@ -1,4 +1,6 @@
 import {
+  applyLinkMail,
+  applyLinkState,
   DELIVERY_STATES,
   DeliveryEngine,
   MessagingError,
@@ -9,6 +11,8 @@ import {
 import type {
   AgentRecord,
   DeliveryState,
+  LinkMail,
+  LinkState,
   Message,
   Sender,
   SendInput,
@@ -20,6 +24,8 @@ import { join } from 'node:path';
 
 import { normalizeAgentName } from '../identity.js';
 import { HubHost } from './host.js';
+import type { HubLink } from './links.js';
+import { HubLinks, projectAddress } from './links.js';
 
 // The machine hub: one per OS user, it homes every MCP session's address and
 // mail, whatever repo the session works in. Its routes are the subset of
@@ -106,7 +112,47 @@ export async function startHub(opts: HubOptions): Promise<HubHandle> {
   const store = new SqliteMessageStore(db);
   const owner = `human:${opts.handle}`;
   const host = new HubHost(store, owner);
+  const links = new HubLinks(opts.dir, store);
+  host.federation = links.hooks();
   const engine = new DeliveryEngine({ store, host });
+  links.attach(engine);
+
+  // One call from this hub to a linked daemon's /api/hublink/<kind>.
+  async function callLink(
+    link: HubLink,
+    kind: 'mail' | 'state' | 'agents',
+    body: unknown
+  ): Promise<boolean> {
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:${link.port}/api/hublink/${kind}`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${link.peerToken}`,
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(10_000),
+        }
+      );
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  // Every linked daemon hears who the hub's agents are, so it can mirror
+  // them and hold each new client to the project's own approval.
+  let rosterTimer: ReturnType<typeof setTimeout> | null = null;
+  function rosterChanged(): void {
+    if (rosterTimer !== null) return;
+    rosterTimer = setTimeout(() => {
+      rosterTimer = null;
+      for (const l of links.all())
+        void callLink(l, 'agents', { agents: roster() });
+    }, 200);
+  }
   let lastActivity = Date.now();
 
   const server = createServer((req, res) => {
@@ -185,7 +231,58 @@ export async function startHub(opts: HubOptions): Promise<HubHandle> {
     if (route === 'POST agents/register') {
       if (principalOf(req).kind !== 'hub')
         throw new HttpError(403, 'register with the hub token');
-      return register(res, await readJson(req));
+      register(res, await readJson(req));
+      rosterChanged();
+      return;
+    }
+
+    if (route === 'POST link/register') {
+      if (principalOf(req).kind !== 'hub')
+        throw new HttpError(403, 'link with the hub token');
+      const body = (await readJson(req)) as Record<string, unknown>;
+      if (
+        typeof body.root !== 'string' ||
+        typeof body.replica !== 'string' ||
+        typeof body.port !== 'number' ||
+        typeof body.token !== 'string'
+      )
+        throw new HttpError(
+          400,
+          'invalid link: root, replica, port and token are required'
+        );
+      const link = links.register(
+        {
+          root: body.root,
+          replica: body.replica,
+          port: body.port,
+          token: body.token,
+        },
+        (l, kind, payload) => callLink(l, kind, payload)
+      );
+      void callLink(link, 'agents', { agents: roster() });
+      return send(res, 201, { replica: links.replica, token: link.token });
+    }
+    if (route === 'POST link/mail' || route === 'POST link/state') {
+      const header = req.headers.authorization ?? '';
+      const link = links.byToken(
+        header.startsWith('Bearer ') ? header.slice(7) : ''
+      );
+      if (link === null)
+        throw new HttpError(401, 'unknown link token', {
+          code: 'auth_invalid_token',
+        });
+      const body = await readJson(req);
+      if (route === 'POST link/mail') {
+        const result = await applyLinkMail(
+          engine,
+          link.link,
+          link.replica,
+          body as LinkMail
+        );
+        return send(res, 200, { status: result.status });
+      }
+      applyLinkState(engine, store, link.replica, body as LinkState);
+      return send(res, 200, { ok: true });
     }
     if (route === 'GET agents/roster') {
       principalOf(req);
@@ -202,6 +299,7 @@ export async function startHub(opts: HubOptions): Promise<HubHandle> {
       const agent = store.getAgent(sender.address)!;
       const meta = { ...agent.meta, label };
       store.putAgent({ ...agent, meta });
+      rosterChanged();
       return send(res, 200, { address: agent.address, meta });
     }
 
@@ -209,6 +307,17 @@ export async function startHub(opts: HubOptions): Promise<HubHandle> {
       const sender = asAgent(req);
       const input = sendInput(await readJson(req));
       refuseUnknownAgents(input.to);
+      const project = input.to.find(projectAddress);
+      if (
+        project !== undefined &&
+        input.replyTo === undefined &&
+        links.forSender(sender.address) === null
+      )
+        throw new HttpError(
+          400,
+          `${project} lives in a project's Dispatch daemon, and none is running for this session's repo; open the project in Dispatch or run dispatch serve`,
+          { field: 'to' }
+        );
       const idem = req.headers['idempotency-key'];
       const result = await engine.send(
         typeof idem === 'string' ? { ...input, idempotencyKey: idem } : input,
@@ -447,15 +556,6 @@ export async function startHub(opts: HubOptions): Promise<HubHandle> {
         `no agent ${unknown} is registered on this machine; agent_list lists who is`,
         { field: 'to' }
       );
-    const runOrTask = to.find(
-      (addr) => addr.startsWith('run:') || addr.startsWith('task:')
-    );
-    if (runOrTask !== undefined)
-      throw new HttpError(
-        400,
-        `${runOrTask} lives in a project's dispatchd; the machine hub carries agent and channel mail`,
-        { field: 'to' }
-      );
   }
 
   // A message the sender may read; any other id answers as absent.
@@ -550,6 +650,8 @@ export async function startHub(opts: HubOptions): Promise<HubHandle> {
     close: () =>
       new Promise<void>((resolve) => {
         clearInterval(sweep);
+        if (rosterTimer !== null) clearTimeout(rosterTimer);
+        links.close();
         server.closeAllConnections();
         server.close(() => {
           db.close();
