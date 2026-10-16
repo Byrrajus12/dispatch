@@ -29,9 +29,7 @@ test('the tour shows a real screenshot for every tab', async () => {
 });
 
 test('the tour links to the hosted demo', () => {
-  expect(html).toContain(
-    'href="https://dispatch-demo-production-aed7.up.railway.app"'
-  );
+  expect(html).toContain('href="https://demo.dispatch.foo"');
 });
 
 test('every clip on /clips ships its video and poster', async () => {

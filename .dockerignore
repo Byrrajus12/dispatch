@@ -1,6 +1,7 @@
-# Build context for apps/demo/Dockerfile is the repo root, not apps/demo/
-# itself — it needs workspace deps and the desktop bundle. Only excludes what
-# a fresh `pnpm install` + filtered `pnpm run build` never reads.
+# Build context for apps/demo/Dockerfile and apps/site/Dockerfile is the repo
+# root, not the app directory — both need workspace deps, and the demo needs
+# the desktop bundle. Only excludes what a fresh `pnpm install` + filtered
+# `pnpm run build` never reads.
 node_modules
 
 # Rebuilt inside the image; a stale local copy must never leak into it.
@@ -17,6 +18,8 @@ dist-sidecar
 
 # Dev-only surfaces neither the demo server nor the desktop web build touch.
 apps/desktop/src-tauri
+# The site build reads the shipping app version from this one file.
+!apps/desktop/src-tauri/tauri.conf.json
 apps/desktop/e2e
 # playwright.config.ts is typechecked by the desktop build (tsconfig.e2e.json)
 # and imports this one file, so it rides along; the specs and snapshots do not.

@@ -9,7 +9,6 @@
     "build": "astro build",
     "preview": "astro preview",
     "start": "bun run server.ts",
-    "deploy": "astro build && railway up",
     "test": "astro build && bun test test/",
     "tsc": "tsgo --noEmit --pretty"
   },
@@ -18,7 +17,6 @@
     "@dispatch/tokens": "workspace:*",
     "@fontsource-variable/inter": "catalog:",
     "@fontsource/jetbrains-mono": "catalog:",
-    "@railway/cli": "catalog:",
     "@types/bun": "catalog:",
     "astro": "catalog:",
     "typescript": "catalog:"
