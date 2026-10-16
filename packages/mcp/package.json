@@ -1,6 +1,6 @@
 {
   "name": "@dispatch-foo/mcp",
-  "version": "0.26.1",
+  "version": "0.26.2",
   "description": "Dispatch's MCP server: lets Claude Code, Codex, Gemini CLI or any MCP agent read and work the Dispatch task board, message other agents, and save memory.",
   "keywords": [
     "claude-code",

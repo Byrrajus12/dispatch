@@ -75,7 +75,7 @@ export async function liveEndpoint(
     };
   }
   const running = await verifiedHub();
-  if (running !== null) return running;
+  if (running !== null && !(await retiredOlderHub())) return running;
   startHubProcess();
   const deadline = Date.now() + HUB_START_TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -111,6 +111,45 @@ async function verifiedHub(): Promise<Endpoint | null> {
   if (!(await verifyHub(hub))) return null;
   verified = { port: hub.port, id: hub.id, at: Date.now() };
   return endpoint;
+}
+
+// A hub older than this server (one left running across an upgrade) is told
+// to stop, so the next start runs the new code; true once it has exited.
+async function retiredOlderHub(): Promise<boolean> {
+  const hub = readHubFile();
+  if (hub === null || hub.pid === process.pid) return false;
+  const { MCP_SERVER_VERSION } = await import('./server.js');
+  if (!isOlderVersion(hub.version, MCP_SERVER_VERSION)) return false;
+  try {
+    process.kill(hub.pid, 'SIGTERM');
+  } catch {
+    return false;
+  }
+  const deadline = Date.now() + HUB_START_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 100));
+    if (readHubFile()?.pid !== hub.pid) {
+      verified = null;
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Whether dotted version `a` sorts before `b` (numeric parts only). */
+export function isOlderVersion(a: string, b: string): boolean {
+  const parts = (v: string): number[] =>
+    v.split('.').map((n) => {
+      const x = Number.parseInt(n, 10);
+      return Number.isNaN(x) ? 0 : x;
+    });
+  const pa = parts(a);
+  const pb = parts(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d < 0;
+  }
+  return false;
 }
 
 // This package's own entry point, built (dist/bin.js) or source (src/bin.ts).
