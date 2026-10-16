@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 
-import { homeFaq } from '../data/faq';
+import { faqSections } from '../data/faq';
 import { faq } from '../data/pricing';
 import { releases } from '../data/releases';
 import { DMG } from '../lib/downloads';
@@ -30,7 +30,12 @@ Current version: ${appVersion()}. Platforms: macOS (Apple Silicon and Intel) and
 
 ## Common questions
 
-${homeFaq.map(([q, a]) => `### ${q}\n\n${a}`).join('\n\n')}
+${faqSections
+  .map(
+    (s) =>
+      `### ${s.title}\n\n${s.items.map(([q, a]) => `#### ${q}\n\n${a}`).join('\n\n')}`
+  )
+  .join('\n\n')}
 
 ## Get it
 
@@ -48,6 +53,7 @@ ${faq.map(([q, a]) => `- ${q} ${a}`).join('\n')}
 - [Home](${SITE}/): what Dispatch is, with a live replica of the app.
 - [Docs](${SITE}/docs): quickstart from download to a first landed change.
 - [Pricing](${SITE}/pricing): free for up to three, license key for bigger teams.
+- [FAQ](${SITE}/faq): every question answered, from setup and agents to guardrails, teams and licensing.
 - [Changelog](${SITE}/changelog): what changed in each release.
 - [Clips](${SITE}/clips): short videos filmed in the real app.
 - [Privacy](${SITE}/privacy): what the app, site, demo and Claude plugin collect.

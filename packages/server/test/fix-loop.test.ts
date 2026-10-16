@@ -270,7 +270,7 @@ beforeEach(async () => {
     title: 'harden the sync path',
     risk: 'elevated',
     writes: ['src.ts'],
-    model: 'claude-haiku-4-5-20251001',
+    model: 'claude-haiku-5-5',
     fixLoop: false,
   }).meta.id;
   baseSha = runGitSync(root, ['rev-parse', 'HEAD']).trim();
@@ -395,7 +395,7 @@ async function seedImplementerRun(): Promise<string> {
   const res = await fetch(`${baseUrl}/api/tasks/${taskId}/runs`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ model: 'claude-haiku-4-5-20251001' }),
+    body: JSON.stringify({ model: 'claude-haiku-5-5' }),
   });
   const meta = await json<RunMeta>(res);
   await waitFor(async () => {
@@ -631,7 +631,7 @@ describe('the fix loop', () => {
       'claude-opus-5-5',
       'claude-opus-5-5',
     ]);
-    expect(runs[1].model).toBe('claude-haiku-4-5-20251001');
+    expect(runs[1].model).toBe('claude-haiku-5-5');
 
     // The findings are rendered into the fix prompt as written, not summarised.
     const roundFourPrompt = agent.prompts.find((p) =>

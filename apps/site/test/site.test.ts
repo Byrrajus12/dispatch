@@ -245,6 +245,29 @@ test('the home page describes the app and answers its FAQ as structured data', (
   expect(html).toContain('id="faq"');
 });
 
+test('/faq answers every question as visible text and as FAQPage data', async () => {
+  const faq = await page('/faq/index.html');
+  const graph = graphOf(faq) as unknown as {
+    '@type': string;
+    name?: string;
+    mainEntity?: { name: string }[];
+    itemListElement?: { name: string }[];
+  }[];
+  const questions =
+    graph.find((n) => n['@type'] === 'FAQPage')?.mainEntity ?? [];
+  expect(questions.length).toBeGreaterThan(20);
+  for (const { name } of questions) {
+    expect(faq).toContain(`>${name.replace(/'/g, '&#39;')}</dt>`);
+  }
+  // One question per page: the home's code question stands in for pricing's.
+  expect(new Set(questions.map((q) => q.name)).size).toBe(questions.length);
+  expect(faq).not.toContain('Does my code go anywhere?');
+  const crumbs = graph.find((n) => n['@type'] === 'BreadcrumbList');
+  expect(crumbs?.itemListElement?.at(-1)?.name).toBe('FAQ');
+  expect(html).toContain('href="/faq"');
+  expect(await page('/llms.txt')).toContain('#### How do I add a teammate?');
+});
+
 test('robots.txt allows every crawler and points at the sitemap', async () => {
   const robots = await page('/robots.txt');
   expect(robots).toContain('User-agent: *\nAllow: /');

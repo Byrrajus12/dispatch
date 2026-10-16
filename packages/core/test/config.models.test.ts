@@ -87,11 +87,11 @@ describe('models config', () => {
     );
 
     const cfg = updateConfig(dir, {
-      models: { plan: 'claude-haiku-4-5-20251001' },
+      models: { plan: 'claude-haiku-5-5' },
     });
 
     // The role that was patched changed...
-    expect(cfg.models.plan).toBe('claude-haiku-4-5-20251001');
+    expect(cfg.models.plan).toBe('claude-haiku-5-5');
     // ...but every other role — set explicitly or left at its default — survived untouched.
     expect(cfg.models.execute).toBe('claude-opus-4-8');
     expect(cfg.models.draft).toBe(DEFAULT_MODELS.draft);
@@ -100,7 +100,7 @@ describe('models config', () => {
     expect(text).toContain('# how this project routes agent work');
     expect(text).toContain('# statuses are structural');
     expect(text).toContain('claude-opus-4-8');
-    expect(text).toContain('claude-haiku-4-5-20251001');
+    expect(text).toContain('claude-haiku-5-5');
     expect(text).toContain('shipped');
 
     // Re-reading through loadConfig sees exactly what was just written.

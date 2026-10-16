@@ -1,0 +1,103 @@
+---
+import Footer from '../components/landing/Footer.astro';
+import Nav from '../components/landing/Nav.astro';
+import { faqSections } from '../data/faq';
+import type { FaqSection } from '../data/faq';
+import { faq as pricingFaq } from '../data/pricing';
+import Landing from '../layouts/Landing.astro';
+import { faqPage } from '../lib/seo';
+import '../styles/page.css';
+
+// The home FAQ already answers "Does my code leave my machine?", so the
+// pricing page's near-identical question is left out here.
+const sections: FaqSection[] = [
+  ...faqSections,
+  {
+    id: 'pricing',
+    title: 'Pricing and licensing',
+    items: pricingFaq.filter(([q]) => q !== 'Does my code go anywhere?'),
+  },
+];
+
+// A stable anchor per question, so an answer can be linked on its own.
+const slug = (q: string) =>
+  q
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+---
+
+<Landing
+  title="FAQ: Dispatch, the task board for AI coding agents"
+  description="Answers about Dispatch: setup, which AI coding agents it runs, guardrails and review, teams, pricing and licensing."
+  path="/faq"
+  jsonLd={[faqPage(sections.flatMap((s) => s.items))]}
+>
+  <Nav />
+  <main class="page">
+    <div class="wrap">
+      <div class="head">
+        <h1>Questions, answered.</h1>
+        <p class="lede">
+          What Dispatch is, what it runs, how it keeps agents in bounds and what it costs. Still
+          stuck? Write to <a href="mailto:hello@dispatch.foo">hello@dispatch.foo</a>.
+        </p>
+        <nav class="jump" aria-label="FAQ sections">
+          {sections.map((s) => <a href={`#${s.id}`}>{s.title}</a>)}
+        </nav>
+      </div>
+
+      <div class="prose">
+        {
+          sections.map((s) => (
+            <section aria-labelledby={s.id}>
+              <h2 id={s.id}>{s.title}</h2>
+              <dl class="faq">
+                {s.items.map(([q, a]) => (
+                  <div id={slug(q)}>
+                    <dt>{q}</dt>
+                    <dd>{a}</dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+          ))
+        }
+        <p>
+          Setup step by step is in the <a href="/docs">docs</a>, and the full licensing map in{' '}
+          <a href="https://github.com/wsoule/dispatch/blob/main/LICENSING.md">LICENSING.md</a>.
+        </p>
+      </div>
+    </div>
+  </main>
+  <Footer />
+</Landing>
+
+<style>
+  .jump {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.25rem;
+    margin-top: 1.5rem;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+  }
+  .jump a {
+    color: var(--accent);
+  }
+  .faq {
+    margin: 0;
+  }
+  .faq div {
+    padding: 1.1rem 0;
+    border-top: 1px solid var(--line);
+    scroll-margin-top: 5rem;
+  }
+  .faq dt {
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .faq dd {
+    margin: 0.4rem 0 0;
+  }
+</style>

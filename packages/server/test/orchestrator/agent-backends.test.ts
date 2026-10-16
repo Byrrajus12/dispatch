@@ -33,7 +33,7 @@ describe('isClaudeModelId', () => {
   it('knows Claude ids and aliases', () => {
     for (const id of [
       'claude-opus-5-5',
-      'claude-haiku-4-5-20251001',
+      'claude-haiku-5-5',
       'opus',
       'sonnet',
       'haiku',
