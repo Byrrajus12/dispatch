@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { HUB_SCOPE, isOlderVersion, liveEndpoint } from '../src/endpoint.js';
 import type { HubHandle } from '../src/hub/server.js';
 import { startHub } from '../src/hub/server.js';
 import { createDispatchMcpServer } from '../src/index.js';
@@ -330,6 +331,59 @@ describe('hub autostart', () => {
       }
       rmSync(own, { recursive: true, force: true });
       rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+});
+
+async function waitForExit(pid: number): Promise<boolean> {
+  for (let i = 0; i < 100; i++) {
+    try {
+      process.kill(pid, 0);
+      await Bun.sleep(50);
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
+describe('hub upgrade', () => {
+  it('orders versions numerically', () => {
+    expect(isOlderVersion('0.26.0', '0.26.1')).toBe(true);
+    expect(isOlderVersion('0.9.0', '0.26.0')).toBe(true);
+    expect(isOlderVersion('0.26.1', '0.26.1')).toBe(false);
+    expect(isOlderVersion('1.0.0', '0.26.1')).toBe(false);
+  });
+
+  it('retires a hub older than this server and starts a fresh one', async () => {
+    const own = mkdtempSync(join(tmpdir(), 'dispatch-hub-upgrade-'));
+    process.env.DISPATCH_HOME = own;
+    const pids: number[] = [];
+    try {
+      const first = await liveEndpoint(HUB_SCOPE);
+      expect('error' in first).toBe(false);
+      const old = readHubFile()!;
+      pids.push(old.pid);
+      // Pretend the running hub predates this server.
+      writeHubFile({ ...old, version: '0.0.1' });
+
+      const next = await liveEndpoint(HUB_SCOPE);
+      expect('error' in next).toBe(false);
+      const fresh = readHubFile()!;
+      pids.push(fresh.pid);
+      expect(fresh.pid).not.toBe(old.pid);
+      expect(fresh.version).not.toBe('0.0.1');
+      expect(await waitForExit(old.pid)).toBe(true);
+    } finally {
+      for (const pid of pids) {
+        try {
+          process.kill(pid, 'SIGTERM');
+        } catch {
+          // Already gone.
+        }
+        await waitForExit(pid);
+      }
+      rmSync(own, { recursive: true, force: true });
     }
   }, 20_000);
 });

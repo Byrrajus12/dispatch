@@ -291,11 +291,10 @@ function dispatchEntry(entry: unknown): boolean {
   return (
     Array.isArray(hooks) &&
     hooks.length > 0 &&
-    hooks.every((h) =>
-      String((h as { command?: unknown }).command ?? '').includes(
-        ' hook claude '
-      )
-    )
+    hooks.every((h) => {
+      const command = (h as { command?: unknown }).command;
+      return typeof command === 'string' && command.includes(' hook claude ');
+    })
   );
 }
 
