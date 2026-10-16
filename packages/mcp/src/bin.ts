@@ -54,16 +54,17 @@ if (argv[0] === 'hooks') {
 if (argv[0] === 'login' || argv[0] === 'setup') {
   const { interactiveLogin } = await import('./login.js');
   if (argv[0] === 'setup') {
-    const { connectClients, defaultSetupEnv, installGlobally } =
+    const { connectClients, defaultSetupEnv, installRuntime } =
       await import('./setup.js');
     const { MCP_SERVER_VERSION } = await import('./server.js');
     const setupEnv = defaultSetupEnv();
+    const launch = installRuntime(setupEnv, MCP_SERVER_VERSION);
     console.log(
-      installGlobally(setupEnv, MCP_SERVER_VERSION)
-        ? '  ✓  dispatch-mcp installed'
-        : '  -  dispatch-mcp not installed globally; clients will start it with npx'
+      launch.command === 'npx'
+        ? '  -  Could not install into ~/.dispatch/runtime; clients will start Dispatch with npx'
+        : `  ✓  Dispatch ${MCP_SERVER_VERSION} installed in ~/.dispatch/runtime`
     );
-    const results = connectClients(setupEnv);
+    const results = connectClients(setupEnv, launch);
     if (results.length === 0)
       console.log(
         'No agent clients found (Claude Code, Codex, Cursor, Gemini CLI, Claude Desktop, Windsurf).'
@@ -72,7 +73,7 @@ if (argv[0] === 'login' || argv[0] === 'setup') {
       console.log(
         r.status === 'skipped'
           ? `  -  ${r.client}: skipped (${r.reason})`
-          : `  ✓  ${r.client}: ${r.status === 'added' ? 'connected' : 'already connected'}`
+          : `  ✓  ${r.client}: ${r.status === 'added' ? 'connected' : r.status === 'updated' ? 'updated' : 'already connected'}`
       );
   }
   process.exit((await interactiveLogin(console.log)) ? 0 : 1);

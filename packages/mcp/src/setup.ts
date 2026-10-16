@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   statSync,
   writeFileSync,
@@ -12,12 +13,13 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 // `dispatch-mcp setup`: one command that connects every agent client on this
-// machine to Dispatch. It finds the clients installed (Claude Code, Codex,
-// Cursor, Gemini CLI, Claude Desktop, Windsurf), adds the Dispatch MCP server
-// to each user-wide, installs Claude Code's hooks (mail notices at each
-// prompt, a wake-up when an idle session gets mail), and then signs the
-// machine in to its team. Safe to run again: it only adds what is missing,
-// and never rewrites a config file it cannot parse.
+// machine to Dispatch. It installs the server into ~/.dispatch/runtime, finds
+// the clients installed (Claude Code, Codex, Cursor, Gemini CLI, Claude
+// Desktop, Windsurf), points each at it with absolute paths (GUI apps do not
+// get the shell's PATH, and npm's global prefix is often not on it either),
+// installs Claude Code's hooks, and signs the machine in. Run again, it
+// updates the entries it wrote before; it never rewrites a config file it
+// cannot parse, and never touches anyone else's servers or hooks.
 
 /** How a client should start this server. */
 export interface Launch {
@@ -26,12 +28,14 @@ export interface Launch {
 }
 
 export type StepResult =
-  | { client: string; status: 'added' | 'present' }
+  | { client: string; status: 'added' | 'updated' | 'present' }
   | { client: string; status: 'skipped'; reason: string };
 
 export interface SetupEnv {
   home: string;
   platform: NodeJS.Platform;
+  /** The Node binary running setup, which clients will start the server with. */
+  node: string;
   /** Whether an executable is on PATH. */
   has(binary: string): boolean;
   /** Runs a command, returning its exit status. */
@@ -39,9 +43,16 @@ export interface SetupEnv {
 }
 
 export function defaultSetupEnv(): SetupEnv {
+  let node = process.execPath;
+  try {
+    node = realpathSync(node);
+  } catch {
+    // Keep the path as given.
+  }
   return {
     home: homedir(),
     platform: process.platform,
+    node,
     has: (binary) =>
       spawnSync(process.platform === 'win32' ? 'where' : 'which', [binary], {
         stdio: 'ignore',
@@ -51,17 +62,67 @@ export function defaultSetupEnv(): SetupEnv {
       spawnSync(command, args, {
         stdio: 'ignore',
         env: process.env,
-        timeout: 60_000,
+        timeout: 180_000,
       }).status,
   };
 }
 
-/** The launch every client gets: the installed binary when there is one
- *  (fast to start), else npx. */
-export function launchFor(env: SetupEnv): Launch {
-  return env.has('dispatch-mcp')
-    ? { command: 'dispatch-mcp', args: [] }
-    : { command: 'npx', args: ['-y', '@dispatch-foo/mcp'] };
+/** Where setup installs the server: a folder Dispatch owns, so no global npm
+ *  permissions or PATH are involved. */
+function runtimeDir(env: SetupEnv): string {
+  return join(env.home, '.dispatch', 'runtime');
+}
+
+function runtimeBin(env: SetupEnv): string {
+  return join(
+    runtimeDir(env),
+    'node_modules',
+    '@dispatch-foo',
+    'mcp',
+    'dist',
+    'bin.js'
+  );
+}
+
+/** Installs this version into the runtime folder and returns how clients
+ *  start it (absolute node + script); npx when it cannot be installed. */
+export function installRuntime(env: SetupEnv, version: string): Launch {
+  const npx: Launch = {
+    command: 'npx',
+    args: ['-y', `@dispatch-foo/mcp@${version}`],
+  };
+  if (!env.has('npm')) return npx;
+  const dir = runtimeDir(env);
+  mkdirSync(dir, { recursive: true });
+  const status = env.run('npm', [
+    'install',
+    '--prefix',
+    dir,
+    '--no-audit',
+    '--no-fund',
+    '--loglevel=error',
+    `@dispatch-foo/mcp@${version}`,
+  ]);
+  return status === 0 && existsSync(runtimeBin(env))
+    ? { command: env.node, args: [runtimeBin(env)] }
+    : npx;
+}
+
+// Whether a server entry or hook command is one setup wrote, so it may be
+// updated: it starts this package, by name or from the runtime folder.
+function ours(value: unknown): boolean {
+  const text = JSON.stringify(value ?? '');
+  return (
+    text.includes('@dispatch-foo/mcp') ||
+    text.includes('dispatch-mcp') ||
+    text.includes('.dispatch/runtime')
+  );
+}
+
+function same(a: unknown, b: Launch): boolean {
+  return (
+    JSON.stringify(a) === JSON.stringify({ command: b.command, args: b.args })
+  );
 }
 
 function readJson(
@@ -91,17 +152,21 @@ function modeOf(path: string): number {
 }
 
 // Through a temp file, so a crash never leaves half a config behind.
-function writeJson(path: string, value: unknown): void {
+function writeText(path: string, text: string): void {
   mkdirSync(dirname(path), { recursive: true });
   const mode = modeOf(path);
   const temp = `${path}.dispatch-${process.pid}`;
-  writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode });
+  writeFileSync(temp, text, { mode });
   chmodSync(temp, mode);
   renameSync(temp, path);
 }
 
-// Adds mcpServers.dispatch to a JSON config (Cursor, Gemini, Claude
-// Desktop, Windsurf all share this shape).
+function writeJson(path: string, value: unknown): void {
+  writeText(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+// Adds (or updates setup's own) mcpServers.dispatch in a JSON config:
+// Cursor, Gemini, Claude Desktop and Windsurf share this shape.
 function addToJsonConfig(
   client: string,
   path: string,
@@ -119,9 +184,23 @@ function addToJsonConfig(
     typeof current.mcpServers === 'object' && current.mcpServers !== null
       ? (current.mcpServers as Record<string, unknown>)
       : {};
-  if (servers.dispatch !== undefined) return { client, status: 'present' };
-  writeJson(path, { ...current, mcpServers: { ...servers, dispatch: launch } });
-  return { client, status: 'added' };
+  const existing = servers.dispatch;
+  if (existing !== undefined && same(existing, launch))
+    return { client, status: 'present' };
+  if (existing !== undefined && !ours(existing))
+    return {
+      client,
+      status: 'skipped',
+      reason: 'it already has a different "dispatch" server',
+    };
+  writeJson(path, {
+    ...current,
+    mcpServers: {
+      ...servers,
+      dispatch: { command: launch.command, args: launch.args },
+    },
+  });
+  return { client, status: existing === undefined ? 'added' : 'updated' };
 }
 
 function claudeDesktopConfig(env: SetupEnv): string {
@@ -142,32 +221,50 @@ function claudeDesktopConfig(env: SetupEnv): string {
   return join(env.home, '.config', 'Claude', 'claude_desktop_config.json');
 }
 
-// Codex keeps its servers in TOML; Dispatch's is appended as its own table.
+// Dispatch's Codex table, up to the next table or the end of the file.
+const CODEX_TABLE =
+  /^\[mcp_servers\.dispatch\][^\n]*\n(?:(?!\[)[^\n]*(?:\n|$))*/m;
+
+// Codex keeps its servers in TOML; Dispatch's is its own table, replaced
+// whole when setup wrote it before.
 function addToCodex(path: string, launch: Launch): StepResult {
+  const client = 'Codex';
   const text = existsSync(path) ? readFileSync(path, 'utf8') : '';
-  if (/^\s*\[mcp_servers\.dispatch\]\s*$/m.test(text))
-    return { client: 'Codex', status: 'present' };
   const toml = (s: string) => JSON.stringify(s);
-  const block =
-    `\n[mcp_servers.dispatch]\ncommand = ${toml(launch.command)}\n` +
-    `args = [${launch.args.map(toml).join(', ')}]\n`;
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(
+  const block = `[mcp_servers.dispatch]\ncommand = ${toml(launch.command)}\nargs = [${launch.args.map(toml).join(', ')}]\n`;
+  const found = CODEX_TABLE.exec(text);
+  if (found !== null) {
+    if (found[0].trim() === block.trim()) return { client, status: 'present' };
+    if (!ours(found[0]))
+      return {
+        client,
+        status: 'skipped',
+        reason: 'it already has a different "dispatch" server',
+      };
+    const gap = /\n\s*\n$/.test(found[0]) ? '\n' : '';
+    writeText(path, text.replace(CODEX_TABLE, `${block}${gap}`));
+    return { client, status: 'updated' };
+  }
+  writeText(
     path,
-    `${text}${text === '' || text.endsWith('\n') ? '' : '\n'}${block}`
+    `${text}${text === '' || text.endsWith('\n') ? '' : '\n'}\n${block}`
   );
-  return { client: 'Codex', status: 'added' };
+  return { client, status: 'added' };
 }
 
-const HOOK_MARK = ' hook claude ';
+/** The shell command for a launch, each part quoted when it needs to be. */
+export function commandLine(launch: Launch, rest: string[]): string {
+  const quote = (s: string) =>
+    /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replaceAll("'", "'\\''")}'`;
+  return [launch.command, ...launch.args, ...rest].map(quote).join(' ');
+}
 
 /** The Claude Code hooks: the unread line at each prompt, one held stop for
  *  mail to the session, and a background wait that wakes an idle session. */
 export function claudeHooks(launch: Launch): Record<string, unknown[]> {
-  const base = [launch.command, ...launch.args].join(' ');
   const hook = (event: string) => ({
     type: 'command',
-    command: `${base} hook claude ${event}`,
+    command: commandLine(launch, ['hook', 'claude', event]),
   });
   return {
     UserPromptSubmit: [{ hooks: [hook('UserPromptSubmit')] }],
@@ -188,8 +285,22 @@ export function claudeHooks(launch: Launch): Record<string, unknown[]> {
   };
 }
 
-// Merges the hooks into ~/.claude/settings.json, leaving every other hook
-// alone and adding none twice.
+// An entry whose hooks are all Dispatch's (setup wrote it).
+function dispatchEntry(entry: unknown): boolean {
+  const hooks = (entry as { hooks?: unknown }).hooks;
+  return (
+    Array.isArray(hooks) &&
+    hooks.length > 0 &&
+    hooks.every((h) =>
+      String((h as { command?: unknown }).command ?? '').includes(
+        ' hook claude '
+      )
+    )
+  );
+}
+
+// Puts Dispatch's hooks in ~/.claude/settings.json, replacing the ones setup
+// wrote before and leaving every other hook alone.
 function addClaudeHooks(env: SetupEnv, launch: Launch): StepResult {
   const client = 'Claude Code hooks';
   const path = join(env.home, '.claude', 'settings.json');
@@ -197,37 +308,31 @@ function addClaudeHooks(env: SetupEnv, launch: Launch): StepResult {
   if (settings === 'unparseable')
     return { client, status: 'skipped', reason: `${path} is not plain JSON` };
   const current = settings ?? {};
-  if (JSON.stringify(current.hooks ?? {}).includes(HOOK_MARK))
-    return { client, status: 'present' };
-  const hooks =
+  const before =
     typeof current.hooks === 'object' && current.hooks !== null
-      ? { ...(current.hooks as Record<string, unknown[]>) }
+      ? (current.hooks as Record<string, unknown[]>)
       : {};
+  const hooks: Record<string, unknown[]> = {};
+  let had = false;
+  for (const [event, entries] of Object.entries(before)) {
+    if (!Array.isArray(entries)) {
+      hooks[event] = entries;
+      continue;
+    }
+    const kept = entries.filter((e) => !dispatchEntry(e));
+    if (kept.length !== entries.length) had = true;
+    if (kept.length > 0) hooks[event] = kept;
+  }
   for (const [event, entries] of Object.entries(claudeHooks(launch)))
-    hooks[event] = [
-      ...(Array.isArray(hooks[event]) ? hooks[event] : []),
-      ...entries,
-    ];
+    hooks[event] = [...(hooks[event] ?? []), ...entries];
+  if (JSON.stringify(hooks) === JSON.stringify(before))
+    return { client, status: 'present' };
   writeJson(path, { ...current, hooks });
-  return { client, status: 'added' };
-}
-
-/** Installs the server globally (best effort), so clients and hooks start
- *  it instantly instead of through npx; true when it is installed. */
-export function installGlobally(env: SetupEnv, version: string): boolean {
-  if (env.has('dispatch-mcp')) return true;
-  if (!env.has('npm')) return false;
-  return (
-    env.run('npm', ['install', '--global', `@dispatch-foo/mcp@${version}`]) ===
-      0 && env.has('dispatch-mcp')
-  );
+  return { client, status: had ? 'updated' : 'added' };
 }
 
 /** Connects every client found on this machine; one result per client. */
-export function connectClients(
-  env: SetupEnv,
-  launch: Launch = launchFor(env)
-): StepResult[] {
+export function connectClients(env: SetupEnv, launch: Launch): StepResult[] {
   const results: StepResult[] = [];
   const home = env.home;
 
@@ -239,6 +344,9 @@ export function connectClients(
         reason: 'the claude command is not on PATH',
       });
     else {
+      // Replaced each time, so a re-run moves it to the current launch.
+      const had =
+        env.run('claude', ['mcp', 'remove', '-s', 'user', 'dispatch']) === 0;
       const added = env.run('claude', [
         'mcp',
         'add',
@@ -249,11 +357,15 @@ export function connectClients(
         launch.command,
         ...launch.args,
       ]);
-      // A second add fails because the server is there already.
-      results.push({
-        client: 'Claude Code',
-        status: added === 0 ? 'added' : 'present',
-      });
+      results.push(
+        added === 0
+          ? { client: 'Claude Code', status: had ? 'updated' : 'added' }
+          : {
+              client: 'Claude Code',
+              status: 'skipped',
+              reason: 'claude mcp add failed',
+            }
+      );
     }
     results.push(addClaudeHooks(env, launch));
   }

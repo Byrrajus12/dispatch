@@ -103,6 +103,7 @@ type Frame =
 const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 15_000;
+const PRESENCE_BEAT_MS = 60_000;
 
 export class TeamLink {
   readonly replica: string;
@@ -113,6 +114,7 @@ export class TeamLink {
   private retryMs = RECONNECT_MIN_MS;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
+  private beat: ReturnType<typeof setInterval> | null = null;
   /** Whether the socket is open: teammates are reachable right now. */
   connected = false;
 
@@ -133,11 +135,17 @@ export class TeamLink {
   start(): void {
     this.stopped = false;
     this.open();
+    // Last-seen times change on every call but are not roster changes, so
+    // the roster also goes out on a beat: the team sees who is live.
+    this.beat = setInterval(() => this.pushRoster(), PRESENCE_BEAT_MS);
+    this.beat.unref?.();
   }
 
   stop(): void {
     this.stopped = true;
     if (this.retryTimer !== null) clearTimeout(this.retryTimer);
+    if (this.beat !== null) clearInterval(this.beat);
+    this.beat = null;
     this.link?.stop();
     this.link = null;
     try {
