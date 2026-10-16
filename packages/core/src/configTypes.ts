@@ -590,9 +590,9 @@ export const DEFAULT_MODELS: ModelConfig = {
   execute: 'claude-opus-5-5',
   overseer: 'claude-opus-5-5',
   plan: 'claude-sonnet-5-5',
-  draft: 'claude-haiku-4-5-20251001',
-  enrich: 'claude-haiku-4-5-20251001',
-  summarize: 'claude-haiku-4-5-20251001',
+  draft: 'claude-haiku-5-5',
+  enrich: 'claude-haiku-5-5',
+  summarize: 'claude-haiku-5-5',
   judge: 'jev-latest',
 };
 

@@ -981,14 +981,14 @@ describe('OverseerManager turn options', () => {
     expect(h.gated.options?.model).toBe('claude-fable-5-1');
 
     // A settings change in between does not move an open conversation.
-    updateConfig(repo, { models: { overseer: 'claude-haiku-4-5' } });
+    updateConfig(repo, { models: { overseer: 'claude-haiku-5-5' } });
     h.manager.sendMessage(started.id, 'and?');
     await waitFor(() => h.manager.get(started.id).state === 'ready');
     expect(h.gated.options?.model).toBe('claude-fable-5-1');
   });
 
   it('changes model and effort for the next turns, and null restores the default', async () => {
-    updateConfig(repo, { models: { overseer: 'claude-haiku-4-5' } });
+    updateConfig(repo, { models: { overseer: 'claude-haiku-5-5' } });
     const h = makeGated([]);
     const started = h.manager.start('hi', 'gated', 'claude-fable-5-1');
     await waitFor(() => h.manager.get(started.id).state === 'ready');
@@ -1008,7 +1008,7 @@ describe('OverseerManager turn options', () => {
     h.manager.setOptions(started.id, { model: null, effort: null });
     h.manager.sendMessage(started.id, 'again');
     await waitFor(() => h.manager.get(started.id).state === 'ready');
-    expect(h.gated.options?.model).toBe('claude-haiku-4-5');
+    expect(h.gated.options?.model).toBe('claude-haiku-5-5');
     expect(h.gated.options?.effort).toBeUndefined();
   });
 

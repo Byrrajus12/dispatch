@@ -28,6 +28,7 @@ export function indexablePaths(): string[] {
     '/',
     '/docs',
     '/pricing',
+    '/faq',
     '/changelog',
     '/clips',
     '/privacy',

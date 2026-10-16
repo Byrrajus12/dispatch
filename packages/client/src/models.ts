@@ -18,18 +18,25 @@ export const MODELS: ModelOption[] = [
   { id: 'claude-opus-5-5', label: 'Opus 5.5' },
   { id: 'claude-fable-5-1', label: 'Fable 5.1' },
   { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
-  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
+  { id: 'claude-haiku-5-5', label: 'Haiku 5.5' },
 ];
 
 const DEFAULT_MODEL = MODELS[0].id;
 
 const STORAGE_KEY = 'dispatch:default-model';
 
-// A stored model id, if it is still one we offer.
+// Ids the picker used to store, mapped to the id that replaced them, so a saved
+// pick survives an id change instead of silently resetting to the default.
+const REPLACED_IDS: Readonly<Record<string, string>> = {
+  'claude-haiku-4-5-20251001': 'claude-haiku-5-5',
+  'claude-haiku-4-5': 'claude-haiku-5-5',
+};
+
+// A stored model id, if it is (or was replaced by) one we still offer.
 function offered(stored: string | null): string | undefined {
-  return stored !== null && MODELS.some((m) => m.id === stored)
-    ? stored
-    : undefined;
+  if (stored === null) return undefined;
+  const id = REPLACED_IDS[stored] ?? stored;
+  return MODELS.some((m) => m.id === id) ? id : undefined;
 }
 
 // The user's chosen default dispatch model, or the built-in one. Seeds the
@@ -112,6 +119,7 @@ const HISTORICAL_MODEL_LABELS: Record<string, string> = {
   'claude-opus-4-8': 'Opus 4.8',
   'claude-opus-4-7': 'Opus 4.7',
   'claude-sonnet-4-6': 'Sonnet 4.6',
+  'claude-haiku-4-5': 'Haiku 4.5',
   '<synthetic>': 'Synthetic',
 };
 

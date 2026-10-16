@@ -129,9 +129,12 @@ pub async fn call_anthropic_api(
     model: &str,
     prompt: String,
 ) -> anyhow::Result<String> {
+    // Haiku 5.5 thinks adaptively and thinking counts against `max_tokens`, so the cap
+    // leaves room for it; the prompt itself holds the answer to one short sentence.
     let body = serde_json::json!({
         "model": model,
-        "max_tokens": 60,
+        "max_tokens": 1024,
+        "output_config": { "effort": "low" },
         "messages": [{ "role": "user", "content": prompt }],
     });
 
@@ -154,9 +157,15 @@ pub async fn call_anthropic_api(
     }
 
     let value: serde_json::Value = response.json().await?;
+    // Thinking blocks come before the answer, so take the first text block, not content[0].
     let text = value
         .get("content")
-        .and_then(|content| content.get(0))
+        .and_then(|content| content.as_array())
+        .and_then(|blocks| {
+            blocks
+                .iter()
+                .find(|block| block.get("type").and_then(|t| t.as_str()) == Some("text"))
+        })
         .and_then(|block| block.get("text"))
         .and_then(|t| t.as_str())
         .ok_or_else(|| anyhow::anyhow!("unexpected Anthropic API response shape: {value}"))?;

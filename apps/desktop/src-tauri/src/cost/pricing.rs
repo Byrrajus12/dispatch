@@ -111,7 +111,7 @@ fn log_unknown_model_once(model: &str) {
     }
 }
 
-/// Finds the one key in the bundled pricing table whose name contains `"haiku"` — the single
+/// Finds the newest key in the bundled pricing table whose name contains `"haiku"` — the single
 /// source of truth for "which model string does the AI-summarization pipeline (Task C2) send
 /// to the Anthropic API," per PLAN.md §6 ("from pricing.json"). Doesn't parse any new JSON —
 /// just a lookup over the table already loaded by `pricing_table()`. Returns `None` (rather
@@ -120,7 +120,9 @@ fn log_unknown_model_once(model: &str) {
 pub fn haiku_model_id() -> Option<&'static str> {
     pricing_table()
         .keys()
-        .find(|k| k.contains("haiku"))
+        .filter(|k| k.contains("haiku"))
+        // Newest generation wins; older Haiku rows stay only to price past sessions.
+        .max()
         .map(|k| k.as_str())
 }
 
@@ -249,9 +251,9 @@ mod tests {
 
     #[test]
     fn haiku_model_id_finds_the_bundled_haiku_entry() {
-        // resources/pricing.json currently bundles exactly one "*haiku*" key,
-        // claude-haiku-4-5-20251001 — this pins that this task's summarization pipeline
+        // resources/pricing.json bundles Haiku 4.5 (for past sessions) and Haiku 5.5;
+        // the newest, claude-haiku-5-5, must win — this pins that this task's summarization pipeline
         // resolves its model string from pricing.json rather than a second hardcoded literal.
-        assert_eq!(haiku_model_id(), Some("claude-haiku-4-5-20251001"));
+        assert_eq!(haiku_model_id(), Some("claude-haiku-5-5"));
     }
 }

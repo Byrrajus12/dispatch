@@ -42,7 +42,10 @@ const title = notFound
   : (pageTitle ?? 'Dispatch: the shared task board for AI coding agents');
 const description = pageDescription ?? DESCRIPTION;
 const url = `${SITE}${path}`;
-const crumb = (p: string) => p.slice(1, 2).toUpperCase() + p.slice(2);
+// Breadcrumb names come from the path; an acronym path gets its name spelled out.
+const CRUMBS: Record<string, string> = { '/faq': 'FAQ' };
+const crumb = (p: string) =>
+  CRUMBS[p] ?? p.slice(1, 2).toUpperCase() + p.slice(2);
 // Every page carries the organization and site; the home page adds the app,
 // and every other page a breadcrumb back home named by its path.
 const graph = [

@@ -32,6 +32,7 @@ describe('modelDisplayName', () => {
     expect(modelDisplayName('claude-opus-4-8')).toBe('Opus 4.8');
     expect(modelDisplayName('claude-opus-4-7')).toBe('Opus 4.7');
     expect(modelDisplayName('claude-sonnet-4-6')).toBe('Sonnet 4.6');
+    expect(modelDisplayName('claude-haiku-4-5-20251001')).toBe('Haiku 4.5');
   });
 
   test('names the <synthetic> sentinel rather than showing the raw token', () => {
@@ -97,10 +98,17 @@ describe('device model picks', () => {
     ).toBe('claude-sonnet-5-5');
     expect(readDefaultModel(store)).toBe('claude-opus-5-5');
     expect(
-      resolveExecuteModel(
-        { models: { execute: 'claude-haiku-4-5-20251001' } },
-        store
-      )
-    ).toBe('claude-haiku-4-5-20251001');
+      resolveExecuteModel({ models: { execute: 'claude-haiku-5-5' } }, store)
+    ).toBe('claude-haiku-5-5');
+  });
+
+  test('a stored id the picker replaced resolves to its successor', () => {
+    const store = memoryStorage({
+      'dispatch:model:plan': 'claude-haiku-4-5-20251001',
+      'dispatch:default-model': 'claude-haiku-4-5-20251001',
+    });
+    expect(readRoleModelOverride('plan', store)).toBe('claude-haiku-5-5');
+    expect(readDefaultModel(store)).toBe('claude-haiku-5-5');
+    expect(resolveExecuteModel(null, store)).toBe('claude-haiku-5-5');
   });
 });
