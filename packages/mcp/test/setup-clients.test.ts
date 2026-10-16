@@ -147,8 +147,7 @@ describe('setup', () => {
         hooks: {
           Stop: [
             { hooks: [{ type: 'command', command: 'say done' }] },
-            ...(claudeHooks({ command: 'dispatch-mcp', args: [] })
-              .Stop),
+            ...claudeHooks({ command: 'dispatch-mcp', args: [] }).Stop,
           ],
           UserPromptSubmit: claudeHooks({ command: 'dispatch-mcp', args: [] })
             .UserPromptSubmit,
