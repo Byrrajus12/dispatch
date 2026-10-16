@@ -60,14 +60,3 @@ tasks:
       cache: false
       persistent: true
       runInCI: 'skip'
-
-  # Railway ships the locally-built dist/ inside the image rather than building
-  # on the platform, so the build must be a dependency, not a shell `&&`.
-  deploy:
-    command: 'railway up'
-    deps:
-      - 'build'
-    options:
-      cache: false
-      interactive: true
-      runInCI: 'skip'
