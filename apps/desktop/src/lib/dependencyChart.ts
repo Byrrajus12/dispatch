@@ -21,7 +21,7 @@ export type ChartState =
   | 'blocked'
   | 'draft';
 
-interface ChartTask {
+export interface ChartTask {
   id: string;
   title: string;
   status: string;
