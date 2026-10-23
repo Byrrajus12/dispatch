@@ -22,6 +22,8 @@ import type {
   NotificationKind,
   NotificationsConfig,
   OrchestratorConfig,
+  OverseerConfig,
+  OverseerStreamMode,
   PreviewConfig,
   QueueConfig,
   ReceiptsConfig,
@@ -42,6 +44,7 @@ import {
   DEFAULT_MESSAGING,
   DEFAULT_MODELS,
   DEFAULT_NOTIFICATIONS,
+  DEFAULT_OVERSEER,
   DEFAULT_PREVIEW,
   DEFAULT_RECEIPTS,
   DEFAULT_REPO_DIGEST,
@@ -56,6 +59,7 @@ import {
   MAX_CONCURRENCY_HARD_CAP,
   MODEL_ROLES,
   NOTIFICATION_KINDS,
+  OVERSEER_STREAM_MODES,
   RETIRED_MODEL_ROLES,
 } from './configTypes.js';
 import { describeValue } from './describe.js';
@@ -1478,6 +1482,30 @@ function parseCarto(raw: unknown): CartoConfig {
   return { enabled: normalized as CartoMode };
 }
 
+// Validates the optional `overseer:` block. `stream: true`/`false` (real YAML
+// booleans) read as 'live'/'off', the way carto.enabled normalizes them.
+function parseOverseerConfig(raw: unknown): OverseerConfig {
+  if (raw === undefined || raw === null) return { ...DEFAULT_OVERSEER };
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new ConfigError(
+      'invalid .dispatch/config.yml: overseer must be a mapping'
+    );
+  }
+  const stream = (raw as Record<string, unknown>).stream;
+  if (stream === undefined) return { ...DEFAULT_OVERSEER };
+  const normalized =
+    stream === true ? 'live' : stream === false ? 'off' : stream;
+  if (
+    typeof normalized !== 'string' ||
+    !OVERSEER_STREAM_MODES.includes(normalized as OverseerStreamMode)
+  ) {
+    throw new ConfigError(
+      `invalid .dispatch/config.yml: overseer.stream must be one of: ${OVERSEER_STREAM_MODES.join(', ')}`
+    );
+  }
+  return { stream: normalized as OverseerStreamMode };
+}
+
 // Reads one factor weight, rejecting anything that would make a score
 // meaningless: a non-number, a NaN/Infinity, or a negative (which would invert
 // the factor's meaning — turning a factor off is what `0` is for). `label`
@@ -1758,6 +1786,7 @@ export function loadConfig(rootDir: string): DispatchConfig {
       sync: { ...DEFAULT_SYNC },
       policy: { ...DEFAULT_POLICY, gates: {} },
       preview: { ...DEFAULT_PREVIEW },
+      overseer: { ...DEFAULT_OVERSEER },
       queue: defaultQueue(),
       a2a: { ...DEFAULT_A2A },
       a2aWarnings: [],
@@ -1857,6 +1886,7 @@ function parseConfig(parsed: unknown): DispatchConfig {
     sync: parseSyncConfig(raw.sync),
     policy: parsePolicyConfig(raw.policy),
     preview: parsePreviewConfig(raw.preview),
+    overseer: parseOverseerConfig(raw.overseer),
     queue: parseQueueConfig(raw.queue),
     prWorktreeDir: raw.prWorktreeDir,
     a2a: a2a.config,
