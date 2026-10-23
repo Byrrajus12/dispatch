@@ -28,9 +28,10 @@ export interface MilestoneMap {
  * `${from}\u0000${to}`: each non-canceled row of a non-archived milestone group, and each of
  * its blockedBy entries whose blocker is a non-canceled row of a different milestone (a
  * repeated entry counts twice). Canceled work blocks nothing (the board's blocked rule and the
- * Tasks chart drop it too), so it never draws a line. `milestoneMap` counts these.
+ * Tasks chart drop it too), so it never draws a line. `milestoneMap` counts these and the
+ * dependency chart lists them behind each line, so the two always agree.
  */
-function milestoneWaits(
+export function milestoneWaits(
   groups: readonly ListGroup[],
   model: StatusModel = activeStatusModel()
 ): Map<string, [string, string][]> {
