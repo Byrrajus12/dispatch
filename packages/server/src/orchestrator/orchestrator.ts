@@ -5174,6 +5174,8 @@ export class Orchestrator {
         ? {
             onDelta: (segmentId: string, text: string) =>
               this.runDelta(runId, turnId, segmentId, text),
+            onSegmentAbandoned: (segmentId: string) =>
+              this.abandonRunSegment(runId, turnId, segmentId),
           }
         : {}),
       onApprovalRequest: (request) => {
@@ -5233,6 +5235,26 @@ export class Orchestrator {
       seq,
       segmentId,
       text,
+    });
+  }
+
+  // A segment of a run's live text that no entry will finish leaves the
+  // snapshot, and a frame tells clients to drop it too.
+  private abandonRunSegment(
+    runId: string,
+    turnId: string,
+    segmentId: string
+  ): void {
+    const seq = this.live.abandon(runId, turnId, segmentId);
+    if (seq === undefined) return;
+    this.ctx.events.broadcast({
+      type: 'run.delta',
+      runId,
+      turnId,
+      seq,
+      segmentId,
+      text: '',
+      abandoned: true,
     });
   }
 

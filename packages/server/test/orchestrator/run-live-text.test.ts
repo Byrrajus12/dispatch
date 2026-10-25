@@ -137,6 +137,42 @@ describe('a run streams its text live', () => {
     unsubscribe();
   });
 
+  // A block the model's stream broke off in: no entry will ever finish it,
+  // so it must not stay in the snapshot, or on screen, for the run's life.
+  it('drops an abandoned segment from the snapshot and says so in a frame', async () => {
+    const { orchestrator, seen, taskId } = setUp();
+    orchestrator.registerExecutor(
+      'broken',
+      new FakeExecutor({
+        steps: [
+          { delta: { segmentId: 'msg_A:0', text: 'Half a sen' } },
+          { abandon: 'msg_A:0' },
+          {
+            delta: { segmentId: 'msg_B:0', text: 'Whole.' },
+            awaitMessage: true,
+          },
+        ],
+        finish: { state: 'finished', costUsd: 0, turns: 1 },
+      })
+    );
+    const run = await orchestrator.dispatch(taskId, 'broken');
+    await waitFor(() => deltas(seen).length === 3);
+
+    expect(deltas(seen)[1]).toEqual({
+      type: 'run.delta',
+      runId: run.id,
+      turnId: deltas(seen)[0].turnId,
+      seq: 2,
+      segmentId: 'msg_A:0',
+      text: '',
+      abandoned: true,
+    });
+    expect(orchestrator.liveText(run.id)?.segments).toEqual([
+      { id: 'msg_B:0', text: 'Whole.' },
+    ]);
+    await orchestrator.cancel(run.id);
+  });
+
   // A client merges run.log frames into a detail it fetched by this index,
   // so it must be the entry's place in GET /api/runs/:id's entries.
   it('numbers each run.log entry by its place in the transcript', async () => {

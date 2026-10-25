@@ -18,6 +18,9 @@ interface FakeStep {
   // onDelta when the run is given one, the way a real executor streams it.
   // The `assistant` entry that finishes the segment names it as `streamId`.
   delta?: { segmentId: string; text: string };
+  // A segment streamed earlier that no entry will finish, reported through
+  // onSegmentAbandoned as a real executor does when the model's stream breaks.
+  abandon?: string;
   entry?: NormalizedEntry;
   write?: (cwd: string) => void;
   commitMessage?: string;
@@ -119,6 +122,9 @@ export class FakeExecutor implements Executor {
 
           if (step.delta !== undefined) {
             events.onDelta?.(step.delta.segmentId, step.delta.text);
+          }
+          if (step.abandon !== undefined) {
+            events.onSegmentAbandoned?.(step.abandon);
           }
           if (step.entry !== undefined) events.onEntry(step.entry);
 

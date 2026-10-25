@@ -72,6 +72,20 @@ export class LiveTextBuffer {
     return state.seq;
   }
 
+  /**
+   * Drops a segment of the running turn that will never be committed (its
+   * stream broke off) and returns the `seq` of the frame that says so, or
+   * undefined when there is no such segment.
+   */
+  abandon(key: string, turnId: string, segmentId: string): number | undefined {
+    const state = this.states.get(key);
+    if (state === undefined || !this.isRunning(key, turnId)) return undefined;
+    if (!state.segments.some((s) => s.id === segmentId)) return undefined;
+    state.segments = state.segments.filter((s) => s.id !== segmentId);
+    state.seq += 1;
+    return state.seq;
+  }
+
   /** Drops one segment of the running turn: its text is on the record now. */
   drop(key: string, turnId: string, segmentId: string): void {
     const state = this.states.get(key);

@@ -1280,7 +1280,9 @@ export class ClaudeExecutor implements Executor {
       // Names the agent's text blocks while the run streams, so each
       // finished block's entry carries the segment its deltas went to.
       const segments =
-        events.onDelta === undefined ? undefined : new ClaudeTextSegments();
+        events.onDelta === undefined
+          ? undefined
+          : new ClaudeTextSegments((id) => events.onSegmentAbandoned?.(id));
       // The session's live background tasks (background_tasks_changed
       // carries the whole set each time), so windDown can stop them.
       let backgroundTasks: string[] = [];

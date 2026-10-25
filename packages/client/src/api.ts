@@ -1181,6 +1181,9 @@ export type ServerEvent =
       seq: number;
       segmentId: string;
       text: string;
+      // Ends a segment no entry will finish (the model's stream broke off);
+      // `text` is empty.
+      abandoned?: true;
     }
   // Phase 5 P2: a plan's state (running -> ready|failed) changed, or it was
   // just confirmed. Same "go refetch" contract as the other *.changed events

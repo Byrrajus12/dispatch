@@ -126,7 +126,7 @@ describe('events mirror dispatchd', () => {
     expect(client).toEqual(server);
   });
 
-  it('run.delta declares the same fields as overseer.delta, keyed by run', () => {
+  it("run.delta declares overseer.delta's fields keyed by run, plus abandoned", () => {
     const member = (source: string): string[] | null => {
       const body = /\{\n {6}type: 'run\.delta';([\s\S]*?)\n {4}\}/.exec(
         source
@@ -135,7 +135,14 @@ describe('events mirror dispatchd', () => {
       return [...body.matchAll(/\n {6}(\w+\??):/g)].map((m) => m[1]);
     };
     const server = member(serverSource('events.ts'));
-    expect(server).toEqual(['runId', 'turnId', 'seq', 'segmentId', 'text']);
+    expect(server).toEqual([
+      'runId',
+      'turnId',
+      'seq',
+      'segmentId',
+      'text',
+      'abandoned?',
+    ]);
     expect(member(clientSource())).toEqual(server);
   });
 

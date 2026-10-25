@@ -22,10 +22,20 @@ export interface ClaudeStreamEvent {
  * its API message streamed. Without partial messages (live text off, or a CLI
  * that sends none) the n-th text block of a message is `<id>:<n>` instead.
  *
+ * A segment no finished block claims by the time its API message stops (or
+ * the next one starts) was abandoned: the stream broke off mid-block, and
+ * the CLI sends the text again under a new API message. It is reported to
+ * `onAbandon`, so its text can leave the live view rather than stay there
+ * half-written for the rest of the session.
+ *
  * Feed it top-level messages only: a sub-agent's messages share the session
  * and would interleave with the agent's own.
  */
 export class ClaudeTextSegments {
+  constructor(
+    private readonly onAbandon: (segmentId: string) => void = () => {}
+  ) {}
+
   // The API message being streamed, and the segment of each of its text blocks.
   private messageId: string | undefined;
   private readonly open = new Map<number, string>();
@@ -36,10 +46,14 @@ export class ClaudeTextSegments {
 
   /** Follows one stream event; returns the text it adds to a segment, if any. */
   event(event: ClaudeStreamEvent): { segmentId: string; text: string } | null {
-    if (event.type === 'message_start') {
-      const id = event.message?.id;
-      this.messageId = typeof id === 'string' ? id : undefined;
+    if (event.type === 'message_start' || event.type === 'message_stop') {
+      this.abandonUnclaimed();
       this.open.clear();
+      const id = event.message?.id;
+      this.messageId =
+        event.type === 'message_start' && typeof id === 'string'
+          ? id
+          : undefined;
       return null;
     }
     if (event.index === undefined || this.messageId === undefined) return null;
@@ -64,6 +78,15 @@ export class ClaudeTextSegments {
       }
     }
     return null;
+  }
+
+  // Every block finished before its message stopped claims its segment
+  // first, so what the current message left unclaimed will never be.
+  private abandonUnclaimed(): void {
+    if (this.messageId === undefined) return;
+    const left = this.unclaimed.get(this.messageId) ?? [];
+    this.unclaimed.delete(this.messageId);
+    for (const segment of left) this.onAbandon(segment);
   }
 
   /**

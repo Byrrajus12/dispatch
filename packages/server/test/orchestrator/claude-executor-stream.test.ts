@@ -37,6 +37,7 @@ async function runOver(
 ): Promise<{
   entries: NormalizedEntry[];
   deltas: [string, string][];
+  abandoned: string[];
   options: Options | undefined;
 }> {
   const repo = initGitRepo('dispatch-claude-stream-');
@@ -48,13 +49,17 @@ async function runOver(
   });
   const entries: NormalizedEntry[] = [];
   const deltas: [string, string][] = [];
+  const abandoned: string[] = [];
   await new Promise<void>((resolve) => {
     const events: ExecutorEvents = {
       onEntry: (entry) => entries.push(entry),
       onApprovalRequest: () => {},
       onFinish: () => resolve(),
       ...(live
-        ? { onDelta: (id: string, text: string) => deltas.push([id, text]) }
+        ? {
+            onDelta: (id: string, text: string) => deltas.push([id, text]),
+            onSegmentAbandoned: (id: string) => abandoned.push(id),
+          }
         : {}),
     };
     executor.start(
@@ -62,7 +67,7 @@ async function runOver(
       events
     );
   });
-  return { entries, deltas, options };
+  return { entries, deltas, abandoned, options };
 }
 
 // The entries a scripted session between an init and a result logs.
@@ -211,11 +216,12 @@ describe('ClaudeExecutor live text', () => {
   const ANSWER = 'msg_stream_2:0';
 
   it('streams each text block and stamps its entry with the segment', async () => {
-    const { entries, deltas, options } = await runOver(
+    const { entries, deltas, abandoned, options } = await runOver(
       recorded('stream')(),
       true
     );
 
+    expect(abandoned).toEqual([]);
     expect(options?.includePartialMessages).toBe(true);
     const answer = entries.at(-1)?.text ?? '';
     expect(answer).toStartWith('The year is 2026');
@@ -231,6 +237,65 @@ describe('ClaudeExecutor live text', () => {
       ['tool', null, null],
       ['assistant', null, ANSWER],
     ]);
+  });
+
+  // The CLI falls back to a non-streaming request when the stream fails
+  // mid-block: the half-streamed block never finishes, and its text comes
+  // again under a new API message.
+  it('reports a block its message stopped without finishing as abandoned', async () => {
+    const event = (e: object) => ({
+      type: 'stream_event',
+      session_id: 's-1',
+      parent_tool_use_id: null,
+      event: e,
+    });
+    const text = (index: number, delta: string) =>
+      event({
+        type: 'content_block_delta',
+        index,
+        delta: { type: 'text_delta', text: delta },
+      });
+    const { entries, deltas, abandoned } = await runOver(
+      [
+        { type: 'system', subtype: 'init', session_id: 's-1' },
+        event({ type: 'message_start', message: { id: 'msg_A' } }),
+        event({
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'text' },
+        }),
+        text(0, 'Half a sen'),
+        event({ type: 'content_block_stop', index: 0 }),
+        event({ type: 'message_stop' }),
+        event({ type: 'message_start', message: { id: 'msg_B' } }),
+        event({
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'text' },
+        }),
+        text(0, 'A whole sentence.'),
+        {
+          type: 'assistant',
+          session_id: 's-1',
+          parent_tool_use_id: null,
+          message: {
+            id: 'msg_B',
+            content: [{ type: 'text', text: 'A whole sentence.' }],
+          },
+        },
+        event({ type: 'content_block_stop', index: 0 }),
+        event({ type: 'message_stop' }),
+        RESULT,
+      ],
+      true
+    );
+
+    expect(streamedText(deltas)).toEqual({
+      'msg_A:0': 'Half a sen',
+      'msg_B:0': 'A whole sentence.',
+    });
+    expect(abandoned).toEqual(['msg_A:0']);
+    expect(entries.map((e) => e.streamId)).toEqual(['msg_B:0']);
   });
 
   it('asks for no partial messages and stamps nothing when no one watches', async () => {

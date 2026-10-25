@@ -182,6 +182,10 @@ export interface ExecutorEvents {
   // segment. Optional: an executor streams only when it is given, and must
   // work the same when the model's stream sends none.
   onDelta?(segmentId: string, text: string): void;
+  // A segment `onDelta` streamed that no entry will finish: the model's
+  // stream broke off mid-block (the text comes again under a new segment).
+  // Optional, like onDelta.
+  onSegmentAbandoned?(segmentId: string): void;
   onApprovalRequest(request: {
     requestId: string;
     toolName: string;

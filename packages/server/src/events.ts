@@ -37,7 +37,9 @@ export type ServerEvent =
   // finished text arrives as a run.log `assistant` entry whose `streamId` is
   // the segment. `seq` counts one run's frames, so a gap means a missed frame,
   // which GET /api/runs/:id's `live` snapshot repairs. Sent to the same
-  // sockets as run.log.
+  // sockets as run.log. `abandoned` (with empty `text`) ends a segment no
+  // entry will finish: the model's stream broke off and sent the text again
+  // under a new segment, so the view drops it.
   | {
       type: 'run.delta';
       runId: string;
@@ -45,6 +47,7 @@ export type ServerEvent =
       seq: number;
       segmentId: string;
       text: string;
+      abandoned?: true;
     }
   // Phase 5 P1: a plan's state (running -> ready|failed) changed, or it was
   // just confirmed — same "go refetch, no payload beyond the id" contract as
