@@ -1099,3 +1099,107 @@ test('a missed frame refetches the record once, and its snapshot repairs the tex
   await new Promise((resolve) => setTimeout(resolve, 20));
   expect(calls()).toBe(2);
 });
+
+// The record refetch that brings a segment's row also brings a `live` without
+// that segment, and the two reach the view through different stores. No render
+// may fall between them showing the segment nowhere: its text would blink out
+// at every narration, and the "working" row flash in before every reply.
+test('a segment never vanishes between its live text and its row', async () => {
+  const before = runningRecord({
+    seq: 2,
+    turnId: 't1',
+    segments: [{ id: 't1:b', text: 'Two runs are blocked.' }],
+  });
+  const narrated: OverseerRecordView = {
+    ...before,
+    messages: [
+      ...before.messages,
+      {
+        role: 'narration',
+        text: 'Two runs are blocked.',
+        at: '2026-08-10T00:00:02Z',
+        streamId: 't1:b',
+      },
+    ],
+    live: { seq: 2, turnId: 't1', segments: [] },
+  };
+  const settled: OverseerRecordView = {
+    ...narrated,
+    state: 'ready',
+    messages: [
+      ...narrated.messages,
+      {
+        role: 'assistant',
+        text: 'Both wait on review.',
+        at: '2026-08-10T00:00:03Z',
+        streamId: 't1:c',
+      },
+    ],
+    live: undefined,
+  };
+  const answers = [before];
+  const client = {
+    baseUrl: `http://127.0.0.1:${PORT}`,
+    getOverseer: () => Promise.resolve(answers[0]),
+  } as unknown as ApiClient;
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  // Where segment `watch` is on each render: live text, a row, or nowhere.
+  let watch = 't1:b';
+  const seen: string[] = [];
+  const { result } = renderHook(
+    () => {
+      const session = useOverseerSession(client, PORT, '/repo');
+      const asRow =
+        session.record?.messages.some((m) => m.streamId === watch) === true;
+      const asLive =
+        session.live?.segments.some((s) => s.id === watch) === true;
+      seen.push(asRow ? 'row' : asLive ? 'live' : 'none');
+      return session;
+    },
+    {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={queryClient}>
+          {children}
+        </QueryClientProvider>
+      ),
+    }
+  );
+  act(() => {
+    result.current.open('w-1');
+  });
+  await waitFor(() => {
+    expect(result.current.live?.segments).toHaveLength(1);
+  });
+
+  // The segment lands as a narration row.
+  seen.length = 0;
+  answers[0] = narrated;
+  await act(async () => {
+    await queryClient.invalidateQueries({ queryKey: overseerKey(PORT, 'w-1') });
+  });
+  await waitFor(() => {
+    expect(seen.at(-1)).toBe('row');
+  });
+  expect(seen).not.toContain('none');
+
+  // The reply streams, then lands as the turn settles.
+  watch = 't1:c';
+  act(() => {
+    applyOverseerDelta(queryClient, PORT, delta(3, 't1:c', 'Both wait'));
+  });
+  expect(result.current.live?.segments).toEqual([
+    { id: 't1:c', text: 'Both wait' },
+  ]);
+  seen.length = 0;
+  answers[0] = settled;
+  await act(async () => {
+    await queryClient.invalidateQueries({ queryKey: overseerKey(PORT, 'w-1') });
+  });
+  await waitFor(() => {
+    expect(result.current.record?.state).toBe('ready');
+  });
+  expect(seen).not.toContain('none');
+  expect(result.current.live).toBeNull();
+});

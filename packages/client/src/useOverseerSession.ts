@@ -118,6 +118,15 @@ export interface OverseerLive {
   segments: LiveSegment[];
 }
 
+// The stream ids of the record's rows: the segments it already holds.
+function committedSegments(record: OverseerRecord): Set<string> {
+  return new Set(
+    record.messages.flatMap((m) =>
+      m.streamId === undefined ? [] : [m.streamId]
+    )
+  );
+}
+
 // The live text worth showing: none unless the record's turn is running, and
 // no segment the record already holds as a narration or reply row.
 function visibleLive(
@@ -125,15 +134,54 @@ function visibleLive(
   state: LiveTextState | undefined
 ): OverseerLive | null {
   if (record?.state !== 'running' || !state?.turnId) return null;
-  const committed = new Set(
-    record.messages.flatMap((m) =>
-      m.streamId === undefined ? [] : [m.streamId]
-    )
-  );
+  const committed = committedSegments(record);
   return {
     turnId: state.turnId,
     segments: state.segments.filter((s) => !committed.has(s.id)),
   };
+}
+
+/**
+ * `visibleLive`, minus one blink. The refetch that brings a segment's row also
+ * brings a `live` without that segment, but the store takes the snapshot as
+ * the fetch lands and the record reaches the view a tick later, so for one
+ * render the segment would be in neither: its text would blink out at every
+ * narration, and the "working" row flash in before every reply. A segment
+ * shown last render is kept, in place, while its turn runs and the record
+ * holds no row for it yet; the server only drops a segment when it commits
+ * it, or when the turn ends.
+ */
+function useVisibleLive(
+  record: OverseerRecord | undefined,
+  state: LiveTextState | undefined
+): OverseerLive | null {
+  const last = useRef<OverseerLive | null>(null);
+  const live = useMemo(() => {
+    const next = visibleLive(record, state);
+    const prev = last.current;
+    if (next === null || prev?.turnId !== next.turnId || record === undefined) {
+      return next;
+    }
+    const committed = committedSegments(record);
+    const byId = new Map(next.segments.map((s) => [s.id, s]));
+    const kept = prev.segments.flatMap((s) => {
+      const now = byId.get(s.id);
+      if (now !== undefined) return [now];
+      return committed.has(s.id) ? [] : [s];
+    });
+    const shownBefore = new Set(prev.segments.map((s) => s.id));
+    const segments = [
+      ...kept,
+      ...next.segments.filter((s) => !shownBefore.has(s.id)),
+    ];
+    return segments.length === next.segments.length
+      ? next
+      : { turnId: next.turnId, segments };
+  }, [record, state]);
+  useEffect(() => {
+    last.current = live;
+  }, [live]);
+  return live;
 }
 
 /** What the human answered to a parked built-in tool call, sent as the answer
@@ -828,7 +876,7 @@ export function useOverseerSession(
   const liveState = useSyncExternalStore(liveTextStore.subscribe, () =>
     liveKey === null ? undefined : liveTextStore.get(port, liveKey)
   );
-  const live = useMemo(() => visibleLive(shown, liveState), [shown, liveState]);
+  const live = useVisibleLive(shown, liveState);
 
   return {
     conversationId,
