@@ -13,6 +13,12 @@ holds what a user upgrading needs to know.
   approval card takes a reason when you deny, as a run's does. To stop
   streaming, set `overseer.stream` (`live`, `narration` or `off`) or
   `runs.stream` (`live` or `off`) in `.dispatch/config.yml`.
+- **Update the desktop app and the `dispatch` CLI together with the daemon.**
+  Claude runs now log how each tool call ended as an entry of its own. A desktop
+  or CLI older than this release, attached to a newer daemon, shows each of
+  those as an extra generic "tool" chip, or an extra `[tool ✓] unknown` line in
+  `dispatch run --watch`, `run show` and `run watch`, for every Claude run the
+  newer daemon logged.
 
 ### Changed
 
