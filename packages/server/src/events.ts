@@ -28,7 +28,10 @@ export type ServerEvent =
   | { type: 'comment.changed'; taskId: string; commentIds: string[] }
   | { type: 'hello'; version: string }
   | { type: 'run.changed' }
-  | { type: 'run.log'; runId: string; entry: NormalizedEntry }
+  // `index` is the entry's place among the transcript's entries (how many came
+  // before it), so a client can tell a frame it already holds, or one it
+  // missed, from the next one. Absent when the entry could not be written.
+  | { type: 'run.log'; runId: string; entry: NormalizedEntry; index?: number }
   // A live run's text as the model writes it: `text` extends segment
   // `segmentId` of turn `turnId` (one per run). View-only, never stored; the
   // finished text arrives as a run.log `assistant` entry whose `streamId` is

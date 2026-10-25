@@ -1165,7 +1165,11 @@ export type ServerEvent =
   | { type: 'comment.changed'; taskId: string; commentIds: string[] }
   | { type: 'hello'; version: string }
   | { type: 'run.changed' }
-  | { type: 'run.log'; runId: string; entry: NormalizedEntry }
+  // `index` is the entry's place among the run's transcript entries (how many
+  // came before it): a frame below the cached length is already held, one
+  // above it means frames were missed. Absent from an older daemon, or when
+  // the entry could not be written.
+  | { type: 'run.log'; runId: string; entry: NormalizedEntry; index?: number }
   // A live run's text as the model writes it: `text` extends segment
   // `segmentId` of the run's turn `turnId`, until a run.log `assistant` entry
   // with that `streamId` replaces it. A gap in `seq` means a missed frame;

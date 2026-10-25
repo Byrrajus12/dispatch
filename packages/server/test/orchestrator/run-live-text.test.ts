@@ -137,6 +137,25 @@ describe('a run streams its text live', () => {
     unsubscribe();
   });
 
+  // A client merges run.log frames into a detail it fetched by this index,
+  // so it must be the entry's place in GET /api/runs/:id's entries.
+  it('numbers each run.log entry by its place in the transcript', async () => {
+    const { orchestrator, seen, taskId } = setUp();
+    const run = await orchestrator.dispatch(taskId, 'fake');
+    await waitFor(() => deltas(seen).length === 2);
+    orchestrator.sendMessage(run.id, 'go on');
+    await waitFor(() => deltas(seen).length === 3);
+    orchestrator.sendMessage(run.id, 'finish');
+    await waitFor(() => orchestrator.getRun(run.id)?.meta.state === 'finished');
+
+    const logs = seen.flatMap((e) => (e.type === 'run.log' ? [e] : []));
+    const entries = orchestrator.getRun(run.id)?.entries ?? [];
+    expect(logs.map((e) => e.index)).toEqual(entries.map((_, i) => i));
+    for (const log of logs) {
+      expect(entries[log.index ?? -1]).toEqual(log.entry);
+    }
+  });
+
   // Parity with run.log from onEntry, which reaches every socket today: the
   // live text of a run goes no further and no narrower than its log.
   it('sends run.delta to the same audience as the run.log of an entry', async () => {

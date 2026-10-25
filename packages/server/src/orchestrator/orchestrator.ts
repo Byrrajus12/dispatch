@@ -46,7 +46,7 @@ import { join } from 'node:path';
 
 import { spawnGitSync } from '../blockingGit.js';
 import type { TaskCache } from '../cache.js';
-import type { EventBus, SocketAudience } from '../events.js';
+import type { EventBus, ServerEvent, SocketAudience } from '../events.js';
 import { FindingStore } from '../findings.js';
 import type { FindingStorePort } from '../findings.js';
 import { GitRepo } from '../git/commands.js';
@@ -344,6 +344,21 @@ function checkGuard(task: TaskDoc, guard: DispatchGuard | undefined): void {
 
 // Only a person owns a run (RunMeta.dispatchedBy): 'none', an agent and the
 // legacy bare `human` read as nobody.
+// A run.log frame for an entry at `index` in the transcript, or with no index
+// when writing the entry failed (the frame still goes out, as before).
+function runLog(
+  runId: string,
+  entry: NormalizedEntry,
+  index: number | undefined
+): ServerEvent {
+  return {
+    type: 'run.log',
+    runId,
+    entry,
+    ...(index === undefined ? {} : { index }),
+  };
+}
+
 function humanOwner(ref: string | undefined): string | undefined {
   return ref?.startsWith('human:') === true ? ref : undefined;
 }
@@ -471,6 +486,9 @@ export class Orchestrator {
   // only: GET /api/runs/:id serves it as `live`, and the run's terminal
   // transition forgets it.
   private readonly live = new LiveTextBuffer();
+  // How many entries each run's transcript holds, once something appended
+  // to it this process (appendRunEntry); forgotten when the run ends.
+  private readonly entryCounts = new Map<string, number>();
   // Each live run's sub-agents by spawning tool_use id and their latest
   // status — the working set recordSubagentEvent folds RunMeta.subagents from.
   private readonly subagentStatuses = new Map<
@@ -726,8 +744,8 @@ export class Orchestrator {
       text,
       messageId: from.messageId,
     };
-    this.transcriptFor(runId).appendEntry(entry);
-    this.ctx.events.broadcast({ type: 'run.log', runId, entry });
+    const index = this.appendRunEntry(runId, entry);
+    this.ctx.events.broadcast({ type: 'run.log', runId, entry, index });
     executorRun.send(text);
   }
 
@@ -750,10 +768,11 @@ export class Orchestrator {
       text: message.body,
       messageId: message.id,
     };
+    let index: number | undefined;
     this.bestEffort(`logging an outgoing message for run ${runId}`, () => {
-      this.transcriptFor(runId).appendEntry(entry);
+      index = this.appendRunEntry(runId, entry);
     });
-    this.ctx.events.broadcast({ type: 'run.log', runId, entry }, audience);
+    this.ctx.events.broadcast(runLog(runId, entry, index), audience);
   }
 
   // deliverToRun for a non-interrupting channel digest: logged the same way,
@@ -769,8 +788,8 @@ export class Orchestrator {
       digest: true,
       ...(messageId !== undefined ? { messageId } : {}),
     };
-    this.transcriptFor(runId).appendEntry(entry);
-    this.ctx.events.broadcast({ type: 'run.log', runId, entry });
+    const index = this.appendRunEntry(runId, entry);
+    this.ctx.events.broadcast({ type: 'run.log', runId, entry, index });
     executorRun.notify(digest);
   }
 
@@ -1845,8 +1864,8 @@ export class Orchestrator {
       from: 'user',
       text,
     };
-    this.transcriptFor(runId).appendEntry(entry);
-    this.ctx.events.broadcast({ type: 'run.log', runId, entry });
+    const index = this.appendRunEntry(runId, entry);
+    this.ctx.events.broadcast({ type: 'run.log', runId, entry, index });
     executorRun.send(text);
     return meta;
   }
@@ -1964,10 +1983,11 @@ export class Orchestrator {
       kind: 'system',
       text: 'Stop requested — the agent will finish its current operation and then stop.',
     };
+    let index: number | undefined;
     this.bestEffort(`logging stop request for run ${runId}`, () => {
-      this.transcriptFor(runId).appendEntry(entry);
+      index = this.appendRunEntry(runId, entry);
     });
-    this.ctx.events.broadcast({ type: 'run.log', runId, entry });
+    this.ctx.events.broadcast(runLog(runId, entry, index));
     this.ctx.events.broadcast({ type: 'run.changed' });
 
     executorRun.requestStop();
@@ -4783,6 +4803,17 @@ export class Orchestrator {
     return new Transcript(transcriptPath(this.ctx.rootDir, runId));
   }
 
+  // Appends `entry` to `runId`'s transcript and returns its index among the
+  // transcript's entries, which run.log carries. The count is read from the
+  // file once and then kept, so an append does not reread the transcript.
+  private appendRunEntry(runId: string, entry: NormalizedEntry): number {
+    const transcript = this.transcriptFor(runId);
+    const index = this.entryCounts.get(runId) ?? transcript.countEntries();
+    transcript.appendEntry(entry);
+    this.entryCounts.set(runId, index + 1);
+    return index;
+  }
+
   // How many offending paths a dirty-checkout refusal names before it
   // summarises the rest — enough to identify the culprit in the common case
   // (one or two stray files) without turning an error message into a wall of
@@ -4980,6 +5011,8 @@ export class Orchestrator {
       this.registry.clearPendingApprovals(runId);
       // Text it never finished is not logged, as before runs streamed.
       this.live.forget(runId);
+      // A later entry (a notice, a message) counts the file again.
+      this.entryCounts.delete(runId);
     }
     // A finish that reports no session must not erase the one recordSession
     // already stored: spreading `sessionId: undefined` over the meta did
@@ -5116,7 +5149,7 @@ export class Orchestrator {
         if (turnId !== null && entry.streamId !== undefined) {
           this.live.drop(runId, turnId, entry.streamId);
         }
-        this.transcriptFor(runId).appendEntry(entry);
+        const index = this.appendRunEntry(runId, entry);
         // The step rides on the meta so a list read has it without the log;
         // a stray entry after the finish names no step.
         const state = this.registry.get(runId)?.state;
@@ -5131,7 +5164,7 @@ export class Orchestrator {
             : { lastStep: { text, at: entry.ts === '' ? now : entry.ts } }),
         });
         const fanOutChanged = this.recordSubagentEvent(runId, entry);
-        this.ctx.events.broadcast({ type: 'run.log', runId, entry });
+        this.ctx.events.broadcast({ type: 'run.log', runId, entry, index });
         // A sub-agent starting or ending changes the counts every run list
         // shows, and lists refetch on run.changed rather than reading logs.
         if (fanOutChanged) this.ctx.events.broadcast({ type: 'run.changed' });
@@ -5229,12 +5262,14 @@ export class Orchestrator {
       kind: 'system',
       text: `Memory mode ${mode}: ${detail}`,
     };
+    let index: number | undefined;
     this.bestEffort(`recording memory mode for run ${runId}`, () => {
-      const transcript = this.transcriptFor(runId);
-      transcript.appendState(meta.state, now, { memoryMode: mode });
-      transcript.appendEntry(entry);
+      this.transcriptFor(runId).appendState(meta.state, now, {
+        memoryMode: mode,
+      });
+      index = this.appendRunEntry(runId, entry);
     });
-    this.ctx.events.broadcast({ type: 'run.log', runId, entry });
+    this.ctx.events.broadcast(runLog(runId, entry, index));
     this.ctx.events.broadcast({ type: 'run.changed' });
   }
 
@@ -5284,10 +5319,11 @@ export class Orchestrator {
         kind: 'system',
         text: `This run was resumed onto session ${meta.sessionId} but the agent opened a different session (${sessionId}): the conversation from run ${meta.resumedFrom} is not in its memory.`,
       };
+      let index: number | undefined;
       this.bestEffort(`logging session mismatch for run ${runId}`, () => {
-        this.transcriptFor(runId).appendEntry(notice);
+        index = this.appendRunEntry(runId, notice);
       });
-      this.ctx.events.broadcast({ type: 'run.log', runId, entry: notice });
+      this.ctx.events.broadcast(runLog(runId, notice, index));
       console.error(`dispatchd: run ${runId}: ${notice.text}`);
     }
     this.registry.updateMeta(runId, {
@@ -5528,8 +5564,13 @@ export class Orchestrator {
       from: 'user',
       text,
     };
-    this.transcriptFor(runId).appendEntry(userEntry);
-    this.ctx.events.broadcast({ type: 'run.log', runId, entry: userEntry });
+    const index = this.appendRunEntry(runId, userEntry);
+    this.ctx.events.broadcast({
+      type: 'run.log',
+      runId,
+      entry: userEntry,
+      index,
+    });
 
     // Records the executor substitution as part of the same Activity line a
     // request-changes redispatch always writes, so the "why did this run end
@@ -5697,17 +5738,14 @@ export class Orchestrator {
         kind: 'system',
         text: `Started a fresh session: run ${meta.id} never started a conversation, so there was none to continue.`,
       };
+      let index: number | undefined;
       this.bestEffort(
         `logging fresh-session notice for run ${newRunId}`,
         () => {
-          this.transcriptFor(newRunId).appendEntry(notice);
+          index = this.appendRunEntry(newRunId, notice);
         }
       );
-      this.ctx.events.broadcast({
-        type: 'run.log',
-        runId: newRunId,
-        entry: notice,
-      });
+      this.ctx.events.broadcast(runLog(newRunId, notice, index));
     }
 
     // A continuing session's prompt is the continuation, and its fallback the
