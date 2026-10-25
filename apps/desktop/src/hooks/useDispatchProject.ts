@@ -155,8 +155,10 @@ import {
   useStopFixLoop,
 } from './useOrchestration';
 import {
+  applyOverseerDelta,
   invalidateOverseerEvent,
   overseerKeyPrefix,
+  resetLiveText,
 } from './useOverseerSession';
 import { readinessKey, useReadiness } from './useReadiness';
 import { runDiffKey, runReviewKey } from './useRunData';
@@ -1592,20 +1594,27 @@ export function useDispatchProject(
           // The daemon sends `hello` from its websocket `open` handler
           // (packages/server/src/index.ts), so this fires once per socket:
           // on the first connect and again on every reconnect. A reconnect
-          // usually means dispatchd restarted, and overseer records live in an
-          // in-memory Map — so every cached id 404s now, and no
-          // `overseer.changed` can ever arrive for a conversation the daemon
-          // no longer has. Without this refetch the cached record keeps a
-          // pending action alive that exists nowhere: the rail shows a
-          // waiting row and an amber badge, Approve/Deny 404, and
-          // `hasPendingAction` disables both "New conversation" controls
-          // until the window happens to lose and regain focus.
+          // usually means dispatchd restarted. Overseer records survive a
+          // restart, but not as they were cached: a turn that was running
+          // loads as failed with its parked calls closed, and nothing
+          // announces that with an `overseer.changed`, since the change
+          // happened before this socket existed. Without this refetch the
+          // cached record keeps a parked call alive that exists nowhere:
+          // the card's answers fail, and `hasPendingAction` disables both
+          // "New conversation" controls until the window happens to lose
+          // and regain focus.
+          //
+          // Live text starts over first: a restarted daemon counts each
+          // conversation's frames from zero again, so nothing held from
+          // before can be placed against them. The refetched records'
+          // `live` snapshots fill the store back in.
           //
           // It has to be the whole prefix rather than one conversation's
           // key: the open conversation, and its id, live in
           // useOverseerSession, which this hook cannot see. On the first
           // connect nothing is cached yet, so the invalidation is a no-op
           // there rather than a wasted refetch.
+          resetLiveText(port);
           void queryClient.invalidateQueries({
             queryKey: overseerKeyPrefix(port),
           });
@@ -1726,6 +1735,11 @@ export function useDispatchProject(
           void queryClient.invalidateQueries({
             queryKey: agentSessionsQueryKey,
           });
+        } else if (event.type === 'overseer.delta') {
+          // A running turn's text as the model writes it: view-only, so it
+          // goes to the live text store and never into the record cache. A
+          // missed frame refetches that record, whose `live` repairs it.
+          applyOverseerDelta(queryClient, port, event);
         } else if (event.type === 'overseer.changed') {
           // The overseer record query lives in useOverseerSession; this hook
           // owns the one WS connection, so it applies the shared invalidation.
