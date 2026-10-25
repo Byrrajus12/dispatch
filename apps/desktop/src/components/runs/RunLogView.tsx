@@ -15,7 +15,7 @@ import { isFromA2A } from '../../lib/a2a';
 import type { DecideAvailability } from '../../lib/daemonAuth';
 import type { RunQuestion, RunScopeRequest } from '../../lib/gates';
 import type { PendingApproval } from '../../lib/pendingApprovals';
-import { groupLogEntries } from '../../lib/runLog';
+import { groupLogEntries, reportsToolResults } from '../../lib/runLog';
 import { parseDeliveredText, parseDigestLine } from '../../lib/runMessages';
 import {
   continueMessage,
@@ -274,27 +274,37 @@ export function RunLogView({
   // different run on the left, and each run should open at its latest output.
   const { scrollRef, contentRef, scrollToBottom } = useStickToBottom(meta.id);
 
-  const groups = groupLogEntries(entries);
+  const groups = useMemo(() => groupLogEntries(entries), [entries]);
+  const settlesCalls = useMemo(() => reportsToolResults(entries), [entries]);
   // The sub-agents this run fanned out into, folded from the same entries the
   // transcript renders — so the tree ticks with each `run.log` event.
   const subagents = useMemo(() => foldSubagents(entries), [entries]);
   const terminal = isTerminalRunState(meta.state);
   const canSend = SENDABLE_STATES.has(meta.state);
-  // The transcript's one genuinely live entry — the run's last *rendered* entry while it's
-  // actually still producing output. Drives `TranscriptRow`'s `live` prop (StreamingText's
-  // reveal, Thinking's shimmer, ToolChip's running state); never true for a paused or finished
-  // run, and never true for anything but the last entry, so history never fakes still being
-  // written. Derived from `groups` (post `groupLogEntries`), not the raw `entries` array —
-  // `groupLogEntries` drops `usage`-kind entries, which never render a `TranscriptRow` at all,
-  // so a `usage` entry arriving after the last visible one would otherwise make `entries.at(-1)`
-  // point at something nothing on screen matches, killing every live indicator.
+  // The transcript's genuinely live entries, only ever while the run is actually producing
+  // output: its last *rendered* entry, and in a run whose executor reports how its calls end,
+  // each call of the agent's own still waiting for its result (several can run at once).
+  // Drives `TranscriptRow`'s `live` prop (StreamingText's reveal, Thinking's shimmer,
+  // ToolChip's running state); never true for a paused or finished run, so history never
+  // fakes still being written. A sub-agent's calls never get a result, so they follow the
+  // last-entry rule. Derived from `groups` (post `groupLogEntries`), not the raw `entries`
+  // array — `groupLogEntries` drops `usage`-kind entries, which never render a `TranscriptRow`
+  // at all, so a `usage` entry arriving after the last visible one would otherwise make
+  // `entries.at(-1)` point at something nothing on screen matches, killing every live
+  // indicator.
   const lastGroup = groups.length > 0 ? groups[groups.length - 1] : undefined;
   const lastEntry =
     lastGroup !== undefined
       ? lastGroup.entries[lastGroup.entries.length - 1]
       : undefined;
   const isLive = (entry: NormalizedEntry) =>
-    meta.state === 'running' && entry === lastEntry;
+    meta.state === 'running' &&
+    (entry === lastEntry ||
+      (settlesCalls &&
+        entry.kind === 'tool' &&
+        entry.status === 'running' &&
+        entry.toolUseId !== undefined &&
+        entry.parentToolUseId === undefined));
   // Only a run that stopped short of finishing has something to *continue* —
   // and only one with a session id, which is the same thing the server's own
   // resume gate checks, so the button never offers what would 400.

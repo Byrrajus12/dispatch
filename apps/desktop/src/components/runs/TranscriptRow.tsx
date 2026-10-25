@@ -46,9 +46,10 @@ export function TranscriptRow({
   live = false,
 }: {
   entry: NormalizedEntry;
-  /** True only for the run's current last entry while it's genuinely still producing output
-   * (`meta.state === 'running'`) — see `RunLogView`. Drives `StreamingText`'s reveal and
-   * `Thinking`'s active shimmer; never inferred from anything but the run's real state. */
+  /** True only while the run is genuinely still producing output (`meta.state === 'running'`)
+   * for its current last entry, or a tool call still waiting on its result — see
+   * `RunLogView`. Drives `StreamingText`'s reveal, `Thinking`'s active shimmer and a tool
+   * chip's running state; never inferred from anything but the run's real state. */
   live?: boolean;
 }) {
   const tag = gutterTag(entry);
@@ -149,11 +150,11 @@ function GutterCell({
   );
 }
 
-// A tool entry's own `status` is unreliable as a live signal — the Claude executor logs every
-// tool call as `running` and never resolves it to `done` (see claude.ts's TODO(M7)), so trusting
-// it directly would shimmer every historical tool call forever. `error` is still a real signal
-// worth trusting outright; anything else only counts as `running` while this is the transcript's
-// genuinely live edge.
+// A tool entry's `status` is the call's outcome once its result is folded in (groupLogEntries),
+// and trusted outright then. A call with none yet is logged `running`, which alone is no live
+// signal: some calls never get a result (a sub-agent's own, any call on an older daemon), and
+// trusting it would shimmer every one of those forever. So it only counts as `running` while
+// RunLogView says it is `live`.
 function toolChipState(entry: NormalizedEntry, live: boolean): ToolChipState {
   if (entry.status === 'error') return 'failed';
   if (entry.status === 'done') return 'done';
