@@ -287,6 +287,14 @@ export {
 } from './models';
 export type { ModelOption, PickableRole } from './models';
 export {
+  liveTextStore,
+  overseerLiveKey,
+  resetLiveText,
+  runLiveKey,
+} from './liveText';
+export type { LiveFrame, LiveTextState } from './liveText';
+export {
+  applyOverseerDelta,
   invalidateOverseerEvent,
   overseerKey,
   overseerKeyPrefix,
@@ -294,6 +302,7 @@ export {
 } from './useOverseerSession';
 export type {
   OverseerApprovalDecision,
+  OverseerLive,
   OverseerSession,
   OverseerSessionOptions,
 } from './useOverseerSession';

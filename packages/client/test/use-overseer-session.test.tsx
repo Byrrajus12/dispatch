@@ -2,20 +2,21 @@ import './dom-env';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, expect, test } from 'bun:test';
+import { type ReactNode, StrictMode } from 'react';
 
 import {
   type ApiClient,
   ApiError,
+  type LiveText,
   type Message,
   type OverseerRecord,
+  type OverseerRecordView,
   type ReplyInput,
 } from '../src/api';
-
-afterEach(cleanup);
-import { type ReactNode, StrictMode } from 'react';
-
+import { resetLiveText } from '../src/liveText';
 import { memoryStorage } from '../src/storage';
 import {
+  applyOverseerDelta,
   invalidateOverseerEvent,
   overseerKey,
   overseerKeyPrefix,
@@ -23,6 +24,12 @@ import {
 } from '../src/useOverseerSession';
 
 const PORT = 4321;
+
+afterEach(() => {
+  cleanup();
+  // The live text store is one per window, so each test starts it empty.
+  resetLiveText(PORT);
+});
 
 function overseerRecord(): OverseerRecord {
   return {
@@ -122,9 +129,10 @@ async function sessionAfterFailedRefetch(refetchError: unknown) {
   return result;
 }
 
-// The ghost direction: overseer records live in an in-memory Map, so a daemon
-// restart 404s every id. The cached record and its pendingActions describe a
-// conversation that no longer exists anywhere and must not reach any consumer.
+// The ghost direction: a 404 says the daemon has no such conversation (another
+// project's daemon answered, or the record is gone). The cached record and its
+// pendingActions describe a conversation that no longer exists there and must
+// not reach any consumer.
 test('a 404 on refetch drops the cached record', async () => {
   const result = await sessionAfterFailedRefetch(
     new ApiError('overseer conversation w-1 not found', 404)
@@ -221,10 +229,10 @@ test('reset clears the composer draft along with the conversation', () => {
   expect(result.current.conversationId).toBeNull();
 });
 
-// A dispatchd restart destroys every overseer record (they live in an in-memory
-// Map), and nothing in the app notices on its own: `overseer.changed` can never
-// arrive for a conversation the daemon no longer has, and the record query has
-// no refetch interval. The trigger is the daemon's `hello` frame, which the
+// A daemon that comes back without a conversation (another project's daemon on
+// the same port, a record that is gone) is noticed by nothing on its own:
+// `overseer.changed` can never arrive for a conversation the daemon does not
+// have, and the record query has no refetch interval. The trigger is the daemon's `hello` frame, which the
 // server sends from its websocket `open` handler and so on every reconnect;
 // useDispatchProject handles it and cannot name a conversation id — it does
 // not own this session — so it invalidates by prefix. This is that chain's far
@@ -945,4 +953,149 @@ test('an overseer.changed event invalidates that conversation', () => {
   expect(
     queryClient.getQueryState(overseerKey(PORT, 'w-1'))?.isInvalidated
   ).toBe(true);
+});
+
+// A running w-1 whose first segment already landed as a narration row.
+function runningRecord(live?: LiveText): OverseerRecordView {
+  return {
+    ...overseerRecord(),
+    state: 'running',
+    pendingActions: [],
+    messages: [
+      { role: 'user', text: 'what is going on?', at: '2026-08-10T00:00:00Z' },
+      {
+        role: 'narration',
+        text: 'Checking.',
+        at: '2026-08-10T00:00:01Z',
+        streamId: 't1:a',
+      },
+    ],
+    ...(live === undefined ? {} : { live }),
+  };
+}
+
+// A hook over `getOverseer` answers handed out in order (the last one repeats),
+// with the conversation open, and the QueryClient it reads.
+function openWith(answers: OverseerRecordView[]) {
+  let calls = 0;
+  const client = {
+    baseUrl: `http://127.0.0.1:${PORT}`,
+    getOverseer: () => {
+      const answer = answers[Math.min(calls, answers.length - 1)];
+      calls += 1;
+      return Promise.resolve(answer);
+    },
+  } as unknown as ApiClient;
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const rendered = renderHook(() => useOverseerSession(client, PORT, '/repo'), {
+    wrapper: ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+  act(() => {
+    rendered.result.current.open('w-1');
+  });
+  return { ...rendered, queryClient, calls: () => calls };
+}
+
+function delta(seq: number, segmentId: string, text: string) {
+  return { conversationId: 'w-1', turnId: 't1', seq, segmentId, text };
+}
+
+test('live shows the snapshot’s text minus the segments the record already holds', async () => {
+  const { result } = openWith([
+    runningRecord({
+      seq: 3,
+      turnId: 't1',
+      segments: [
+        { id: 't1:a', text: 'Checking.' },
+        { id: 't1:b', text: 'Two runs' },
+      ],
+    }),
+  ]);
+  await waitFor(() => {
+    expect(result.current.live).toEqual({
+      turnId: 't1',
+      segments: [{ id: 't1:b', text: 'Two runs' }],
+    });
+  });
+});
+
+test('live follows delta frames, and is null once the turn is not running', async () => {
+  const running = runningRecord({
+    seq: 1,
+    turnId: 't1',
+    segments: [{ id: 't1:b', text: 'Two' }],
+  });
+  const settled: OverseerRecordView = {
+    ...running,
+    state: 'ready',
+    live: undefined,
+  };
+  const answers = [running];
+  const { result, queryClient } = openWith(answers);
+  await waitFor(() => {
+    expect(result.current.live?.segments).toEqual([
+      { id: 't1:b', text: 'Two' },
+    ]);
+  });
+  act(() => {
+    applyOverseerDelta(queryClient, PORT, delta(2, 't1:b', ' runs'));
+  });
+  expect(result.current.live?.segments).toEqual([
+    { id: 't1:b', text: 'Two runs' },
+  ]);
+
+  answers[0] = settled;
+  await act(async () => {
+    await queryClient.invalidateQueries({ queryKey: overseerKey(PORT, 'w-1') });
+  });
+  await waitFor(() => {
+    expect(result.current.record?.state).toBe('ready');
+  });
+  expect(result.current.live).toBeNull();
+});
+
+test('a missed frame refetches the record once, and its snapshot repairs the text', async () => {
+  const { result, queryClient, calls } = openWith([
+    runningRecord({
+      seq: 1,
+      turnId: 't1',
+      segments: [{ id: 't1:b', text: 'Two' }],
+    }),
+    runningRecord({
+      seq: 4,
+      turnId: 't1',
+      segments: [{ id: 't1:b', text: 'Two runs are' }],
+    }),
+  ]);
+  await waitFor(() => {
+    expect(result.current.live).not.toBeNull();
+  });
+  expect(calls()).toBe(1);
+
+  // Frame 2 never arrives: 3 and 4 wait, and only one refetch goes out.
+  act(() => {
+    applyOverseerDelta(queryClient, PORT, delta(3, 't1:b', ' are'));
+    applyOverseerDelta(queryClient, PORT, delta(4, 't1:b', ' live'));
+  });
+  expect(result.current.live?.segments).toEqual([{ id: 't1:b', text: 'Two' }]);
+  await waitFor(() => {
+    expect(result.current.live?.segments).toEqual([
+      { id: 't1:b', text: 'Two runs are' },
+    ]);
+  });
+  expect(calls()).toBe(2);
+
+  // Back in step: the next frame appends without a fetch.
+  act(() => {
+    applyOverseerDelta(queryClient, PORT, delta(5, 't1:b', ' now'));
+  });
+  expect(result.current.live?.segments).toEqual([
+    { id: 't1:b', text: 'Two runs are now' },
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(calls()).toBe(2);
 });

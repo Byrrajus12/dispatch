@@ -33,6 +33,7 @@ function session(over: Partial<OverseerSession>): OverseerSession {
     conversationId: 'w-1',
     record: record('w-1', 'why did r-41 fail?'),
     recordError: null,
+    live: null,
     submit: () => Promise.resolve(),
     reply: () => Promise.resolve(),
     sending: false,

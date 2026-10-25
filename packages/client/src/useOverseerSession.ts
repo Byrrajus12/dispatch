@@ -5,13 +5,22 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import type { Dispatch, SetStateAction } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 
 import {
   type ApiClient,
   ApiError,
+  type LiveSegment,
   type OverseerAttachment,
   type OverseerRecord,
+  type OverseerRecordView,
 } from './api';
 import {
   approvalReply,
@@ -19,6 +28,12 @@ import {
   findOverseerApprovalGate,
   openGatesKey,
 } from './gates';
+import {
+  type LiveFrame,
+  type LiveTextState,
+  liveTextStore,
+  overseerLiveKey,
+} from './liveText';
 import {
   DEFAULT_EFFORT_ID,
   effortFromId,
@@ -48,6 +63,79 @@ export function invalidateOverseerEvent(
   });
 }
 
+// Refetches a conversation's record so its `live` snapshot fills a gap in the
+// live text. A tick late: a repair asked for from inside the record's own
+// queryFn must not cancel the fetch that is about to land.
+function repairOverseerLive(
+  queryClient: QueryClient,
+  port: number | undefined,
+  conversationId: string
+): void {
+  setTimeout(() => {
+    void queryClient.invalidateQueries({
+      queryKey: overseerKey(port, conversationId),
+    });
+  }, 0);
+}
+
+/**
+ * Folds one `overseer.delta` frame into its conversation's live text, for the
+ * websocket handler. A missed frame refetches that record once; its `live`
+ * snapshot repairs the text.
+ */
+export function applyOverseerDelta(
+  queryClient: QueryClient,
+  port: number | undefined,
+  event: LiveFrame & { conversationId: string }
+): void {
+  const { conversationId, turnId, seq, segmentId, text } = event;
+  liveTextStore.applyDelta(
+    port,
+    overseerLiveKey(conversationId),
+    { turnId, seq, segmentId, text },
+    () => repairOverseerLive(queryClient, port, conversationId)
+  );
+}
+
+// Takes a fetched record's `live` snapshot into the store.
+function mergeOverseerLive(
+  queryClient: QueryClient,
+  port: number | undefined,
+  record: OverseerRecordView
+): void {
+  liveTextStore.mergeSnapshot(
+    port,
+    overseerLiveKey(record.id),
+    record.live,
+    () => repairOverseerLive(queryClient, port, record.id)
+  );
+}
+
+/** The running turn's text as a view shows it: what it has written and the
+ *  record does not hold as a row yet, one entry per segment. */
+export interface OverseerLive {
+  turnId: string;
+  segments: LiveSegment[];
+}
+
+// The live text worth showing: none unless the record's turn is running, and
+// no segment the record already holds as a narration or reply row.
+function visibleLive(
+  record: OverseerRecord | undefined,
+  state: LiveTextState | undefined
+): OverseerLive | null {
+  if (record?.state !== 'running' || !state?.turnId) return null;
+  const committed = new Set(
+    record.messages.flatMap((m) =>
+      m.streamId === undefined ? [] : [m.streamId]
+    )
+  );
+  return {
+    turnId: state.turnId,
+    segments: state.segments.filter((s) => !committed.has(s.id)),
+  };
+}
+
 /** What the human answered to a parked built-in tool call, sent as the answer
  * to its `tool-approval` gate. */
 export interface OverseerApprovalDecision {
@@ -62,11 +150,12 @@ export interface OverseerApprovalDecision {
  * Every overseer record key for one daemon. useDispatchProject invalidates this
  * prefix — rather than a single record's key — when the daemon's `hello`
  * greeting arrives, which the server sends on every websocket open and so on
- * every reconnect. A reconnect usually means dispatchd restarted, which drops
- * every in-memory overseer record at once, and that handler has no conversation
- * id to name: the session lives in this hook, not in it. Prefix invalidation
- * is the same idiom useDataChangedEvents applies to `['board']` and
- * `['session-detail']`.
+ * every reconnect. A reconnect usually means dispatchd restarted: records
+ * survive that, but a turn it was running loads as failed, and the live text
+ * of every conversation starts over (see resetLiveText). That handler has no
+ * conversation id to name: the session lives in this hook, not in it. Prefix
+ * invalidation is the same idiom useDataChangedEvents applies to `['board']`
+ * and `['session-detail']`.
  */
 export function overseerKeyPrefix(port: number | undefined) {
   return ['dispatch-overseer', port] as const;
@@ -100,6 +189,12 @@ export interface OverseerSession {
   record: OverseerRecord | undefined;
   /** Why `record` is missing or stale when the fetch itself failed, not just pending. */
   recordError: string | null;
+  /**
+   * The running turn's text as the model writes it, minus what already landed
+   * on `record` as a row; `null` unless `record` is running. Held outside
+   * React state (see liveText.ts), so it survives every remount too.
+   */
+  live: OverseerLive | null;
   /**
    * Sends `text` — opening the conversation when none is open yet, posting a
    * follow-up on it when one is. One entry point rather than two because the
@@ -360,6 +455,7 @@ export function useOverseerSession(
         if (cancelled) return;
         resumedFor.current = projectPath;
         if (conversation === null) return;
+        mergeOverseerLive(queryClient, port, conversation);
         queryClient.setQueryData(
           overseerKey(port, conversation.id),
           conversation
@@ -377,11 +473,14 @@ export function useOverseerSession(
 
   const { data: record, error } = useQuery({
     queryKey: overseerKey(port, conversationId),
-    queryFn: () => {
+    // Every read carries the running turn's live text; the store takes it.
+    queryFn: async () => {
       if (client === null || conversationId === null) {
         throw new Error('no overseer conversation open');
       }
-      return client.getOverseer(conversationId);
+      const rec = await client.getOverseer(conversationId);
+      mergeOverseerLive(queryClient, port, rec);
+      return rec;
     },
     enabled: client !== null && conversationId !== null,
     // A stale id mid project-switch should surface its 404, not retry against
@@ -715,17 +814,27 @@ export function useOverseerSession(
 
   // react-query keeps the last good `data` through a *background* refetch
   // failure, which is right for a hiccup and wrong for a conversation the
-  // daemon no longer has (records are in-memory, so a restart 404s every id
-  // and the cached pendingActions become ghosts nobody can decide). The HTTP
-  // status is the only thing that tells the two apart, so the veto happens
-  // once here rather than as a guard on every surface that reads the record.
+  // daemon no longer has (a 404 from a daemon that is not the one the record
+  // came from, or a record that is gone, and the cached pendingActions become
+  // ghosts nobody can decide). The HTTP status is the only thing that tells
+  // the two apart, so the veto happens once here rather than as a guard on
+  // every surface that reads the record.
   const recordGone =
     error instanceof ApiError && (error.status === 404 || error.status === 410);
+  const shown = recordGone ? undefined : record;
+
+  const liveKey =
+    conversationId === null ? null : overseerLiveKey(conversationId);
+  const liveState = useSyncExternalStore(liveTextStore.subscribe, () =>
+    liveKey === null ? undefined : liveTextStore.get(port, liveKey)
+  );
+  const live = useMemo(() => visibleLive(shown, liveState), [shown, liveState]);
 
   return {
     conversationId,
-    record: recordGone ? undefined : record,
+    record: shown,
     recordError: error instanceof Error ? error.message : null,
+    live,
     submit,
     reply,
     sending,

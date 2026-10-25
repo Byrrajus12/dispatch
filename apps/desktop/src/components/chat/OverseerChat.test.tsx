@@ -43,6 +43,7 @@ function overseerSession(over: Partial<OverseerSession> = {}): OverseerSession {
     conversationId: null,
     record: undefined,
     recordError: null,
+    live: null,
     submit: () => Promise.resolve(),
     reply: () => Promise.resolve(),
     sending: false,
