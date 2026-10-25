@@ -82,13 +82,17 @@ export function TranscriptRow({
   }
 
   if (entry.kind === 'assistant' && live) {
-    // Only the genuinely-live entry gets the typing reveal — everything else (including this
-    // same entry once it stops being live) renders as Markdown below, so formatting is never
-    // sacrificed for history.
+    // Only the genuinely-live entry goes through StreamingText, which reveals what it grows
+    // by and shows the text it arrived with at once; it renders through the same Markdown
+    // as the settled branch below, so the entry looks the same once it stops being live.
     return (
       <div className="grid grid-cols-[52px_minmax(0,1fr)] gap-3 py-0.5">
         <GutterCell tag={tag} tone={tone} />
-        <StreamingText text={entry.text ?? ''} streaming />
+        <StreamingText
+          text={entry.text ?? ''}
+          streaming
+          render={(text) => <AssistantProse text={text} />}
+        />
       </div>
     );
   }
@@ -101,12 +105,7 @@ export function TranscriptRow({
     <div className="grid grid-cols-[52px_minmax(0,1fr)] gap-3 py-0.5">
       <GutterCell tag={tag} tone={tone} />
       {isProse ? (
-        // Prose gets a measure. A transcript that runs the full width of a wide window is
-        // unreadable however well it is typeset.
-        <Markdown
-          content={entry.text ?? ''}
-          className="font-book max-w-[68ch] text-[13px] leading-relaxed"
-        />
+        <AssistantProse text={entry.text ?? ''} />
       ) : (
         <span
           className={cn('text-[12px] leading-relaxed font-book', TONE[tone])}
@@ -115,6 +114,17 @@ export function TranscriptRow({
         </span>
       )}
     </div>
+  );
+}
+
+// The agent's own prose. It gets a measure: a transcript that runs the full width of a wide
+// window is unreadable however well it is typeset.
+function AssistantProse({ text }: { text: string }) {
+  return (
+    <Markdown
+      content={text}
+      className="font-book max-w-[68ch] text-[13px] leading-relaxed"
+    />
   );
 }
 
