@@ -336,6 +336,26 @@ function mountLive(client: ApiClient) {
   };
 }
 
+// The app's own query default: a detail fetched in the last 30s is not
+// refetched when a surface shows its run again.
+function mountShared(client: ApiClient) {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
+  });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+  );
+  const show = () =>
+    renderHook(
+      () => {
+        const detail = useRunDetail(client, PORT, RUN);
+        return { detail, live: useRunLive(PORT, detail) };
+      },
+      { wrapper }
+    );
+  return { qc, show };
+}
+
 describe('a run’s live text', () => {
   it('starts from the snapshot its detail carries, which the cache never keeps', async () => {
     const server = liveRunServer({
@@ -361,6 +381,42 @@ describe('a run’s live text', () => {
       'msg_1:0',
       'msg_1:1',
     ]);
+  });
+
+  // Frames go unread while no surface shows the run, so text kept from before
+  // would be wrong when it is shown again: a segment abandoned meanwhile
+  // would stay on screen for the rest of the run.
+  it('lets go of a hidden run’s text and starts again from the snapshot when it is shown', async () => {
+    const server = liveRunServer(undefined);
+    const { qc, show } = mountShared(server.client);
+    const first = show();
+    await waitFor(() => {
+      expect(first.result.current.detail).toBeDefined();
+    });
+    act(() => {
+      applyRunEvent(qc, PORT, delta(1, 'msg_A:0', 'Half a sen'));
+    });
+    expect(first.result.current.live?.segments.map((s) => s.id)).toEqual([
+      'msg_A:0',
+    ]);
+    first.unmount();
+
+    applyRunEvent(qc, PORT, { ...delta(2, 'msg_A:0', ''), abandoned: true });
+    applyRunEvent(qc, PORT, delta(3, 'msg_B:0', 'Retrying.'));
+    expect(liveOf()).toBeUndefined();
+    server.live = {
+      turnId: 'turn-1',
+      seq: 3,
+      segments: [{ id: 'msg_B:0', text: 'Retrying.' }],
+    };
+
+    const second = show();
+    expect(second.result.current.live?.segments ?? []).toEqual([]);
+    await waitFor(() => {
+      expect(second.result.current.live?.segments).toEqual([
+        { id: 'msg_B:0', text: 'Retrying.' },
+      ]);
+    });
   });
 
   it('drops a segment once its entry lands, and everything once the run ends', async () => {

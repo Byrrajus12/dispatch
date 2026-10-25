@@ -319,10 +319,11 @@ Overseer record and run detail: a restarted daemon counts `seq` from zero.
 `useLiveText` keeps a segment on screen until the row that replaces it reaches
 the view, so text does not blink out between the two; an abandoned segment goes
 at once. Every window hears every run's frames, so the desktop keeps text only
-for a run a surface shows (its detail query has an observer): a run opened later
-starts from its detail's snapshot. A run's segment leaves the store when the
-`run.log` entry naming it arrives, and the run's key goes once a fetched detail
-shows the run ended.
+for a run a surface shows (its detail query has an observer): a frame for a run
+no surface shows drops the text held for it and marks its cached detail stale,
+so a run opened later starts from its detail's snapshot. A run's segment leaves
+the store when the `run.log` entry naming it arrives, and the run's key goes
+once a fetched detail shows the run ended.
 
 **Run log order.** A `run.log` frame carries `index`, its entry's place among
 the run's transcript entries, the same position `GET /api/runs/:id` lists it at.

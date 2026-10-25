@@ -48,7 +48,8 @@ function repairRunLive(
 }
 
 // Whether a surface of this window shows run `runId`: its detail query has an observer.
-// Only such a run's text is kept; one opened later starts from its detail's snapshot.
+// Only such a run's text is kept; one opened later starts from its detail's snapshot
+// (forgetHiddenRunLive).
 function isWatched(
   queryClient: QueryClient,
   port: number | undefined,
@@ -58,6 +59,28 @@ function isWatched(
     .getQueryCache()
     .find({ queryKey: runDetailKey(port, runId), exact: true });
   return (query?.getObserversCount() ?? 0) > 0;
+}
+
+// Lets go of the live text of a run no surface shows. Its frames go unread while it is
+// hidden, so what the store held would be wrong when it is shown again: a segment
+// abandoned meanwhile would stay on screen for the rest of the run, since no row ever
+// replaces it. Its cached detail is marked stale (not refetched), so a surface that shows
+// the run again fetches the snapshot instead of starting from nothing.
+function forgetHiddenRunLive(
+  queryClient: QueryClient,
+  port: number | undefined,
+  runId: string
+): void {
+  liveTextStore.forget(port, runLiveKey(runId));
+  const key = runDetailKey(port, runId);
+  const state = queryClient.getQueryState(key);
+  if (state !== undefined && !state.isInvalidated) {
+    void queryClient.invalidateQueries({
+      queryKey: key,
+      exact: true,
+      refetchType: 'none',
+    });
+  }
 }
 
 type RunLogFrame = Extract<ServerEvent, { type: 'run.log' }>;
@@ -112,7 +135,10 @@ export function applyRunEvent(
 ): void {
   if (event.type === 'run.delta') {
     const { runId, turnId, seq, segmentId, text, abandoned } = event;
-    if (!isWatched(queryClient, port, runId)) return;
+    if (!isWatched(queryClient, port, runId)) {
+      forgetHiddenRunLive(queryClient, port, runId);
+      return;
+    }
     liveTextStore.applyDelta(
       port,
       runLiveKey(runId),
