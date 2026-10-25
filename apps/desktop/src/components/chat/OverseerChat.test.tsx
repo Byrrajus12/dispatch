@@ -880,8 +880,14 @@ test('a parked tool call renders the shared approval card wired to decideApprova
   const decisions: unknown[] = [];
   render(<ChatWithDraft overseer={parkedSession(decisions)} />);
 
-  expect(screen.getByText('Wants to run')).toBeDefined();
-  expect(screen.getByText('Bash: git status')).toBeDefined();
+  expect(
+    screen.getByRole('radiogroup', {
+      name: /^Wants to run\s+Bash: git status$/,
+    })
+  ).toBeDefined();
+  expect(
+    screen.getByText('Bash: git status', { selector: 'pre' })
+  ).toBeDefined();
   // Blocked on the human, so no "working" spinner row under the card.
   expect(screen.queryByText('The overseer is working…')).toBeNull();
 
@@ -956,6 +962,53 @@ test('a deny that did not go through keeps the reason box and the reason', async
     'value',
     'use make clean'
   );
+});
+
+// Two parked calls give two cards with the same answers: each card's group
+// is named after its own call, so a screen reader can tell them apart.
+test('each parked call names its own approval card', () => {
+  const session = parkedSession([]);
+  const record = session.record;
+  if (record === null) throw new Error('no record');
+  const second = {
+    requestId: 'req-2',
+    toolName: 'Bash',
+    input: { command: 'rm -rf dist' },
+    summary: 'Bash: rm -rf dist',
+    requestedAt: '2026-08-10T00:00:02Z',
+  };
+  render(
+    <ChatWithDraft
+      overseer={{
+        ...session,
+        record: {
+          ...record,
+          messages: [
+            ...record.messages,
+            {
+              role: 'approval',
+              tool: 'Bash',
+              requestId: 'req-2',
+              outcome: 'pending',
+              text: 'Bash: rm -rf dist',
+              at: '2026-08-10T00:00:02Z',
+            },
+          ],
+          pendingApprovals: [...record.pendingApprovals, second],
+        },
+      }}
+    />
+  );
+  expect(
+    screen.getByRole('radiogroup', {
+      name: /^Wants to run\s+Bash: git status$/,
+    })
+  ).toBeDefined();
+  expect(
+    screen.getByRole('radiogroup', {
+      name: /^Wants to run\s+Bash: rm -rf dist$/,
+    })
+  ).toBeDefined();
 });
 
 // A held call (the floor, or Dispatch's own surfaces) is allowed once only.

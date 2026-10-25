@@ -479,7 +479,14 @@ function OverseerApproveCard({
   return (
     <ToolApprovalCard
       toolName={approval.toolName}
-      question="Wants to run"
+      // Several parked calls can be on screen: the call names its card's
+      // group, so "Approve once" says what it approves.
+      question={
+        <>
+          Wants to run
+          <span className="sr-only"> {approval.summary}</span>
+        </>
+      }
       // The call itself, a command line, so it keeps the code face.
       preview={approval.summary}
       sessionScope={approval.held === true ? undefined : 'this conversation'}
