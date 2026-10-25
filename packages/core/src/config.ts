@@ -29,6 +29,8 @@ import type {
   ReceiptsConfig,
   RemoteConfig,
   RepoDigestConfig,
+  RunsConfig,
+  RunStreamMode,
   SyncConfig,
   VerifyConfig,
 } from './configTypes.js';
@@ -48,6 +50,7 @@ import {
   DEFAULT_PREVIEW,
   DEFAULT_RECEIPTS,
   DEFAULT_REPO_DIGEST,
+  DEFAULT_RUNS,
   DEFAULT_SYNC,
   EFFORT_ROLES,
   EXECUTOR_MODEL_ROLES,
@@ -61,6 +64,7 @@ import {
   NOTIFICATION_KINDS,
   OVERSEER_STREAM_MODES,
   RETIRED_MODEL_ROLES,
+  RUN_STREAM_MODES,
 } from './configTypes.js';
 import { describeValue } from './describe.js';
 import { labelDefinitionError, labelRef } from './labels.js';
@@ -1506,6 +1510,30 @@ function parseOverseerConfig(raw: unknown): OverseerConfig {
   return { stream: normalized as OverseerStreamMode };
 }
 
+// Validates the optional `runs:` block, the way parseOverseerConfig does the
+// `overseer:` one: YAML booleans read as 'live'/'off'.
+function parseRunsConfig(raw: unknown): RunsConfig {
+  if (raw === undefined || raw === null) return { ...DEFAULT_RUNS };
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new ConfigError(
+      'invalid .dispatch/config.yml: runs must be a mapping'
+    );
+  }
+  const stream = (raw as Record<string, unknown>).stream;
+  if (stream === undefined) return { ...DEFAULT_RUNS };
+  const normalized =
+    stream === true ? 'live' : stream === false ? 'off' : stream;
+  if (
+    typeof normalized !== 'string' ||
+    !RUN_STREAM_MODES.includes(normalized as RunStreamMode)
+  ) {
+    throw new ConfigError(
+      `invalid .dispatch/config.yml: runs.stream must be one of: ${RUN_STREAM_MODES.join(', ')}`
+    );
+  }
+  return { stream: normalized as RunStreamMode };
+}
+
 // Reads one factor weight, rejecting anything that would make a score
 // meaningless: a non-number, a NaN/Infinity, or a negative (which would invert
 // the factor's meaning — turning a factor off is what `0` is for). `label`
@@ -1787,6 +1815,7 @@ export function loadConfig(rootDir: string): DispatchConfig {
       policy: { ...DEFAULT_POLICY, gates: {} },
       preview: { ...DEFAULT_PREVIEW },
       overseer: { ...DEFAULT_OVERSEER },
+      runs: { ...DEFAULT_RUNS },
       queue: defaultQueue(),
       a2a: { ...DEFAULT_A2A },
       a2aWarnings: [],
@@ -1887,6 +1916,7 @@ function parseConfig(parsed: unknown): DispatchConfig {
     policy: parsePolicyConfig(raw.policy),
     preview: parsePreviewConfig(raw.preview),
     overseer: parseOverseerConfig(raw.overseer),
+    runs: parseRunsConfig(raw.runs),
     queue: parseQueueConfig(raw.queue),
     prWorktreeDir: raw.prWorktreeDir,
     a2a: a2a.config,

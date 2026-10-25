@@ -246,6 +246,10 @@ export interface DispatchConfig {
    *  populates it; optional only so hand-built config literals predating the
    *  block stay valid. Read it through `overseerSettings()`. */
   overseer?: OverseerConfig;
+  /** How a task run's chat shows the agent at work. `loadConfig` always
+   *  populates it; optional only so hand-built config literals predating the
+   *  block stay valid. Read it through `runSettings()`. */
+  runs?: RunsConfig;
 }
 
 /** The policy a config implies. The single reader of the optional `policy`
@@ -344,6 +348,34 @@ export const DEFAULT_OVERSEER: OverseerConfig = { stream: 'live' };
  *  default. Returns a fresh object, as previewSettings does. */
 export function overseerSettings(config: DispatchConfig): OverseerConfig {
   return { ...DEFAULT_OVERSEER, ...(config.overseer ?? {}) };
+}
+
+/**
+ * How a task run's chat shows the agent's text while the run is going:
+ *
+ * - `live` streams the model's text to the chat as it is written.
+ * - `off` shows each block of text once the model has finished it, as runs
+ *   did before streaming existed.
+ *
+ * A rollback switch rather than a preference, so `live` is the default. The
+ * Overseer has its own (`overseer.stream`).
+ */
+export type RunStreamMode = 'live' | 'off';
+
+export const RUN_STREAM_MODES: readonly RunStreamMode[] = ['live', 'off'];
+
+/** The `runs:` block: settings of a task run's chat. */
+export interface RunsConfig {
+  stream: RunStreamMode;
+}
+
+export const DEFAULT_RUNS: RunsConfig = { stream: 'live' };
+
+/** The run chat settings a config implies. The single reader of the optional
+ *  `runs` block, so a hand-built config (test fixtures, mostly) gets the
+ *  default. Returns a fresh object, as overseerSettings does. */
+export function runSettings(config: DispatchConfig): RunsConfig {
+  return { ...DEFAULT_RUNS, ...(config.runs ?? {}) };
 }
 
 /** The run recipe a `verify` run exercises the project with — none of these
