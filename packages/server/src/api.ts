@@ -6358,14 +6358,18 @@ export async function handleApi(
         return errorResponse(405, 'method not allowed');
       }
       // One conversation per person per project: the newest one they opened.
+      // Reads carry a running turn's live text; mutation responses need not.
       if (
         segments.length === 2 &&
         segments[1] === 'current' &&
         method === 'GET'
       ) {
+        const current = ctx.overseerManager.current(speaker?.address ?? null);
         return jsonResponse({
           conversation:
-            ctx.overseerManager.current(speaker?.address ?? null) ?? null,
+            current === undefined
+              ? null
+              : ctx.overseerManager.withLive(current),
         });
       }
       const conversationId = segments[1];
@@ -6379,7 +6383,9 @@ export async function handleApi(
         );
       }
       if (segments.length === 2 && method === 'GET') {
-        return jsonResponse(ctx.overseerManager.get(conversationId));
+        return jsonResponse(
+          ctx.overseerManager.withLive(ctx.overseerManager.get(conversationId))
+        );
       }
       // The model and effort its next turns run on; null restores the default.
       if (segments.length === 2 && method === 'PATCH') {

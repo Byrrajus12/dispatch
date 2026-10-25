@@ -136,6 +136,19 @@ export type ServerEvent =
   // appends several entries, and a client rendering the thread wants the whole
   // record anyway.
   | { type: 'overseer.changed'; conversationId: string }
+  // The running Overseer turn's text as the model writes it: `text` extends
+  // segment `segmentId` of turn `turnId`. View-only, never stored. `seq`
+  // counts one conversation's frames for the daemon's life, so a gap means a
+  // missed frame, which GET /api/overseer/:id's `live` snapshot repairs. Sent
+  // only to the conversation's live audience (overseerLiveAudience).
+  | {
+      type: 'overseer.delta';
+      conversationId: string;
+      turnId: string;
+      seq: number;
+      segmentId: string;
+      text: string;
+    }
   // The decision feed's contents changed: something started or stopped
   // awaiting a human. Same "go refetch" contract as task.changed — the feed is
   // derived on every read (see decisionFeed.ts), so there is no increment to

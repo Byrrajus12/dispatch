@@ -240,7 +240,10 @@ export type {
   OverseerGrant,
   OverseerMessage,
   OverseerRecord,
+  OverseerRecordView,
   OverseerState,
+  LiveSegment,
+  LiveText,
 } from './api';
 export { reduceProposal } from './proposalReducer';
 export type { ProposalAction } from './proposalReducer';
