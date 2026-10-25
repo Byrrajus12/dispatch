@@ -164,6 +164,34 @@ describe('applyRunEvent run.log', () => {
     expect(qc.getQueryState(runDetailKey(PORT, RUN))?.status).toBe('success');
   });
 
+  // A daemon from before run.log carried `index`: the response may have been
+  // read before the entry was written, so landing it as it is would lose it.
+  it('fetches once more after a frame with no index lands during a fetch', async () => {
+    const server = gatedRunServer();
+    const { qc, result } = mount(server.client);
+    await waitFor(() => {
+      expect(texts(result.current)).toEqual(['first']);
+    });
+    server.gated = true;
+    void qc.invalidateQueries({ queryKey: runDetailKey(PORT, RUN) });
+    await waitFor(() => {
+      expect(server.pending).toHaveLength(1);
+    });
+    const second = entry('second');
+    server.entries.push(second);
+    applyRunEvent(qc, PORT, { type: 'run.log', runId: RUN, entry: second });
+    await waitFor(() => {
+      expect(texts(result.current)).toEqual(['first', 'second']);
+    });
+    server.gated = false;
+    server.release();
+    await waitFor(() => {
+      expect(server.fetches).toBe(3);
+      expect(qc.isFetching()).toBe(0);
+      expect(texts(result.current)).toEqual(['first', 'second']);
+    });
+  });
+
   // An agent that writes faster than a fetch round trip: restarting the fetch
   // per frame would never let the detail land.
   it('lands the first fetch while entries keep streaming, with every entry', async () => {

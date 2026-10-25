@@ -178,7 +178,8 @@ export function applyRunEvent(
 }
 
 // `entries` with the frames that arrived during its fetch added where they continue it,
-// and whether a frame showed entries missing that neither holds.
+// and whether a frame showed entries missing that neither holds, or came with no index
+// (an older daemon), so the detail is to be fetched once more.
 function withFrames(
   entries: NormalizedEntry[],
   frames: RunLogFrame[]
@@ -186,8 +187,12 @@ function withFrames(
   const merged = [...entries];
   let gap = false;
   for (const frame of frames) {
-    // Without an index there is no telling whether the response holds it.
-    if (frame.index === undefined) continue;
+    // Without an index there is no telling whether the response holds it, so the
+    // fetch after this one, read once the entry was written, is what shows it.
+    if (frame.index === undefined) {
+      gap = true;
+      continue;
+    }
     const place = placeOf(frame.index, merged.length);
     if (place === 'next') merged.push(frame.entry);
     else if (place === 'gap') gap = true;
