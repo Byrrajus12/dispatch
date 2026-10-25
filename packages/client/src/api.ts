@@ -351,6 +351,9 @@ export interface NormalizedEntry {
     | 'usage'
     | 'message'
     | 'agent';
+  // A `tool` entry with no `toolName` is a tool call's result: `status` says
+  // how it ended and `text` is a capped preview of its output. Readers fold it
+  // into the call with the same `toolUseId`.
   text?: string;
   toolName?: string;
   toolInput?: unknown;

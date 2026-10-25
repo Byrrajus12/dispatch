@@ -959,6 +959,63 @@ describe('CodexExecutor', () => {
     expect(harness.sessions).toEqual(['thread-existing']);
   });
 
+  // A tool item is logged when it starts and again when it completes; the
+  // shared toolUseId is how the transcript folds the two into one call.
+  it("logs a tool item's start and completion under its item id", async () => {
+    const process = scriptedProcess({
+      afterTurn(fake) {
+        for (const [method, status] of [
+          ['item/started', 'inProgress'],
+          ['item/completed', 'failed'],
+        ] as const) {
+          fake.notify(method, {
+            threadId: 'thread-new',
+            turnId: 'turn-1',
+            item: {
+              type: 'commandExecution',
+              id: 'cmd-1',
+              command: 'make',
+              cwd: 'C:\\worktree',
+              status,
+              ...(status === 'failed'
+                ? { aggregatedOutput: 'boom', exitCode: 2 }
+                : {}),
+            },
+          });
+        }
+        fake.notify('item/completed', {
+          threadId: 'thread-new',
+          turnId: 'turn-1',
+          item: {
+            type: 'mcpToolCall',
+            id: 'mcp-1',
+            server: 'dispatch',
+            tool: 'task_get',
+            arguments: { id: 't-1' },
+            status: 'completed',
+          },
+        });
+        fake.notify('turn/completed', {
+          threadId: 'thread-new',
+          turn: { id: 'turn-1', status: 'completed', error: null },
+        });
+      },
+    });
+    const harness = startHarness(process);
+    await waitFor(() => harness.finishes.length === 1);
+    expect(
+      harness.entries.map((entry) => [
+        entry.toolName,
+        entry.toolUseId,
+        entry.status,
+      ])
+    ).toEqual([
+      ['codex.commandExecution', 'cmd-1', 'running'],
+      ['codex.commandExecution', 'cmd-1', 'error'],
+      ['mcp.dispatch.task_get', 'mcp-1', 'done'],
+    ]);
+  });
+
   it('keeps failed child diagnostics without poisoning a completed turn', async () => {
     const process = scriptedProcess({
       afterTurn(fake) {

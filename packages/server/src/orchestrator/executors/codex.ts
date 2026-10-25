@@ -260,11 +260,15 @@ function statusForItem(status: unknown): 'running' | 'done' | 'error' {
   return 'running';
 }
 
+// Maps one item notification to its entry. A tool item is logged when it
+// starts and again when it completes, both under the item's id as
+// `toolUseId`, so a reader folds the completed copy into the started one.
 function entryForItem(
   item: CodexItem,
   completed: boolean
 ): NormalizedEntry | undefined {
   const ts = new Date().toISOString();
+  const callId = typeof item.id === 'string' ? { toolUseId: item.id } : {};
   if (
     item.type === 'agentMessage' &&
     completed &&
@@ -291,6 +295,7 @@ function entryForItem(
           : {}),
       },
       status: statusForItem(item.status),
+      ...callId,
     };
   }
   if (item.type === 'fileChange') {
@@ -300,6 +305,7 @@ function entryForItem(
       toolName: 'codex.fileChange',
       toolInput: { changes: item.changes },
       status: statusForItem(item.status),
+      ...callId,
     };
   }
   if (item.type === 'mcpToolCall') {
@@ -311,6 +317,7 @@ function entryForItem(
       toolName: `mcp.${server}.${tool}`,
       toolInput: item.arguments,
       status: statusForItem(item.status),
+      ...callId,
     };
   }
   return undefined;

@@ -123,6 +123,17 @@ describe('formatEntry', () => {
     expect(formatEntry(entry)).toBe('[tool ✗] run_shell');
   });
 
+  it("skips a tool call's result, whose call already printed", () => {
+    const result: NormalizedEntry = {
+      ts: '2026-07-20T00:00:00Z',
+      kind: 'tool',
+      status: 'error',
+      text: 'exit code 1',
+    };
+    expect(formatEntry(result)).toBeNull();
+    expect(formatEntry({ ...result, status: 'done' })).toBeNull();
+  });
+
   it('skips a thinking entry by default', () => {
     const entry: NormalizedEntry = {
       ts: '2026-07-20T00:00:00Z',

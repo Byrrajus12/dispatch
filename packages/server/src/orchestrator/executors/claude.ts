@@ -30,7 +30,7 @@ import { activeExperiments } from '../experiments.js';
 import type { ExperimentName } from '../experiments.js';
 import { floorGuard } from '../floorHook.js';
 import type { FloorPolicy } from '../floorHook.js';
-import { DEFAULT_EXECUTOR_PROFILE } from '../types.js';
+import { DEFAULT_EXECUTOR_PROFILE, MAX_TOOL_RESULT_TEXT } from '../types.js';
 import type {
   ApprovalDecision,
   Executor,
@@ -492,12 +492,13 @@ interface AssistantContentBlock {
 }
 
 // The one block kind read off a `user`-typed SDK message: a tool's result,
-// keyed back to its tool_use. Only sub-agent spawns are looked up today (see
-// SubagentTracker.onToolResult); every other tool result is still skipped.
+// keyed back to its tool_use. `content` is the output the model reads: a
+// string, or text (and image) blocks.
 interface UserContentBlock {
   type: string;
   tool_use_id?: string;
   is_error?: boolean;
+  content?: unknown;
 }
 
 // Maps one assistant turn's content blocks to the NormalizedEntry lines the
@@ -511,12 +512,14 @@ interface UserContentBlock {
 // spawn), and every entry made here carries it so the transcript can tell the
 // agent's own work from its sub-agents'. A `Task`/`Agent` tool_use is the
 // agent spawning a sub-agent and is logged through `tracker` as an `agent`
-// entry instead of a plain tool entry.
+// entry instead of a plain tool entry. The id of every other tool call the
+// agent itself made goes into `toolCalls`, so its result can be logged too.
 function entriesForAssistantContent(
   content: unknown,
   ts: string,
   tracker: SubagentTracker,
-  parentToolUseId: string | undefined
+  parentToolUseId: string | undefined,
+  toolCalls: Set<string>
 ): NormalizedEntry[] {
   const blocks = content as AssistantContentBlock[];
   const entries: NormalizedEntry[] = [];
@@ -539,17 +542,12 @@ function entriesForAssistantContent(
           continue;
         }
       }
-      // TODO(M7): every tool entry is logged as `status: 'running'` and
-      // never resolved to 'done'/'error'. Doing that cheaply would need (a)
-      // a stable id to update — NormalizedEntry/the transcript's append-only
-      // JSONL have neither; the transcript would need a new line kind that
-      // *patches* a prior entry by tool_use_id rather than only ever
-      // appending, and every reader (getRun's replay, the web UI's log view)
-      // would need to apply that patch when folding entries — and (b)
-      // reading the SDK's own tool_result content blocks, which arrive on a
-      // *user*-typed message this loop only reads for sub-agent results
-      // (entriesForUserContent). Neither half is cheap, so this stays
-      // 'running' until that transcript-patching seam exists.
+      // Logged as `running`: the transcript is append-only, so the call's
+      // outcome is a later entry of its own (see entriesForUserContent) that
+      // readers fold into this one by `toolUseId`.
+      if (block.id !== undefined && parentToolUseId === undefined) {
+        toolCalls.add(block.id);
+      }
       entries.push({
         ts,
         kind: 'tool',
@@ -564,22 +562,63 @@ function entriesForAssistantContent(
   return entries;
 }
 
-// The `agent` entries a `user`-typed SDK message amounts to: one finished
-// entry per tool_result that answers a sub-agent spawn. Everything else on
-// these messages (ordinary tool results, the prompts this executor sends) is
-// still ignored — see the TODO(M7) above.
+// A tool result's output as the transcript keeps it: its text, capped at
+// MAX_TOOL_RESULT_TEXT. Image blocks and anything else without text add
+// nothing.
+function toolResultPreview(content: unknown): string {
+  const parts =
+    typeof content === 'string'
+      ? [content]
+      : Array.isArray(content)
+        ? (content as AssistantContentBlock[]).flatMap((block) =>
+            block.type === 'text' && typeof block.text === 'string'
+              ? [block.text]
+              : []
+          )
+        : [];
+  const text = parts.join('\n').trim();
+  return text.length <= MAX_TOOL_RESULT_TEXT
+    ? text
+    : `${text.slice(0, MAX_TOOL_RESULT_TEXT)}… (truncated)`;
+}
+
+// The entries a `user`-typed SDK message amounts to. A tool_result answering
+// a sub-agent spawn finishes that sub-agent (an `agent` entry); one answering
+// another tool call the agent itself made (`toolCalls`) is that call's
+// outcome: a `tool` entry with the call's `toolUseId`, `status` done or error,
+// and a preview of the output as `text`. A sub-agent's own tool results, and
+// the prompts this executor sends, are skipped: their calls stay `running`.
 function entriesForUserContent(
-  message: { message: { content: unknown }; tool_use_result?: unknown },
+  message: {
+    message: { content: unknown };
+    parent_tool_use_id?: string | null;
+    tool_use_result?: unknown;
+  },
   ts: string,
-  tracker: SubagentTracker
+  tracker: SubagentTracker,
+  toolCalls: Set<string>
 ): NormalizedEntry[] {
   const content = message.message.content;
   if (!Array.isArray(content)) return [];
+  const topLevel = (message.parent_tool_use_id ?? null) === null;
   const entries: NormalizedEntry[] = [];
   for (const block of content as UserContentBlock[]) {
     if (block.type !== 'tool_result') continue;
     const finished = tracker.onToolResult(block, message.tool_use_result, ts);
-    if (finished !== null) entries.push(finished);
+    if (finished !== null) {
+      entries.push(finished);
+      continue;
+    }
+    const id = block.tool_use_id;
+    if (!topLevel || id === undefined || !toolCalls.delete(id)) continue;
+    const preview = toolResultPreview(block.content);
+    entries.push({
+      ts,
+      kind: 'tool',
+      toolUseId: id,
+      status: block.is_error === true ? 'error' : 'done',
+      ...(preview !== '' ? { text: preview } : {}),
+    });
   }
   return entries;
 }
@@ -1219,6 +1258,8 @@ export class ClaudeExecutor implements Executor {
       // lifecycle messages, tool results) into `agent` entries — see the
       // tracker's own doc comment for why one object has to see all three.
       const subagents = new SubagentTracker();
+      // The agent's own tool calls still waiting for their result.
+      const toolCalls = new Set<string>();
       // The session's live background tasks (background_tasks_changed
       // carries the whole set each time), so windDown can stop them.
       let backgroundTasks: string[] = [];
@@ -1244,13 +1285,19 @@ export class ClaudeExecutor implements Executor {
               message.message.content,
               ts,
               subagents,
-              message.parent_tool_use_id ?? undefined
+              message.parent_tool_use_id ?? undefined,
+              toolCalls
             )) {
               events.onEntry(entry);
             }
           } else if (message.type === 'user') {
             const ts = new Date().toISOString();
-            for (const entry of entriesForUserContent(message, ts, subagents)) {
+            for (const entry of entriesForUserContent(
+              message,
+              ts,
+              subagents,
+              toolCalls
+            )) {
               events.onEntry(entry);
             }
           } else if (message.type === 'system') {

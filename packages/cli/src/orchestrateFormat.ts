@@ -23,6 +23,11 @@ export function formatEntry(
     case 'assistant':
       return entry.text !== undefined ? `[assistant] ${entry.text}` : null;
     case 'tool': {
+      // A call's result (a tool entry with no toolName) settles a call
+      // whose line already printed; watch lines are never rewritten.
+      if (entry.toolName === undefined && entry.status !== 'running') {
+        return null;
+      }
       const glyph =
         entry.status === 'done' ? '✓' : entry.status === 'error' ? '✗' : '…';
       return `[tool ${glyph}] ${entry.toolName ?? 'unknown'}`;

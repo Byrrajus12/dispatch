@@ -32,6 +32,7 @@ import { grantKey, GrantStore, type GrantView } from './overseerGrants.js';
 import type { OverseerStore } from './overseerStore.js';
 import type { OverseerAction, OverseerToolRegistry } from './overseerTools.js';
 import {
+  MAX_TOOL_RESULT_TEXT,
   OrchestratorClientError,
   OrchestratorConflictError,
   OrchestratorNotFoundError,
@@ -277,11 +278,6 @@ const QUEUED_NOTE =
   'taken — tell the user what you have queued and that it needs their ' +
   'confirmation.';
 
-// How much of a status tool's result is kept in the transcript. The model gets
-// the whole payload; this copy exists so the human can see what a claim was
-// based on, and a full merge-queue or ledger dump would swamp the chat.
-const MAX_TOOL_TEXT = 2000;
-
 // How much of a built-in tool call's input the transcript and an approval
 // card quote — a whole file written by `Write` is not what a human reads
 // before clicking Allow.
@@ -358,9 +354,9 @@ function describeToolCall(toolName: string, input: unknown): string {
 // Renders a tool result for the transcript: compact JSON, capped.
 function describeToolResult(data: unknown): string {
   const text = JSON.stringify(data) ?? String(data);
-  return text.length <= MAX_TOOL_TEXT
+  return text.length <= MAX_TOOL_RESULT_TEXT
     ? text
-    : `${text.slice(0, MAX_TOOL_TEXT)}… (truncated)`;
+    : `${text.slice(0, MAX_TOOL_RESULT_TEXT)}… (truncated)`;
 }
 
 /**

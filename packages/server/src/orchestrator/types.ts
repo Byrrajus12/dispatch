@@ -28,6 +28,8 @@ export interface NormalizedEntry {
     | 'usage'
     | 'message'
     | 'agent';
+  // A `tool` entry with no `toolName` is a tool call's result: `status` says
+  // how it ended and `text` is a capped preview of its output.
   text?: string;
   toolName?: string;
   toolInput?: unknown;
@@ -58,6 +60,12 @@ export interface NormalizedEntry {
   // channel digest rather than a message the agent must respond to.
   digest?: boolean;
 }
+
+// How much of a tool's result a transcript keeps: a run's tool result entry,
+// an Overseer status tool's row. The model gets the whole payload; this copy
+// exists so the human can see what the agent went on, and a whole file or a
+// full test log would swamp the chat.
+export const MAX_TOOL_RESULT_TEXT = 2000;
 
 // A live handle to a running executor invocation — the orchestrator holds
 // one of these per live run so API calls (approval, mid-run message, cancel)
