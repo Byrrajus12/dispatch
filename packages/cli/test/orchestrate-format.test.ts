@@ -18,6 +18,7 @@ import {
   formatDiffFiles,
   formatEntry,
   formatEpicProgress,
+  formatLastEntries,
   formatPlanNeedsReply,
   formatProposal,
   formatRunsTable,
@@ -132,6 +133,28 @@ describe('formatEntry', () => {
     };
     expect(formatEntry(result)).toBeNull();
     expect(formatEntry({ ...result, status: 'done' })).toBeNull();
+  });
+
+  // `run show`'s window: every Claude call is followed by its result entry,
+  // which prints nothing, so counting entries would halve the lines shown.
+  it('formatLastEntries counts printed lines, not entries', () => {
+    const entries: NormalizedEntry[] = Array.from({ length: 15 }, (_, i) => [
+      {
+        ts: '2026-07-20T00:00:00Z',
+        kind: 'tool' as const,
+        toolName: `Bash${i}`,
+        status: 'running' as const,
+      },
+      {
+        ts: '2026-07-20T00:00:01Z',
+        kind: 'tool' as const,
+        status: 'done' as const,
+      },
+    ]).flat();
+    const lines = formatLastEntries(entries, 10);
+    expect(lines).toHaveLength(10);
+    expect(lines[0]).toBe('[tool …] Bash5');
+    expect(lines.at(-1)).toBe('[tool …] Bash14');
   });
 
   it('skips a thinking entry by default', () => {

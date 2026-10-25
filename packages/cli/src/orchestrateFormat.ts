@@ -47,6 +47,19 @@ export function formatEntry(
   }
 }
 
+// The last `count` lines `formatEntry` prints for `entries`. Counts printed
+// lines rather than entries, so the result entries and progress ticks it
+// skips do not eat into the window.
+export function formatLastEntries(
+  entries: NormalizedEntry[],
+  count: number
+): string[] {
+  return entries
+    .map((entry) => formatEntry(entry))
+    .filter((line): line is string => line !== null)
+    .slice(-count);
+}
+
 // One line per sub-agent lifecycle edge: the spawn and the finish. Progress
 // ticks are skipped — they arrive with every tool call the sub-agent makes,
 // and a watch line per tick would drown the run's own output.
