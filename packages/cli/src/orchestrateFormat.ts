@@ -49,15 +49,32 @@ export function formatEntry(
 
 // The last `count` lines `formatEntry` prints for `entries`. Counts printed
 // lines rather than entries, so the result entries and progress ticks it
-// skips do not eat into the window.
+// skips do not eat into the window. Unlike a `--watch` line, which prints
+// before the call ends, a tool call's line here says how it ended: the later
+// entries that share its `toolUseId` (Claude's result entry, Codex's
+// completed copy) settle its status and print no line of their own.
 export function formatLastEntries(
   entries: NormalizedEntry[],
   count: number
 ): string[] {
-  return entries
-    .map((entry) => formatEntry(entry))
-    .filter((line): line is string => line !== null)
-    .slice(-count);
+  const ended = new Map<string, NormalizedEntry['status']>();
+  for (const entry of entries) {
+    if (entry.kind === 'tool' && entry.toolUseId !== undefined) {
+      ended.set(entry.toolUseId, entry.status);
+    }
+  }
+  const printed = new Set<string>();
+  const lines: string[] = [];
+  for (const entry of entries) {
+    const id = entry.kind === 'tool' ? entry.toolUseId : undefined;
+    if (id !== undefined && printed.has(id)) continue;
+    if (id !== undefined) printed.add(id);
+    const line = formatEntry(
+      id === undefined ? entry : { ...entry, status: ended.get(id) }
+    );
+    if (line !== null) lines.push(line);
+  }
+  return lines.slice(-count);
 }
 
 // One line per sub-agent lifecycle edge: the spawn and the finish. Progress
