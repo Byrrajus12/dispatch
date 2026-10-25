@@ -70,6 +70,9 @@ export function ToolApprovalCard({
   const [deciding, setDeciding] = useState(false);
   const [selectedId, setSelectedId] = useState<string | undefined>();
   const [denying, setDenying] = useState(false);
+  // The option whose answer went out and was not refused: the card says "Answered"
+  // only for it, never for a Deny whose reason box is still open.
+  const [sentId, setSentId] = useState<string | undefined>();
   const [reason, setReason] = useState('');
   const reasonRef = useRef<HTMLTextAreaElement>(null);
   // Picking Deny reveals the reason box, so the caret follows that choice into it.
@@ -77,8 +80,9 @@ export function ToolApprovalCard({
     if (denying) reasonRef.current?.focus();
   }, [denying]);
 
-  async function decide(decision: ToolApprovalDecision) {
+  async function decide(id: string, decision: ToolApprovalDecision) {
     setDeciding(true);
+    setSentId(id);
     try {
       await onDecide(decision);
       setDenying(false);
@@ -86,6 +90,7 @@ export function ToolApprovalCard({
     } catch {
       // The caller reports the failure; the card stays ready for another try,
       // with no answer shown as picked unless the reason box is still open.
+      setSentId(undefined);
       if (decision.allow) setSelectedId(undefined);
     } finally {
       setDeciding(false);
@@ -101,7 +106,10 @@ export function ToolApprovalCard({
       setDenying(true);
       return;
     }
-    void decide({ allow: true, scope: id === SESSION_ID ? 'session' : 'once' });
+    void decide(id, {
+      allow: true,
+      scope: id === SESSION_ID ? 'session' : 'once',
+    });
   }
 
   const options: ApprovalCardOption[] = [
@@ -132,6 +140,7 @@ export function ToolApprovalCard({
         onSelect={handleSelect}
         selectedId={selectedId}
         disabled={locked || denying}
+        answered={selectedId !== undefined && selectedId === sentId}
       />
       <ScrollArea className="rounded-control border-border-chip bg-surface-quaternary max-h-40 border-[0.5px]">
         <pre className="text-muted-foreground p-2 font-mono text-[11px] break-words whitespace-pre-wrap">
@@ -167,6 +176,7 @@ export function ToolApprovalCard({
               onClick={() => {
                 const why = reason.trim();
                 void decide(
+                  DENY_ID,
                   why === '' ? { allow: false } : { allow: false, reason: why }
                 );
               }}

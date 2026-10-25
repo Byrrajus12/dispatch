@@ -78,6 +78,36 @@ describe('ToolApprovalCard', () => {
     ]);
   });
 
+  // The options are disabled while the reason is written, which the primitive
+  // otherwise reads as answered; nothing has gone out until Deny is pressed.
+  test('a deny is shown as answered only once it is sent', async () => {
+    let refuse: (err: Error) => void = () => {};
+    card(
+      () =>
+        new Promise<void>((_, reject) => {
+          refuse = reject;
+        })
+    );
+    fireEvent.click(
+      screen.getByRole('radio', { name: /^Deny and tell it why/ })
+    );
+    expect(screen.queryByText(/^Answered/)).toBeNull();
+    expect(screen.getByText(/^Selected/).textContent).toBe(
+      'Selected — Deny and tell it why'
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+    expect(screen.getByText(/^Answered/).textContent).toBe(
+      'Answered — Deny and tell it why'
+    );
+
+    // Refused: back to an open reason box, not an answer.
+    refuse(new Error('gate closed'));
+    await settle();
+    expect(screen.queryByText(/^Answered/)).toBeNull();
+    expect(screen.getByText(/^Selected/)).toBeDefined();
+  });
+
   test('a failed deny keeps the reason box and what was typed', async () => {
     card(() => Promise.reject(new Error('gate closed')));
     fireEvent.click(
