@@ -4,8 +4,13 @@ import type {
   ReviewComment,
   ReviewVerdict,
   RunDetail,
+  ServerEvent,
 } from '@dispatch/client';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  type QueryClient,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { useCallback, useMemo } from 'react';
 
 // One run's detail, diff and line comments for a surface that shows a run of its own
@@ -13,8 +18,33 @@ import { useCallback, useMemo } from 'react';
 // The keys are the ones useDispatchProject uses for the selected run, so both share one
 // cache: `run.log` appends to this detail, and `run.changed`/`review.changed` refresh it.
 
-function runDetailKey(port: number | undefined, runId: string) {
+export function runDetailKey(port: number | undefined, runId: string) {
   return ['dispatch-run', port, runId] as const;
+}
+
+/** Keeps cached run details current from the event stream: `run.log` appends its entry to
+ * the run's cached detail in place, for every surface showing that run. */
+export function applyRunEvent(
+  queryClient: QueryClient,
+  port: number | undefined,
+  event: ServerEvent
+): void {
+  if (event.type !== 'run.log') return;
+  const key = runDetailKey(port, event.runId);
+  queryClient.setQueryData<RunDetail>(key, (prev) =>
+    prev === undefined
+      ? prev
+      : { ...prev, entries: [...prev.entries, event.entry] }
+  );
+  // A response in flight was read before this entry: drop it and fetch
+  // again. Invalidating alone would reuse a first fetch that has no data.
+  if (queryClient.getQueryState(key)?.fetchStatus === 'fetching') {
+    void queryClient
+      .cancelQueries({ queryKey: key, exact: true })
+      .then(() =>
+        queryClient.invalidateQueries({ queryKey: key, exact: true })
+      );
+  }
 }
 
 export function runDiffKey(port: number | undefined, runId: string) {

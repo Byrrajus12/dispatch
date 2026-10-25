@@ -161,7 +161,7 @@ import {
   resetLiveText,
 } from './useOverseerSession';
 import { readinessKey, useReadiness } from './useReadiness';
-import { runDiffKey, runReviewKey } from './useRunData';
+import { applyRunEvent, runDiffKey, runReviewKey } from './useRunData';
 import { commentsRootKey, taskCommentsKey } from './useTaskComments';
 import { taskDocKey, tasksKey } from './useTaskDoc';
 import { applyThreadEvent } from './useThreads';
@@ -1675,13 +1675,7 @@ export function useDispatchProject(
           void queryClient.invalidateQueries({ queryKey: branchesQueryKey });
         } else if (event.type === 'run.log') {
           runSteps.record(event.runId, event.entry);
-          queryClient.setQueryData<RunDetail>(
-            ['dispatch-run', port, event.runId],
-            (prev) =>
-              prev !== undefined
-                ? { ...prev, entries: [...prev.entries, event.entry] }
-                : prev
-          );
+          applyRunEvent(queryClient, port, event);
         } else if (event.type === 'message.new') {
           const message = event.message;
           const openGatesKeyNow = openGatesKey(port);
