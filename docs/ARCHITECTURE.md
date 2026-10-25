@@ -350,9 +350,12 @@ just before the next top-level tool call, and treats what is pending at the
 kept as narration too, so no text is lost. The Codex backend holds finished
 `agentMessage` items by id: the next item commits the earlier ones as narration,
 except one Codex marked `final_answer`, and at the turn's end every item but the
-reply is narration. A turn that is stopped or fails keeps the text it had
-streamed as narration rows, ahead of the stop notice or the failure. A desktop
-that predates the role drops those rows, so a newer daemon is safe with it.
+reply is narration. Codex's reply is its last message even when a step followed
+it, by which time that message went out as narration: the manager then moves it,
+so the reply row takes the narration row's place rather than repeating it. A
+turn that is stopped or fails keeps the text it had streamed as narration rows,
+ahead of the stop notice or the failure. A desktop that predates the role drops
+those rows, so a newer daemon is safe with it.
 
 **Run tool results.** A run's transcript is append-only, so a tool call's
 outcome is an entry of its own. The Claude executor logs each top-level

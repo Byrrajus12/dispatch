@@ -490,6 +490,34 @@ describe('CodexOverseer narration and live text', () => {
     expect(turn).toMatchObject({ reply: 'The answer.', streamId: 'm3' });
   });
 
+  // The manager puts the reply in place of that narration row; the backend
+  // only has to name the segment.
+  it('names an already narrated message as the reply when the turn ends on a step', async () => {
+    for (const phase of [undefined, 'commentary']) {
+      const codex = scriptedCodex({
+        onTurn: (c, t) => {
+          message(c, t, 'm1', 'The tree is clean.', phase);
+          command(c, t, 'c1');
+          completed(c, t);
+        },
+      });
+      const { seen, options } = recording();
+      const turn = await overseerOver(codex).start(
+        'status?',
+        stubToolset().toolset,
+        options
+      );
+      expect(seen).toEqual([
+        'narration m1: The tree is clean.',
+        'tool codex.commandExecution',
+      ]);
+      expect(turn).toMatchObject({
+        reply: 'The tree is clean.',
+        streamId: 'm1',
+      });
+    }
+  });
+
   it('works the same when Codex sends no deltas at all', async () => {
     const codex = scriptedCodex({
       onTurn: (c, t) => {

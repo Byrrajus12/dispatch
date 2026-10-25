@@ -2018,6 +2018,34 @@ describe('overseer live text', () => {
     ]);
   });
 
+  // Codex's reply is its last message even when a step followed it, and by
+  // then that message went out as narration: it must not show twice.
+  it('a reply naming a narrated segment takes the place of that row', async () => {
+    for (const mode of ['live', 'narration']) {
+      const h = heldManager();
+      streamMode(mode);
+      const started = h.manager.start('status?', 'held');
+      const options = h.backend.options;
+      options?.onTextDelta?.('m1', 'The tree is clean.');
+      options?.onNarration?.('m1', 'The tree is clean.');
+      options?.onToolUse?.('codex.commandExecution', { command: 'git status' });
+      h.backend.settle({ reply: 'The tree is clean.', streamId: 'm1' });
+      await waitFor(() => h.manager.get(started.id).state === 'ready');
+      const messages = h.manager.get(started.id).messages;
+      expect(messages.map((m) => [m.role, m.text])).toEqual([
+        ['user', 'status?'],
+        ['tool', expect.any(String)],
+        ['assistant', 'The tree is clean.'],
+      ]);
+      if (mode === 'live') {
+        const turnId = deltasOf(h)[0].turnId;
+        expect(messages.at(-1)?.streamId).toBe(`${turnId}:m1`);
+      }
+      rmSync(join(repo, '.dispatch', 'config.yml'));
+      TaskStore.init(repo);
+    }
+  });
+
   it('Stop keeps the partial text as narration ahead of the notice, and drops what comes after', async () => {
     const h = heldManager();
     const started = h.manager.start('think hard', 'held');

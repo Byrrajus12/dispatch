@@ -406,6 +406,12 @@ export class OverseerManager {
   // Each conversation's live text: what its running turn streamed and has not
   // committed to the record yet. Never persisted.
   private readonly live = new LiveTextBuffer();
+  // The narration rows the running turn appended, per conversation, by
+  // their scoped segment id (turn id + backend segment id). A backend can
+  // name an already narrated segment as its reply (Codex picks its last
+  // message even when a step followed it); the reply then takes that row's
+  // place instead of repeating it. Cleared when the turn ends.
+  private readonly narrated = new Map<string, Map<string, OverseerMessage>>();
   // Set by shutdown(): turns still settling write nothing more.
   private shuttingDown = false;
   // Who typed each conversation's queued messages, for posting them when they go.
@@ -564,11 +570,14 @@ export class OverseerManager {
     this.live.drop(conversationId, turnId, id);
     const said = text.trim();
     if (said === '') return;
-    this.appendMessage(conversationId, {
+    const row = this.appendMessage(conversationId, {
       role: 'narration',
       text: said,
       ...(streamed ? { streamId: id } : {}),
     });
+    if (row === undefined) return;
+    const rows = this.narrated.get(conversationId) ?? new Map();
+    this.narrated.set(conversationId, rows.set(id, row));
   }
 
   // Ends the turn's live text. A turn that stopped or failed keeps what it
@@ -926,8 +935,16 @@ export class OverseerManager {
       if (this.shuttingDown) return;
       const current = this.conversations.get(conversationId);
       if (current === undefined) return;
-      // The reply replaces the live text in the same update.
+      // The reply replaces the live text in the same update, and the
+      // narration row of its own segment when the backend narrated it first.
       this.endLive(conversationId, stream.turnId, false);
+      const narratedReply =
+        turn.streamId === undefined
+          ? undefined
+          : this.narrated
+              .get(conversationId)
+              ?.get(streamIdOf(stream.turnId, turn.streamId));
+      const earlier = current.messages.filter((m) => m !== narratedReply);
       this.updateRecord(conversationId, {
         state: 'ready',
         sessionId: turn.sessionId ?? current.sessionId,
@@ -939,7 +956,7 @@ export class OverseerManager {
           ? { spendUsd: (current.spendUsd ?? 0) + turn.costUsd }
           : {}),
         messages: [
-          ...current.messages,
+          ...earlier,
           {
             role: 'assistant',
             text: turn.reply,
@@ -951,12 +968,7 @@ export class OverseerManager {
           },
         ],
       });
-      this.postEntry(
-        conversationId,
-        current.messages.length,
-        from.speaker,
-        from.line
-      );
+      this.postEntry(conversationId, earlier.length, from.speaker, from.line);
     } catch (err) {
       if (this.shuttingDown) return;
       // What the turn had said stays, ahead of the notice or the failure.
@@ -990,6 +1002,7 @@ export class OverseerManager {
       }
     } finally {
       this.turns.delete(conversationId);
+      this.narrated.delete(conversationId);
       // Past shutdown, or for a conversation that is gone, nothing more lands.
       this.live.end(conversationId, stream.turnId);
       // A turn that is over has no tool call left to run: anything still
@@ -1620,18 +1633,16 @@ export class OverseerManager {
   }
 
   // Appends one transcript entry, stamped now.
+  // Returns the row as stored, or undefined when the conversation is gone.
   private appendMessage(
     conversationId: string,
     message: Omit<OverseerMessage, 'at'>
-  ): void {
+  ): OverseerMessage | undefined {
     const record = this.conversations.get(conversationId);
-    if (record === undefined) return;
-    this.updateRecord(conversationId, {
-      messages: [
-        ...record.messages,
-        { ...message, at: new Date().toISOString() },
-      ],
-    });
+    if (record === undefined) return undefined;
+    const row: OverseerMessage = { ...message, at: new Date().toISOString() };
+    this.updateRecord(conversationId, { messages: [...record.messages, row] });
+    return row;
   }
 
   private updateRecord(

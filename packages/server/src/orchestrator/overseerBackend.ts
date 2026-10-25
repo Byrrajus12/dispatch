@@ -151,7 +151,10 @@ export interface OverseerTurnAttachment {
 export interface OverseerTurn {
   reply: string;
   /** The segment the reply was written in, when the backend knows it: the id
-   *  its text streamed under through `onTextDelta`. */
+   *  its text streamed under through `onTextDelta`. It may name a segment
+   *  already reported through `onNarration` (Codex's reply is its last
+   *  message, even when a step came after it): the reply row then replaces
+   *  that narration row rather than repeating its text. */
   streamId?: string;
   /**
    * The backend's opaque resume handle (the Agent SDK session id for
