@@ -2,6 +2,7 @@ import type {
   ApiClient,
   DiffResult,
   LiveTextView,
+  NormalizedEntry,
   ReviewComment,
   ReviewVerdict,
   RunDetail,
@@ -44,11 +45,50 @@ function repairRunLive(
   }, 0);
 }
 
+type RunLogFrame = Extract<ServerEvent, { type: 'run.log' }>;
+
+// The run.log frames that arrived while a run detail fetch was out, one list per fetch,
+// by `port:runId`. The response may have been read before them, so fetchRunDetail adds
+// the ones it lacks before the response lands; no frame ever restarts a fetch.
+const framesInFlight = new Map<string, Set<RunLogFrame[]>>();
+
+function flightKey(port: number | undefined, runId: string): string {
+  return `${port ?? ''}:${runId}`;
+}
+
+// Where a run.log frame's entry goes in a detail holding `length` entries: `next` (append
+// it), `held` (the detail has it already) or `gap` (frames before it were missed). A frame
+// with no index (an older daemon) is always `next`, as run.log was before it had one.
+function placeOf(
+  index: number | undefined,
+  length: number
+): 'next' | 'held' | 'gap' {
+  if (index === undefined || index === length) return 'next';
+  return index < length ? 'held' : 'gap';
+}
+
+// Refetches a run's detail once to fill entries its frames missed, without cancelling a
+// fetch already out (whose landing adds the frames it lacks). A tick late, like
+// repairRunLive, when asked for from inside the detail's own queryFn.
+function repairRunDetail(
+  queryClient: QueryClient,
+  port: number | undefined,
+  runId: string
+): void {
+  setTimeout(() => {
+    void queryClient.invalidateQueries(
+      { queryKey: runDetailKey(port, runId), exact: true },
+      { cancelRefetch: false }
+    );
+  }, 0);
+}
+
 /** Keeps cached run details current from the event stream: `run.log` appends its entry to
  * the run's cached detail in place, for every surface showing that run, and `run.delta`
  * folds the text a live run is writing into the window's live text store. A frame never
- * touches the cache: one that missed another refetches the detail once, whose `live`
- * snapshot repairs the text. */
+ * cancels a fetch: a delta that missed another refetches the detail once, whose `live`
+ * snapshot repairs the text, and a log entry that lands mid-fetch is added to the
+ * response by its index (fetchRunDetail). */
 export function applyRunEvent(
   queryClient: QueryClient,
   port: number | undefined,
@@ -65,21 +105,42 @@ export function applyRunEvent(
     return;
   }
   if (event.type !== 'run.log') return;
-  const key = runDetailKey(port, event.runId);
-  queryClient.setQueryData<RunDetail>(key, (prev) =>
-    prev === undefined
-      ? prev
-      : { ...prev, entries: [...prev.entries, event.entry] }
-  );
-  // A response in flight was read before this entry: drop it and fetch
-  // again. Invalidating alone would reuse a first fetch that has no data.
-  if (queryClient.getQueryState(key)?.fetchStatus === 'fetching') {
-    void queryClient
-      .cancelQueries({ queryKey: key, exact: true })
-      .then(() =>
-        queryClient.invalidateQueries({ queryKey: key, exact: true })
-      );
+  for (const frames of framesInFlight.get(flightKey(port, event.runId)) ?? []) {
+    frames.push(event);
   }
+  const key = runDetailKey(port, event.runId);
+  const prev = queryClient.getQueryData<RunDetail>(key);
+  if (prev === undefined) return;
+  const place = placeOf(event.index, prev.entries.length);
+  if (place === 'next') {
+    queryClient.setQueryData<RunDetail>(key, {
+      ...prev,
+      entries: [...prev.entries, event.entry],
+    });
+  } else if (
+    place === 'gap' &&
+    queryClient.getQueryState(key)?.fetchStatus !== 'fetching'
+  ) {
+    repairRunDetail(queryClient, port, event.runId);
+  }
+}
+
+// `entries` with the frames that arrived during its fetch added where they continue it,
+// and whether a frame showed entries missing that neither holds.
+function withFrames(
+  entries: NormalizedEntry[],
+  frames: RunLogFrame[]
+): { entries: NormalizedEntry[]; gap: boolean } {
+  const merged = [...entries];
+  let gap = false;
+  for (const frame of frames) {
+    // Without an index there is no telling whether the response holds it.
+    if (frame.index === undefined) continue;
+    const place = placeOf(frame.index, merged.length);
+    if (place === 'next') merged.push(frame.entry);
+    else if (place === 'gap') gap = true;
+  }
+  return { entries: merged, gap };
 }
 
 export function runDiffKey(port: number | undefined, runId: string) {
@@ -91,19 +152,34 @@ export function runReviewKey(port: number | undefined, runId: string) {
 }
 
 /** Reads a run's detail for a run detail query: the `live` snapshot it carries goes to the
- * live text store (repairing a gap there), and the detail is cached without it. Every query
- * on these keys fetches through here, so the store has whichever snapshot landed last. */
+ * live text store (repairing a gap there), and the detail is cached without it, plus the
+ * entries whose run.log frames arrived while it was out and it was read too early to hold.
+ * Every query on these keys fetches through here, so the store has whichever snapshot
+ * landed last. */
 export async function fetchRunDetail(
   client: ApiClient,
   queryClient: QueryClient,
   port: number | undefined,
   runId: string
 ): Promise<RunDetail> {
-  const { live, ...detail } = await client.fetchRun(runId);
+  const flight = flightKey(port, runId);
+  const frames: RunLogFrame[] = [];
+  const flights = framesInFlight.get(flight) ?? new Set<RunLogFrame[]>();
+  framesInFlight.set(flight, flights.add(frames));
+  let fetched: Awaited<ReturnType<ApiClient['fetchRun']>>;
+  try {
+    fetched = await client.fetchRun(runId);
+  } finally {
+    flights.delete(frames);
+    if (flights.size === 0) framesInFlight.delete(flight);
+  }
+  const { live, ...detail } = fetched;
   liveTextStore.mergeSnapshot(port, runLiveKey(runId), live, () =>
     repairRunLive(queryClient, port, runId)
   );
-  return detail;
+  const { entries, gap } = withFrames(detail.entries, frames);
+  if (gap) repairRunDetail(queryClient, port, runId);
+  return { ...detail, entries };
 }
 
 const NO_STREAM_IDS: ReadonlySet<string> = new Set();

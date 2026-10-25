@@ -313,6 +313,14 @@ Overseer record and run detail: a restarted daemon counts `seq` from zero.
 `useLiveText` keeps a segment on screen until the row that replaces it reaches
 the view, so text does not blink out between the two.
 
+**Run log order.** A `run.log` frame carries `index`, its entry's place among
+the run's transcript entries, the same position `GET /api/runs/:id` lists it at.
+The desktop appends a frame that continues its cached detail, ignores one it
+already holds, and refetches once (never cancelling a fetch already out) after
+one that skips ahead. Frames that land while a detail fetch is out are added to
+its response by index before it lands, so steady output never restarts a fetch.
+A frame from an older daemon has no index and is appended as before.
+
 **Audience (owner decision, 2026-10-23).** `overseer.delta` goes only to the
 conversation's live audience (`overseerLiveAudience` in
 `orchestrator/overseer.ts`): any deciding human (a `human:` credential at the

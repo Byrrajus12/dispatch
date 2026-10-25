@@ -38,6 +38,7 @@ function gatedRunServer() {
   const entries: NormalizedEntry[] = [entry('first')];
   const pending: (() => void)[] = [];
   const server = {
+    entries,
     gated: false,
     pending,
     fetches: 0,
@@ -59,8 +60,19 @@ function gatedRunServer() {
     log(qc: QueryClient, text: string) {
       const next = entry(text);
       entries.push(next);
-      applyRunEvent(qc, PORT, { type: 'run.log', runId: RUN, entry: next });
+      applyRunEvent(qc, PORT, {
+        type: 'run.log',
+        runId: RUN,
+        entry: next,
+        index: entries.length - 1,
+      });
     },
+    snapshot: (): RunDetail => ({
+      meta: { id: RUN, state: 'running' } as RunMeta,
+      entries: [...entries],
+      evidence: [],
+      mutations: [],
+    }),
     release() {
       for (const resolve of pending.splice(0)) resolve();
     },
@@ -150,6 +162,62 @@ describe('applyRunEvent run.log', () => {
       expect(texts(result.current)).toEqual(['first', 'second']);
     });
     expect(qc.getQueryState(runDetailKey(PORT, RUN))?.status).toBe('success');
+  });
+
+  // An agent that writes faster than a fetch round trip: restarting the fetch
+  // per frame would never let the detail land.
+  it('lands the first fetch while entries keep streaming, with every entry', async () => {
+    const server = gatedRunServer();
+    server.gated = true;
+    const { qc, result } = mount(server.client);
+    await waitFor(() => {
+      expect(server.pending).toHaveLength(1);
+    });
+    for (let i = 0; i < 50; i++) server.log(qc, `chunk ${i}`);
+    server.release();
+    await waitFor(() => {
+      expect(result.current?.entries).toHaveLength(51);
+    });
+    for (let i = 50; i < 60; i++) server.log(qc, `chunk ${i}`);
+    await waitFor(() => {
+      expect(texts(result.current)).toEqual(texts(server.snapshot()));
+    });
+    expect(server.fetches).toBe(1);
+  });
+
+  it('skips a frame the detail already holds and refetches once after a missed one', async () => {
+    const server = gatedRunServer();
+    const { qc, result } = mount(server.client);
+    await waitFor(() => {
+      expect(texts(result.current)).toEqual(['first']);
+    });
+    // The response held it, and its frame comes in late.
+    applyRunEvent(qc, PORT, {
+      type: 'run.log',
+      runId: RUN,
+      entry: entry('first'),
+      index: 0,
+    });
+    expect(texts(result.current)).toEqual(['first']);
+    // Entry 1 was never heard of: 2 and 3 cannot be placed, and one fetch fills it in.
+    server.entries.push(entry('second'), entry('third'), entry('fourth'));
+    for (const index of [2, 3]) {
+      applyRunEvent(qc, PORT, {
+        type: 'run.log',
+        runId: RUN,
+        entry: server.entries[index],
+        index,
+      });
+    }
+    await waitFor(() => {
+      expect(texts(result.current)).toEqual([
+        'first',
+        'second',
+        'third',
+        'fourth',
+      ]);
+    });
+    expect(server.fetches).toBe(2);
   });
 });
 
