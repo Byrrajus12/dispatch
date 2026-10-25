@@ -268,6 +268,7 @@ import type { PrWorktreeManager } from './orchestrator/prWorktree.js';
 import { toLandingWorktree } from './orchestrator/prWorktree.js';
 import type { ReviewRunner } from './orchestrator/review.js';
 import type { TaskAuthorship } from './orchestrator/taskAuthorship.js';
+import type { RunDetailView } from './orchestrator/transcript.js';
 import {
   OrchestratorClientError,
   OrchestratorConflictError,
@@ -5581,11 +5582,15 @@ export async function handleApi(
           return errorResponse(404, `run not found: ${segments[1]}`);
         }
         // The same landing fields the list carries, so run detail can say
-        // where its work went.
-        return jsonResponse({
+        // where its work went, and the text a live run has streamed and not
+        // logged yet.
+        const live = ctx.orchestrator.liveText(segments[1]);
+        const view: RunDetailView = {
           ...result,
           meta: ctx.orchestrator.decorateRunsWithPushed([result.meta])[0],
-        });
+          ...(live !== undefined ? { live } : {}),
+        };
+        return jsonResponse(view);
       }
       if (
         segments.length === 3 &&

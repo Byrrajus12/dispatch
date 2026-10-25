@@ -29,6 +29,20 @@ export type ServerEvent =
   | { type: 'hello'; version: string }
   | { type: 'run.changed' }
   | { type: 'run.log'; runId: string; entry: NormalizedEntry }
+  // A live run's text as the model writes it: `text` extends segment
+  // `segmentId` of turn `turnId` (one per run). View-only, never stored; the
+  // finished text arrives as a run.log `assistant` entry whose `streamId` is
+  // the segment. `seq` counts one run's frames, so a gap means a missed frame,
+  // which GET /api/runs/:id's `live` snapshot repairs. Sent to the same
+  // sockets as run.log.
+  | {
+      type: 'run.delta';
+      runId: string;
+      turnId: string;
+      seq: number;
+      segmentId: string;
+      text: string;
+    }
   // Phase 5 P1: a plan's state (running -> ready|failed) changed, or it was
   // just confirmed — same "go refetch, no payload beyond the id" contract as
   // run.changed.

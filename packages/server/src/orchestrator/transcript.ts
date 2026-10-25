@@ -13,6 +13,7 @@ import {
 } from 'node:fs';
 import { dirname } from 'node:path';
 
+import type { LiveText } from '../liveText.js';
 import type {
   MemoryMode,
   NormalizedEntry,
@@ -137,6 +138,11 @@ export interface RunDetail {
   evidence: CommandEvidence[];
   mutations: MutationEvidence[];
 }
+
+/** GET /api/runs/:id's body: the detail, plus the text a live run has
+ *  streamed and not logged as an entry yet (Orchestrator.liveText). A
+ *  transcript never holds `live`. */
+export type RunDetailView = RunDetail & { live?: LiveText };
 
 /**
  * One run's on-disk JSONL transcript: a header line carrying the run's

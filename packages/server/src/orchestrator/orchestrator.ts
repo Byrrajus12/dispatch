@@ -8,6 +8,7 @@ import {
   isDoneStatus,
   loadConfig,
   nextSubagentStatus,
+  runSettings,
   runStepFromEntry,
   slugify,
   summarizeSubagents,
@@ -53,6 +54,8 @@ import type { JudgmentClient } from '../judgments/client.js';
 import { mapLimit } from '../judgments/client.js';
 import { judgeRunModel } from '../judgments/modelTier.js';
 import type { RunModelChoice } from '../judgments/modelTier.js';
+import { LiveTextBuffer } from '../liveText.js';
+import type { LiveText } from '../liveText.js';
 import type { OperatorRouting } from '../messaging/operatorRouting.js';
 import { statusModelFor } from '../statuses.js';
 import { dirSizeBytes } from './dirSize.js';
@@ -463,6 +466,11 @@ export class Orchestrator {
   // Live runs whose RunMeta.lastStep this process has followed from their
   // log (or read back once, see backfillLastSteps).
   private readonly stepsFollowed = new Set<string>();
+  // Each live run's text as the model writes it and the run has not logged
+  // as an entry yet, when `runs.stream` is live (see makeEvents). In memory
+  // only: GET /api/runs/:id serves it as `live`, and the run's terminal
+  // transition forgets it.
+  private readonly live = new LiveTextBuffer();
   // Each live run's sub-agents by spawning tool_use id and their latest
   // status — the working set recordSubagentEvent folds RunMeta.subagents from.
   private readonly subagentStatuses = new Map<
@@ -4704,7 +4712,10 @@ export class Orchestrator {
         const token = this.mintRunToken(runId);
         opts = { ...opts, runTokenFile: this.writeRunToken(runId, token) };
       }
-      executorRun = executor.start(opts, this.makeEvents(runId));
+      executorRun = executor.start(
+        opts,
+        this.makeEvents(runId, this.runStreams())
+      );
     } catch (err) {
       const raw = (err as Error).message;
       const meta = this.registry.get(runId);
@@ -4967,6 +4978,8 @@ export class Orchestrator {
       this.stoppingRuns.delete(runId);
       this.removeRunToken(runId);
       this.registry.clearPendingApprovals(runId);
+      // Text it never finished is not logged, as before runs streamed.
+      this.live.forget(runId);
     }
     // A finish that reports no session must not erase the one recordSession
     // already stored: spreading `sessionId: undefined` over the meta did
@@ -5084,11 +5097,25 @@ export class Orchestrator {
     }
   }
 
+  // Whether a run started now streams its text (config `runs.stream`), read
+  // fresh like the run caps, so a change applies from the next run on.
+  private runStreams(): boolean {
+    return runSettings(loadConfig(this.ctx.rootDir)).stream === 'live';
+  }
+
   // Builds the ExecutorEvents callbacks for one run, closing over its runId
-  // so the Executor implementation never has to know it.
-  private makeEvents(runId: string): ExecutorEvents {
+  // so the Executor implementation never has to know it. A run that
+  // `streams` gets onDelta, and one live-text turn for its whole life.
+  private makeEvents(runId: string, streams: boolean): ExecutorEvents {
+    const turnId = streams ? this.live.begin(runId) : null;
     return {
       onEntry: (entry) => {
+        // The entry holds the text its segment streamed, so the segment
+        // leaves the live text before anyone hears of the entry: a read
+        // after run.log never shows that text twice.
+        if (turnId !== null && entry.streamId !== undefined) {
+          this.live.drop(runId, turnId, entry.streamId);
+        }
         this.transcriptFor(runId).appendEntry(entry);
         // The step rides on the meta so a list read has it without the log;
         // a stray entry after the finish names no step.
@@ -5110,6 +5137,12 @@ export class Orchestrator {
         if (fanOutChanged) this.ctx.events.broadcast({ type: 'run.changed' });
         this.scheduleClaimsRefresh(runId);
       },
+      ...(turnId !== null
+        ? {
+            onDelta: (segmentId: string, text: string) =>
+              this.runDelta(runId, turnId, segmentId, text),
+          }
+        : {}),
       onApprovalRequest: (request) => {
         this.registry.addPendingApproval(runId, request);
         if (this.registry.get(runId)?.state !== 'awaiting-approval')
@@ -5146,6 +5179,38 @@ export class Orchestrator {
       },
       onFinish: (finish) => this.handleFinish(runId, finish),
     };
+  }
+
+  // One frame of a run's live text: kept for the snapshot and broadcast to
+  // the same sockets run.log reaches (every one, today). A frame that lands
+  // after the run ended is dropped.
+  private runDelta(
+    runId: string,
+    turnId: string,
+    segmentId: string,
+    text: string
+  ): void {
+    if (text === '') return;
+    const seq = this.live.append(runId, turnId, segmentId, text);
+    if (seq === undefined) return;
+    this.ctx.events.broadcast({
+      type: 'run.delta',
+      runId,
+      turnId,
+      seq,
+      segmentId,
+      text,
+    });
+  }
+
+  /**
+   * A live run's streamed text it has not logged as an entry yet, for GET
+   * /api/runs/:id's `live`, so a window that opens or reconnects mid-run
+   * starts from what was already written. Undefined once the run ended, or
+   * for a run whose text does not stream.
+   */
+  liveText(runId: string): LiveText | undefined {
+    return this.live.snapshot(runId);
   }
 
   // Export mode's load check moved the run to another memory mode: kept on a

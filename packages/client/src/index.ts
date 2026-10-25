@@ -170,6 +170,7 @@ export type {
   ReviewTarget,
   ReviewVerdict,
   RunDetail,
+  RunDetailView,
   RunKind,
   PresenceEntry,
   AuthTier,

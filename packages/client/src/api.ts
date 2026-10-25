@@ -377,15 +377,23 @@ export interface NormalizedEntry {
   // Set on entries delivered via the orchestrator's `notifyRun` — a
   // non-interrupting channel digest rather than a message to respond to.
   digest?: boolean;
+  // `assistant` entries whose text streamed: the segment its `run.delta`
+  // frames carried, so a client drops that live text once the entry lands.
+  streamId?: string;
 }
 
-// The body of `GET /api/runs/:id`.
+// A run's transcript and meta.
 export interface RunDetail {
   meta: RunMeta;
   entries: NormalizedEntry[];
   evidence: CommandEvidence[];
   mutations: MutationEvidence[];
 }
+
+// Mirrors RunDetailView in packages/server/src/orchestrator/transcript.ts —
+// the body of `GET /api/runs/:id`: the detail, plus the text a live run has
+// streamed and not logged as an entry yet.
+export type RunDetailView = RunDetail & { live?: LiveText };
 
 export interface DiffFile {
   path: string;
@@ -1158,6 +1166,18 @@ export type ServerEvent =
   | { type: 'hello'; version: string }
   | { type: 'run.changed' }
   | { type: 'run.log'; runId: string; entry: NormalizedEntry }
+  // A live run's text as the model writes it: `text` extends segment
+  // `segmentId` of the run's turn `turnId`, until a run.log `assistant` entry
+  // with that `streamId` replaces it. A gap in `seq` means a missed frame;
+  // GET /api/runs/:id's `live` repairs it. Mirrors packages/server/src/events.ts.
+  | {
+      type: 'run.delta';
+      runId: string;
+      turnId: string;
+      seq: number;
+      segmentId: string;
+      text: string;
+    }
   // Phase 5 P2: a plan's state (running -> ready|failed) changed, or it was
   // just confirmed. Same "go refetch" contract as the other *.changed events
   // — mirrors packages/server/src/events.ts exactly.
@@ -1784,7 +1804,8 @@ export interface LiveSegment {
 }
 
 // Mirrors LiveText in packages/server/src/liveText.ts — what a running turn has
-// streamed and not committed, as GET /api/overseer/:id's `live` carries it.
+// streamed and not committed, as GET /api/overseer/:id's (and GET
+// /api/runs/:id's) `live` carries it.
 export interface LiveText {
   /** Per conversation (or run), monotonic for the daemon's life: never resets between turns. */
   seq: number;
@@ -3358,7 +3379,7 @@ export interface ApiClient {
   // All agents page; merge with `fetchRuns` for the full picture. Refetch on
   // `plan.changed`, `draft.changed` and `overseer.changed`.
   fetchAgentSessions(): Promise<AgentSessionMeta[]>;
-  fetchRun(id: string): Promise<RunDetail>;
+  fetchRun(id: string): Promise<RunDetailView>;
   cancelRun(runId: string): Promise<void>;
   /**
    * Asks a live run to stop gracefully: the agent finishes its current

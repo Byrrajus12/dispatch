@@ -126,6 +126,19 @@ describe('events mirror dispatchd', () => {
     expect(client).toEqual(server);
   });
 
+  it('run.delta declares the same fields as overseer.delta, keyed by run', () => {
+    const member = (source: string): string[] | null => {
+      const body = /\{\n {6}type: 'run\.delta';([\s\S]*?)\n {4}\}/.exec(
+        source
+      )?.[1];
+      if (body === undefined) return null;
+      return [...body.matchAll(/\n {6}(\w+\??):/g)].map((m) => m[1]);
+    };
+    const server = member(serverSource('events.ts'));
+    expect(server).toEqual(['runId', 'turnId', 'seq', 'segmentId', 'text']);
+    expect(member(clientSource())).toEqual(server);
+  });
+
   it('epic.paused declares the same fields with the same optionality', () => {
     const member = (source: string): string[] | null => {
       const body = /\{\n {6}type: 'epic\.paused';([\s\S]*?)\n {4}\}/.exec(
@@ -138,6 +151,28 @@ describe('events mirror dispatchd', () => {
     const client = member(clientSource());
     expect(server).not.toBeNull();
     expect(client).toEqual(server);
+  });
+});
+
+describe('run types mirror dispatchd', () => {
+  it('NormalizedEntry declares the same fields with the same optionality', () => {
+    const server = fields(
+      serverSource('orchestrator', 'types.ts'),
+      'NormalizedEntry'
+    );
+    expect(server).toContain('streamId?');
+    expect(fields(clientSource(), 'NormalizedEntry')).toEqual(server);
+  });
+
+  it('RunDetail and RunDetailView match the run detail the API answers with', () => {
+    const transcript = serverSource('orchestrator', 'transcript.ts');
+    const server = fields(transcript, 'RunDetail');
+    expect(server).not.toBeNull();
+    expect(fields(clientSource(), 'RunDetail')).toEqual(server);
+    const pattern = /export type RunDetailView = ([^;]+);/;
+    const view = pattern.exec(transcript)?.[1];
+    expect(view).toBeDefined();
+    expect(pattern.exec(clientSource())?.[1]).toBe(view);
   });
 });
 

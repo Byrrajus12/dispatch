@@ -62,3 +62,18 @@ describe('LiveTextBuffer', () => {
     expect(live.snapshot('wc-2')).toMatchObject({ seq: 1 });
   });
 });
+
+describe('LiveTextBuffer.forget', () => {
+  it('drops a key for good, ending its turn and its seq', () => {
+    const live = new LiveTextBuffer();
+    const turn = live.begin('r-1');
+    live.append('r-1', turn, 'a', 'half');
+    live.forget('r-1');
+    expect(live.snapshot('r-1')).toBeUndefined();
+    expect(live.isRunning('r-1', turn)).toBe(false);
+    expect(live.append('r-1', turn, 'a', 'late')).toBeUndefined();
+    // A key begun again starts counting over: forget is for keys that are done.
+    const again = live.begin('r-1');
+    expect(live.append('r-1', again, 'a', 'x')).toBe(1);
+  });
+});

@@ -9,8 +9,9 @@ export interface LiveSegment {
 
 /**
  * The text a running turn has streamed but not committed to its record — the
- * `live` field GET /api/overseer/:id answers with while a turn runs, so a
- * window that opens or reconnects mid-turn starts from what was already said.
+ * `live` field GET /api/overseer/:id (and GET /api/runs/:id) answers with
+ * while a turn runs, so a window that opens or reconnects mid-turn starts
+ * from what was already said. A run has one turn, for its whole life.
  */
 export interface LiveText {
   /** Per conversation (or run), monotonic for the daemon's life: never resets between turns. */
@@ -26,9 +27,9 @@ interface LiveState extends LiveText {
 }
 
 /**
- * Live text per key (an Overseer conversation id), in memory only: nothing
- * here is ever persisted, and a daemon restart starts every `seq` over (the
- * websocket's `hello` tells clients to drop what they hold).
+ * Live text per key (an Overseer conversation id, or a run id), in memory
+ * only: nothing here is ever persisted, and a daemon restart starts every
+ * `seq` over (the websocket's `hello` tells clients to drop what they hold).
  *
  * Every write names the turn it belongs to, so a backend that keeps talking
  * after its turn ended (Stop settles the turn before the model stops) changes
@@ -90,6 +91,15 @@ export class LiveTextBuffer {
     state.segments = [];
     state.running = false;
     return left;
+  }
+
+  /**
+   * Forgets `key` for good, its `seq` too, ending a turn still running. For
+   * a key that takes no more turns (a run that ended), so the buffer does
+   * not keep one entry per run for the daemon's life.
+   */
+  forget(key: string): void {
+    this.states.delete(key);
   }
 
   /** A copy of `key`'s running turn, or undefined when none runs. */
