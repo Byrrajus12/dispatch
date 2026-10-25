@@ -330,7 +330,10 @@ The desktop appends a frame that continues its cached detail, ignores one it
 already holds, and refetches once (never cancelling a fetch already out) after
 one that skips ahead. Frames that land while a detail fetch is out are added to
 its response by index before it lands, so steady output never restarts a fetch.
-A frame from an older daemon has no index and is appended as before.
+A frame from an older daemon has no index and is appended as before. A daemon
+that could not write an entry to the transcript still sends its frame, with no
+index, and then `run.changed`, so every window refetches the run instead of
+staying one entry ahead of the transcript.
 
 **Audience (owner decision, 2026-10-23).** `overseer.delta` goes only to the
 conversation's live audience (`overseerLiveAudience` in

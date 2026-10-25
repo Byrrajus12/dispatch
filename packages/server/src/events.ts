@@ -30,7 +30,8 @@ export type ServerEvent =
   | { type: 'run.changed' }
   // `index` is the entry's place among the transcript's entries (how many came
   // before it), so a client can tell a frame it already holds, or one it
-  // missed, from the next one. Absent when the entry could not be written.
+  // missed, from the next one. Absent when the entry could not be written; a
+  // run.changed follows such a frame so clients refetch the run.
   | { type: 'run.log'; runId: string; entry: NormalizedEntry; index?: number }
   // A live run's text as the model writes it: `text` extends segment
   // `segmentId` of turn `turnId` (one per run). View-only, never stored; the

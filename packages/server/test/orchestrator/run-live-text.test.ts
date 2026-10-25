@@ -8,6 +8,7 @@ import { TaskCache } from '../../src/cache.js';
 import { EventBus, type ServerEvent } from '../../src/events.js';
 import { FakeExecutor } from '../../src/orchestrator/executors/fake.js';
 import { Orchestrator } from '../../src/orchestrator/orchestrator.js';
+import { Transcript } from '../../src/orchestrator/transcript.js';
 import type { NormalizedEntry } from '../../src/orchestrator/types.js';
 import { initGitRepo } from './helpers.js';
 
@@ -190,6 +191,37 @@ describe('a run streams its text live', () => {
     for (const log of logs) {
       expect(entries[log.index ?? -1]).toEqual(log.entry);
     }
+  });
+
+  // A client shows a frame with no index as the next entry, which puts it one
+  // ahead of the transcript; run.changed makes it refetch and line up again.
+  it('follows the frame of an entry it could not write with run.changed', async () => {
+    const { orchestrator, seen, taskId } = setUp();
+    const run = await orchestrator.dispatch(taskId, 'fake');
+    await waitFor(() => deltas(seen).length === 2);
+    const failing = spyOn(Transcript.prototype, 'appendEntry');
+    failing.mockImplementation(() => {
+      throw new Error('ENOSPC: no space left on device');
+    });
+    const logged = spyOn(console, 'error').mockImplementation(() => {});
+    const from = seen.length;
+    try {
+      orchestrator.logOutgoing(run.id, { id: 'm-1', body: 'Unwritten' });
+    } finally {
+      failing.mockRestore();
+      logged.mockRestore();
+    }
+    orchestrator.logOutgoing(run.id, { id: 'm-2', body: 'Written' });
+    expect(
+      seen.slice(from).map((e) => [e.type, e.type === 'run.log' && e.index])
+    ).toEqual([
+      ['run.log', undefined],
+      ['run.changed', false],
+      ['run.log', 0],
+    ]);
+    orchestrator.sendMessage(run.id, 'go on');
+    orchestrator.sendMessage(run.id, 'finish');
+    await waitFor(() => orchestrator.getRun(run.id)?.meta.state === 'finished');
   });
 
   // Parity with run.log from onEntry, which reaches every socket today: the

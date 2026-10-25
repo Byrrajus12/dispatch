@@ -345,7 +345,8 @@ function checkGuard(task: TaskDoc, guard: DispatchGuard | undefined): void {
 // Only a person owns a run (RunMeta.dispatchedBy): 'none', an agent and the
 // legacy bare `human` read as nobody.
 // A run.log frame for an entry at `index` in the transcript, or with no index
-// when writing the entry failed (the frame still goes out, as before).
+// when writing the entry failed (the frame still goes out, as before, through
+// Orchestrator.broadcastRunLog).
 function runLog(
   runId: string,
   entry: NormalizedEntry,
@@ -772,7 +773,7 @@ export class Orchestrator {
     this.bestEffort(`logging an outgoing message for run ${runId}`, () => {
       index = this.appendRunEntry(runId, entry);
     });
-    this.ctx.events.broadcast(runLog(runId, entry, index), audience);
+    this.broadcastRunLog(runId, entry, index, audience);
   }
 
   // deliverToRun for a non-interrupting channel digest: logged the same way,
@@ -1987,7 +1988,7 @@ export class Orchestrator {
     this.bestEffort(`logging stop request for run ${runId}`, () => {
       index = this.appendRunEntry(runId, entry);
     });
-    this.ctx.events.broadcast(runLog(runId, entry, index));
+    this.broadcastRunLog(runId, entry, index);
     this.ctx.events.broadcast({ type: 'run.changed' });
 
     executorRun.requestStop();
@@ -4803,6 +4804,21 @@ export class Orchestrator {
     return new Transcript(transcriptPath(this.ctx.rootDir, runId));
   }
 
+  // Sends the run.log frame of an entry appendRunEntry wrote at `index`, or
+  // could not write (undefined). A frame with no index is shown as the next
+  // entry, so a window that showed it would be one ahead of the transcript and
+  // hold back the run's next real entry as one it already has; run.changed
+  // after it makes every window refetch the run and line up again.
+  private broadcastRunLog(
+    runId: string,
+    entry: NormalizedEntry,
+    index: number | undefined,
+    audience?: (who: SocketAudience | undefined) => boolean
+  ): void {
+    this.ctx.events.broadcast(runLog(runId, entry, index), audience);
+    if (index === undefined) this.ctx.events.broadcast({ type: 'run.changed' });
+  }
+
   // Appends `entry` to `runId`'s transcript and returns its index among the
   // transcript's entries, which run.log carries. The count is read from the
   // file once and then kept, so an append does not reread the transcript.
@@ -5291,7 +5307,7 @@ export class Orchestrator {
       });
       index = this.appendRunEntry(runId, entry);
     });
-    this.ctx.events.broadcast(runLog(runId, entry, index));
+    this.broadcastRunLog(runId, entry, index);
     this.ctx.events.broadcast({ type: 'run.changed' });
   }
 
@@ -5345,7 +5361,7 @@ export class Orchestrator {
       this.bestEffort(`logging session mismatch for run ${runId}`, () => {
         index = this.appendRunEntry(runId, notice);
       });
-      this.ctx.events.broadcast(runLog(runId, notice, index));
+      this.broadcastRunLog(runId, notice, index);
       console.error(`dispatchd: run ${runId}: ${notice.text}`);
     }
     this.registry.updateMeta(runId, {
@@ -5767,7 +5783,7 @@ export class Orchestrator {
           index = this.appendRunEntry(newRunId, notice);
         }
       );
-      this.ctx.events.broadcast(runLog(newRunId, notice, index));
+      this.broadcastRunLog(newRunId, notice, index);
     }
 
     // A continuing session's prompt is the continuation, and its fallback the
