@@ -69,18 +69,25 @@ function repairOverseerLive(
 /**
  * Folds one `overseer.delta` frame into its conversation's live text, for the
  * websocket handler. A missed frame refetches that record once; its `live`
- * snapshot repairs the text.
+ * snapshot repairs the text. An abandoning frame takes its segment off the
+ * screen at once.
  */
 export function applyOverseerDelta(
   queryClient: QueryClient,
   port: number | undefined,
   event: LiveFrame & { conversationId: string }
 ): void {
-  const { conversationId, turnId, seq, segmentId, text } = event;
+  const { conversationId, turnId, seq, segmentId, text, abandoned } = event;
   liveTextStore.applyDelta(
     port,
     overseerLiveKey(conversationId),
-    { turnId, seq, segmentId, text },
+    {
+      turnId,
+      seq,
+      segmentId,
+      text,
+      ...(abandoned === true ? { abandoned } : {}),
+    },
     () => repairOverseerLive(queryClient, port, conversationId)
   );
 }

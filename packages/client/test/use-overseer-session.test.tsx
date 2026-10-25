@@ -1064,6 +1064,33 @@ test('live follows delta frames, and is null once the turn is not running', asyn
   expect(result.current.live).toBeNull();
 });
 
+// The server sends one when the model's stream broke off mid-block: no row
+// will ever replace that text, so the view must not keep it.
+test('an abandoning frame takes its segment off the live text at once', async () => {
+  const { result, queryClient } = openWith([
+    runningRecord({
+      seq: 1,
+      turnId: 't1',
+      segments: [{ id: 't1:x', text: 'Let me lo' }],
+    }),
+  ]);
+  await waitFor(() => {
+    expect(result.current.live?.segments).toEqual([
+      { id: 't1:x', text: 'Let me lo' },
+    ]);
+  });
+  act(() => {
+    applyOverseerDelta(queryClient, PORT, {
+      ...delta(2, 't1:x', ''),
+      abandoned: true,
+    });
+    applyOverseerDelta(queryClient, PORT, delta(3, 't1:y', 'Let me look'));
+  });
+  expect(result.current.live?.segments).toEqual([
+    { id: 't1:y', text: 'Let me look' },
+  ]);
+});
+
 test('a missed frame refetches the record once, and its snapshot repairs the text', async () => {
   const { result, queryClient, calls } = openWith([
     runningRecord({
