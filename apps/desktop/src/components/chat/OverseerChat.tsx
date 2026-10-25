@@ -11,7 +11,6 @@ import {
   Plus,
   Search,
   Shield,
-  TerminalSquare,
   Wrench,
   X,
 } from 'lucide-react';
@@ -45,6 +44,7 @@ import { IconButton, type IconButtonProps } from '@/ui/ai/icon-button';
 import { PillButton } from '@/ui/ai/pill';
 import { PromptBar } from '@/ui/ai/prompt-bar';
 import { StreamingText } from '@/ui/ai/streaming-text';
+import { ToolApprovalCard } from '@/ui/ai/tool-approval-card';
 import { ToolChip, ToolChipGroup } from '@/ui/ai/tool-chips';
 import { Button } from '@/ui/button';
 import {
@@ -457,71 +457,36 @@ function OverseerConfirmBatch({
 
 interface OverseerApproveCardProps {
   approval: OverseerApproval;
-  /** A decision for *this* call is in flight — this card owns the spinner. */
-  deciding: boolean;
   /** Some approval decision is in flight; every approve card locks. */
   locked: boolean;
-  onDecide: (decision: OverseerApprovalDecision) => void;
+  onDecide: (decision: OverseerApprovalDecision) => Promise<void>;
 }
 
 /**
  * A built-in tool call the overseer's turn is parked on — Bash, Edit, a
  * project MCP tool — which is a different question from the confirm card
  * above: nothing is queued for later, the session is blocked right now and
- * allowing runs the call at once. Three answers rather than two, because
- * "yes", "yes and stop asking about this tool" and "no" are genuinely
- * different instructions, the same trio a run's approval offers.
+ * allowing runs the call at once. It is the same card a run's parked call
+ * gets: allow once, allow the tool for the rest of the conversation, or deny
+ * with an optional reason the model gets as its refusal. A held call (the
+ * floor, or Dispatch's own surfaces) is allowed once only.
  */
 function OverseerApproveCard({
   approval,
-  deciding,
   locked,
   onDecide,
 }: OverseerApproveCardProps) {
   return (
-    <div className="bg-state-waiting-surface rounded-card flex flex-col gap-2 self-stretch border-[0.5px] border-(--state-waiting-edge) px-3 py-2.5">
-      <div className="text-state-waiting flex items-center gap-1.5 text-[12px] font-medium">
-        <TerminalSquare className="size-3.5" />
-        Wants to run
-        <span className="text-muted-foreground font-book">
-          {approval.toolName}
-        </span>
-      </div>
-      {/* The call itself — a command line, so it keeps the code face. */}
-      <p className="font-mono text-[12px] break-all">{approval.summary}</p>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          disabled={locked}
-          onClick={() => onDecide({ allow: true })}
-          aria-label={`Allow: ${approval.summary}`}
-        >
-          {deciding ? (
-            <Spinner className="size-3.5" />
-          ) : (
-            <Check className="size-3.5" />
-          )}
-          Allow
-        </Button>
-        {/* A held call (the floor, or Dispatch's own surfaces) is allowed once only. */}
-        {approval.held !== true && (
-          <PillButton
-            disabled={locked}
-            onClick={() => onDecide({ allow: true, scope: 'session' })}
-            aria-label={`Allow ${approval.toolName} for this conversation`}
-          >
-            Allow for this conversation
-          </PillButton>
-        )}
-        <PillButton
-          disabled={locked}
-          onClick={() => onDecide({ allow: false })}
-          aria-label={`Deny: ${approval.summary}`}
-        >
-          <X className="size-3.5" />
-          Deny
-        </PillButton>
-      </div>
-    </div>
+    <ToolApprovalCard
+      toolName={approval.toolName}
+      question="Wants to run"
+      // The call itself, a command line, so it keeps the code face.
+      preview={approval.summary}
+      sessionScope={approval.held === true ? undefined : 'this conversation'}
+      sessionDescription="Ends after four hours, or when the conversation starts over."
+      onDecide={onDecide}
+      busy={locked}
+    />
   );
 }
 
@@ -954,8 +919,8 @@ export function OverseerChat({
   function decideApproval(
     requestId: string,
     decision: OverseerApprovalDecision
-  ) {
-    void overseer.decideApproval(requestId, decision);
+  ): Promise<void> {
+    return overseer.decideApproval(requestId, decision);
   }
 
   // A failed turn's fixes: re-send the last ask, or hand the error to the agent.
@@ -1046,7 +1011,6 @@ export function OverseerChat({
           <OverseerApproveCard
             key={item.key}
             approval={item.approval}
-            deciding={decidingRequestId === item.approval.requestId}
             locked={decidingRequestId !== null}
             onDecide={(decision) =>
               decideApproval(item.approval.requestId, decision)

@@ -834,12 +834,9 @@ test('a reader scrolled up stays put while live text grows', async () => {
   expect(log.scrollTop).toBe(100);
 });
 
-// A parked built-in call is the one row where the session is blocked right
-// now: the card offers the three answers a run's approval does, and each one
-// reaches the session's decideApproval with the matching decision.
-test('a parked tool call renders an allow/deny card wired to decideApproval', async () => {
-  const decisions: unknown[] = [];
-  const overseer = overseerSession({
+// A running turn parked on `git status`, recording every decision it gets.
+function parkedSession(decisions: unknown[], held = false): OverseerSession {
+  return overseerSession({
     conversationId: 'w-1',
     record: overseerRecord({
       state: 'running',
@@ -865,6 +862,7 @@ test('a parked tool call renders an allow/deny card wired to decideApproval', as
           input: { command: 'git status' },
           summary: 'Bash: git status',
           requestedAt: '2026-08-10T00:00:01Z',
+          ...(held ? { held: true } : {}),
         },
       ],
     }),
@@ -873,27 +871,84 @@ test('a parked tool call renders an allow/deny card wired to decideApproval', as
       return Promise.resolve();
     },
   });
-  render(<ChatWithDraft overseer={overseer} />);
+}
+
+// A parked built-in call is the one row where the session is blocked right
+// now: the card is the one a run's parked call gets, with its three answers,
+// and each reaches the session's decideApproval with the matching decision.
+test('a parked tool call renders the shared approval card wired to decideApproval', async () => {
+  const decisions: unknown[] = [];
+  render(<ChatWithDraft overseer={parkedSession(decisions)} />);
 
   expect(screen.getByText('Wants to run')).toBeDefined();
   expect(screen.getByText('Bash: git status')).toBeDefined();
   // Blocked on the human, so no "working" spinner row under the card.
   expect(screen.queryByText('The overseer is working…')).toBeNull();
 
+  await clickAndSettle(screen.getByRole('radio', { name: /^Approve once/ }));
   await clickAndSettle(
-    screen.getByRole('button', { name: 'Allow: Bash: git status' })
-  );
-  await clickAndSettle(
-    screen.getByRole('button', { name: 'Allow Bash for this conversation' })
-  );
-  await clickAndSettle(
-    screen.getByRole('button', { name: 'Deny: Bash: git status' })
+    screen.getByRole('radio', { name: /^Allow Bash for this conversation/ })
   );
   expect(decisions).toEqual([
-    ['req-1', { allow: true }],
+    ['req-1', { allow: true, scope: 'once' }],
     ['req-1', { allow: true, scope: 'session' }],
+  ]);
+});
+
+// Deny asks why first; the reason is optional and reaches the model as its
+// refusal, so a bare "no" does not leave it guessing.
+test('denying a parked call collects an optional reason', async () => {
+  const decisions: unknown[] = [];
+  render(<ChatWithDraft overseer={parkedSession(decisions)} />);
+
+  fireEvent.click(screen.getByRole('radio', { name: /^Deny and tell it why/ }));
+  // Nothing is decided until the reason box is sent.
+  expect(decisions).toEqual([]);
+  const reason = screen.getByLabelText('Reason for denying');
+  expect(document.activeElement).toBe(reason);
+  // The other answers wait while the reason is written.
+  expect(
+    screen
+      .getByRole('radio', { name: /^Approve once/ })
+      .hasAttribute('disabled')
+  ).toBe(true);
+  fireEvent.change(reason, {
+    target: { value: '  Use git diff --stat, not status.  ' },
+  });
+  await clickAndSettle(
+    screen.getByRole('button', { name: 'Deny and tell it why' })
+  );
+
+  fireEvent.click(screen.getByRole('radio', { name: /^Deny and tell it why/ }));
+  await clickAndSettle(screen.getByRole('button', { name: 'Deny' }));
+  expect(decisions).toEqual([
+    ['req-1', { allow: false, reason: 'Use git diff --stat, not status.' }],
     ['req-1', { allow: false }],
   ]);
+});
+
+// A held call (the floor, or Dispatch's own surfaces) is allowed once only.
+test('a held call offers no grant for the conversation', () => {
+  render(<ChatWithDraft overseer={parkedSession([], true)} />);
+  expect(screen.getByRole('radio', { name: /^Approve once/ })).toBeDefined();
+  expect(
+    screen.queryByRole('radio', { name: /for this conversation/ })
+  ).toBeNull();
+});
+
+// One decision at a time across every approval card: the session holds a
+// single lock, so a card must not take a click while another decides.
+test('approval cards lock while any approval is being decided', () => {
+  const decisions: unknown[] = [];
+  render(
+    <ChatWithDraft
+      overseer={{ ...parkedSession(decisions), decidingRequestId: 'req-0' }}
+    />
+  );
+  const once = screen.getByRole('radio', { name: /^Approve once/ });
+  expect(once.hasAttribute('disabled')).toBe(true);
+  fireEvent.click(once);
+  expect(decisions).toEqual([]);
 });
 
 // The opening composer picks the model the conversation opens on (the
