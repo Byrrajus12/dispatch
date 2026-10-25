@@ -2,8 +2,9 @@ import type { LiveSegment, LiveText } from './api';
 
 /**
  * Live text: what a running turn has streamed and not committed to its record
- * yet, folded from the daemon's delta frames (`overseer.delta`, later
- * `run.delta`) and repaired from the `live` snapshot its record GET carries.
+ * yet, folded from the daemon's delta frames (`overseer.delta`, `run.delta`)
+ * and repaired from the `live` snapshot its record's read carries
+ * (GET /api/overseer/:id, GET /api/runs/:id).
  *
  * The frames are view-only and may be missed (a dropped socket, a window that
  * opened mid-turn), so each carries the key's `seq`. A frame that does not
