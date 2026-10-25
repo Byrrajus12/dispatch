@@ -5,6 +5,15 @@ holds what a user upgrading needs to know.
 
 ## Unreleased
 
+### Added
+
+- **The Overseer and run chats show the agent as it writes.** A running turn's
+  text streams into the chat, the Overseer keeps what it says between tool calls
+  as narration, and a run's tool chips end done or failed. The Overseer's
+  approval card takes a reason when you deny, as a run's does. To stop
+  streaming, set `overseer.stream` (`live`, `narration` or `off`) or
+  `runs.stream` (`live` or `off`) in `.dispatch/config.yml`.
+
 ### Changed
 
 - **`dispatch team invite` now makes a team invite link.** It prints one
@@ -20,3 +29,9 @@ holds what a user upgrading needs to know.
   `close-legacy`, `transport` and the rest are under `dispatch team advanced`,
   and `tokens` and `revoke` under `dispatch team host`. The old names still
   work.
+
+### Removed
+
+- **`dispatch tui` is gone**, with the terminal UI it opened. The desktop app
+  covers the Overseer, Tasks and Runs, and `dispatch run`, `dispatch approvals`
+  and `dispatch approve` cover runs from a terminal.
