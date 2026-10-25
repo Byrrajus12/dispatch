@@ -70,31 +70,38 @@ export function useStreamedText(
   const enabled = (opts?.enabled ?? true) && !prefersReducedMotion();
   const [shown, setShown] = useState(full);
   // Worked out during render, so text that is not a continuation never flashes the
-  // old reveal for a frame before the effect below catches up.
+  // old reveal for a frame before the effects below catch up.
   const visible = enabled && full.startsWith(shown) ? shown : full;
-  // The reveal speed, set each time the text grows: from what was hidden at that
-  // moment, so the whole tail lands within CATCH_UP_TICKS rather than slowing down as
-  // it shrinks.
-  const pace = useRef<{ full: string; step: number } | null>(null);
+  const behind = visible.length < full.length;
+  // What the ticking reveal is heading for, and how fast: the speed is set each time
+  // the text grows, from what was hidden at that moment, so the whole tail lands
+  // within CATCH_UP_TICKS rather than slowing down as it shrinks.
+  const target = useRef({ full, step: 1 });
 
   useEffect(() => {
-    if (visible.length >= full.length) {
-      // Keeps the state on the text shown, so the next delta continues from it.
-      setShown(full);
-      return;
-    }
-    if (pace.current?.full !== full) {
-      pace.current = {
+    if (target.current.full !== full) {
+      target.current = {
         full,
         step: revealStep(full.length - visible.length, cps),
       };
     }
-    const { step } = pace.current;
-    const id = setTimeout(() => {
-      setShown(nextSlice(full, visible, step));
+    // Keeps the state on the text shown, so the next delta continues from it.
+    if (!behind) setShown(full);
+  }, [full, visible, behind, cps]);
+
+  // One interval for as long as the reveal is behind, reading the latest text from
+  // `target`. It is not restarted when the text grows: deltas often land faster than
+  // a tick, and a timer reset by each of them would never fire.
+  useEffect(() => {
+    if (!behind) return;
+    const id = setInterval(() => {
+      setShown((current) => {
+        const { full: text, step } = target.current;
+        return nextSlice(text, text.startsWith(current) ? current : text, step);
+      });
     }, TICK_MS);
-    return () => clearTimeout(id);
-  }, [full, visible, cps]);
+    return () => clearInterval(id);
+  }, [behind]);
 
   return visible;
 }

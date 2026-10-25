@@ -108,6 +108,24 @@ describe('useStreamedText', () => {
     );
   });
 
+  // A stream's deltas often land faster than a tick; each one must not push the
+  // next reveal step back, or the text would sit still until the stream paused.
+  test('keeps revealing while deltas land faster than a tick', () => {
+    const words = 'one two three four five six seven eight nine ten'.split(' ');
+    const { result, rerender } = mount(words[0]);
+    let text = words[0];
+    for (const word of words.slice(1)) {
+      text = `${text} ${word}`;
+      rerender({ full: text, on: true });
+      act(() => {
+        jest.advanceTimersByTime(TICK_MS / 2);
+      });
+    }
+    expect(result.current.length).toBeGreaterThan(words[0].length);
+    tick(6);
+    expect(result.current).toBe(text);
+  });
+
   test('catches up with a burst within six ticks', () => {
     const { result, rerender } = mount('Start.');
     const burst = `Start.${' word'.repeat(150)}`;
