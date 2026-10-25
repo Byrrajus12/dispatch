@@ -385,16 +385,18 @@ those rows, so a newer daemon is safe with it.
 **Run tool results.** A run's transcript is append-only, so a tool call's
 outcome is an entry of its own. The Claude executor logs each top-level
 `tool_result` for a call the agent itself made as a `tool` entry with the call's
-`toolUseId`, no `toolName`, `status` `done` or `error`, and a preview of the
-output capped at `MAX_TOOL_RESULT_TEXT` (2,000 characters, the cap the
-Overseer's status tool rows use too). A sub-agent's results are not logged. The
-Codex executor logs a tool item when it starts and again when it completes, both
-under the item id. The desktop folds each result into its call by `toolUseId`
-(`lib/runLog.ts`), so a chip ends done or failed. In a log that reports results,
-a call shows as running until its result lands; for an older daemon, a scripted
-run, or a sub-agent's call, only the live edge does. The CLI's run lines
-(`dispatch run --watch`, `run show`, `run watch`) skip result entries, since the
-call's own line already printed.
+`toolUseId`, no `toolName`, `status` `done` or `error`, and no output: the
+transcript and its run.log frames reach every request-tier client, and a result
+can carry what the call read (the operator's exported memory, a personal doc, an
+MCP answer). Showing output means scoping run.log first. A sub-agent's results
+are not logged. The Codex executor logs a tool item when it starts and again
+when it completes, both under the item id. The desktop folds each result into
+its call by `toolUseId` (`lib/runLog.ts`), so a chip ends done or failed. In a
+log that reports results, a call shows as running until its result lands; for an
+older daemon, a scripted run, or a sub-agent's call, only the live edge does.
+`dispatch run show` folds each result into its call's line (✓ or ✗);
+`dispatch run --watch` and `run watch` skip result entries, since the call's own
+line already printed.
 
 **Rendering.** Both chats render live text through `StreamingText`
 (`packages/ui`) with the app's Markdown: text that grows continues its reveal

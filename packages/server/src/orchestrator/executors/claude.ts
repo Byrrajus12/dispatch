@@ -35,7 +35,7 @@ import { activeExperiments } from '../experiments.js';
 import type { ExperimentName } from '../experiments.js';
 import { floorGuard } from '../floorHook.js';
 import type { FloorPolicy } from '../floorHook.js';
-import { DEFAULT_EXECUTOR_PROFILE, MAX_TOOL_RESULT_TEXT } from '../types.js';
+import { DEFAULT_EXECUTOR_PROFILE } from '../types.js';
 import type {
   ApprovalDecision,
   Executor,
@@ -577,32 +577,15 @@ function entriesForAssistantContent(
   return entries;
 }
 
-// A tool result's output as the transcript keeps it: its text, capped at
-// MAX_TOOL_RESULT_TEXT. Image blocks and anything else without text add
-// nothing.
-function toolResultPreview(content: unknown): string {
-  const parts =
-    typeof content === 'string'
-      ? [content]
-      : Array.isArray(content)
-        ? (content as AssistantContentBlock[]).flatMap((block) =>
-            block.type === 'text' && typeof block.text === 'string'
-              ? [block.text]
-              : []
-          )
-        : [];
-  const text = parts.join('\n').trim();
-  return text.length <= MAX_TOOL_RESULT_TEXT
-    ? text
-    : `${text.slice(0, MAX_TOOL_RESULT_TEXT)}… (truncated)`;
-}
-
 // The entries a `user`-typed SDK message amounts to. A tool_result answering
 // a sub-agent spawn finishes that sub-agent (an `agent` entry); one answering
 // another tool call the agent itself made (`toolCalls`) is that call's
-// outcome: a `tool` entry with the call's `toolUseId`, `status` done or error,
-// and a preview of the output as `text`. A sub-agent's own tool results, and
-// the prompts this executor sends, are skipped: their calls stay `running`.
+// outcome: a `tool` entry with the call's `toolUseId` and `status` done or
+// error, and no output. The transcript and its run.log frames reach every
+// request-tier client, and a result can carry what the call read (the
+// operator's exported memory, a personal doc, an MCP answer), so only the
+// outcome is kept. A sub-agent's own tool results, and the prompts this
+// executor sends, are skipped: their calls stay `running`.
 function entriesForUserContent(
   message: {
     message: { content: unknown };
@@ -626,13 +609,11 @@ function entriesForUserContent(
     }
     const id = block.tool_use_id;
     if (!topLevel || id === undefined || !toolCalls.delete(id)) continue;
-    const preview = toolResultPreview(block.content);
     entries.push({
       ts,
       kind: 'tool',
       toolUseId: id,
       status: block.is_error === true ? 'error' : 'done',
-      ...(preview !== '' ? { text: preview } : {}),
     });
   }
   return entries;

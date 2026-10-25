@@ -3,10 +3,9 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { rmSync } from 'node:fs';
 
 import { ClaudeExecutor } from '../../src/orchestrator/executors/claude.js';
-import {
-  type ExecutorEvents,
-  MAX_TOOL_RESULT_TEXT,
-  type NormalizedEntry,
+import type {
+  ExecutorEvents,
+  NormalizedEntry,
 } from '../../src/orchestrator/types.js';
 import { recorded } from './claudeRecordings.js';
 import { initGitRepo, withRunEndControls } from './helpers.js';
@@ -125,7 +124,7 @@ function toolResult(
 // A top-level tool_result is its call's outcome, logged as a `tool` entry of
 // its own that readers fold into the call by toolUseId.
 describe('ClaudeExecutor tool results', () => {
-  it('logs a tool call, then its result with the same toolUseId and a preview', async () => {
+  it('logs a tool call, then its result with the same toolUseId', async () => {
     const entries = await entriesFor([
       toolUse('tu-1', 'Bash'),
       toolResult('tu-1', 'file-a\nfile-b'),
@@ -143,48 +142,41 @@ describe('ClaudeExecutor tool results', () => {
         kind: 'tool',
         toolUseId: 'tu-1',
         status: 'done',
-        text: 'file-a\nfile-b',
       },
     ]);
   });
 
-  it('marks a failed call as an error and reads text out of block content', async () => {
+  it('marks a failed call as an error', async () => {
     const entries = await entriesFor([
       toolUse('tu-1', 'Bash'),
-      toolResult(
-        'tu-1',
-        [
-          { type: 'text', text: 'exit code 1' },
-          { type: 'image', source: { type: 'base64', data: 'xx' } },
-          { type: 'text', text: 'boom' },
-        ],
-        { isError: true }
-      ),
+      toolResult('tu-1', [{ type: 'text', text: 'exit code 1' }], {
+        isError: true,
+      }),
     ]);
 
     expect(entries[1]).toMatchObject({
       kind: 'tool',
       toolUseId: 'tu-1',
       status: 'error',
-      text: 'exit code 1\nboom',
     });
     expect(entries[1].toolName).toBeUndefined();
   });
 
-  it('caps the preview and leaves out an empty one', async () => {
-    const long = 'x'.repeat(MAX_TOOL_RESULT_TEXT + 50);
+  // The transcript reaches every request-tier client, and a result can carry
+  // what the call read: the operator's exported memory, a personal doc.
+  it("never copies a result's output into the transcript", async () => {
     const entries = await entriesFor([
       toolUse('tu-1', 'Read'),
-      toolResult('tu-1', long),
-      toolUse('tu-2', 'Write'),
-      toolResult('tu-2', [{ type: 'image', source: {} }]),
+      toolResult('tu-1', 'my private note'),
+      toolUse('tu-2', 'mcp__dispatch__memory_search'),
+      toolResult('tu-2', [{ type: 'text', text: 'a personal doc' }]),
     ]);
 
-    expect(entries[1].text).toBe(
-      `${'x'.repeat(MAX_TOOL_RESULT_TEXT)}… (truncated)`
-    );
-    expect(entries[3]).toMatchObject({ toolUseId: 'tu-2', status: 'done' });
-    expect('text' in entries[3]).toBe(false);
+    for (const entry of [entries[1], entries[3]]) {
+      expect('text' in entry).toBe(false);
+    }
+    expect(JSON.stringify(entries)).not.toContain('private');
+    expect(JSON.stringify(entries)).not.toContain('personal');
   });
 
   it("skips a sub-agent's results, unknown calls and repeats", async () => {
