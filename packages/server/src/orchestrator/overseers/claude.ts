@@ -50,6 +50,125 @@ interface AssistantContentBlock {
   type: string;
   name?: string;
   input?: unknown;
+  text?: unknown;
+}
+
+// The fields of a Messages API stream event (a `stream_event` message, sent
+// with `includePartialMessages`) that live text reads: which API message and
+// block the stream is in, and each text delta.
+interface StreamEvent {
+  type: string;
+  index?: number;
+  message?: { id?: unknown };
+  content_block?: { type?: unknown };
+  delta?: { type?: unknown; text?: unknown };
+}
+
+/**
+ * Follows the text of one turn's top-level messages. Each text block is a
+ * segment, `<API message id>:<block index>` when it streamed. Its deltas go
+ * to `onTextDelta` as they arrive; its finished text waits as *pending* until
+ * the turn shows what it was: a tool call after it makes it narration, and
+ * what is still pending at the result is the reply.
+ *
+ * The SDK delivers each finished block as its own `assistant` message (same
+ * API message id, content = that one block) before the block's
+ * `content_block_stop`, so a finished text block claims the oldest segment
+ * its API message streamed. Without partial messages (live text off, or a CLI
+ * that sends none) the n-th text block of a message is `<id>:<n>` instead.
+ */
+class TurnText {
+  // The API message being streamed, and the segment of each of its text blocks.
+  private messageId: string | undefined;
+  private readonly open = new Map<number, string>();
+  // Per API message: segments opened by the stream and not claimed by a
+  // finished block yet, and how many blocks arrived with none to claim.
+  private readonly unclaimed = new Map<string, string[]>();
+  private readonly withoutStream = new Map<string, number>();
+  private readonly pending: { id: string; text: string }[] = [];
+
+  constructor(private readonly opts: OverseerTurnOptions) {}
+
+  // One stream event of a top-level message.
+  event(event: StreamEvent): void {
+    if (event.type === 'message_start') {
+      const id = event.message?.id;
+      this.messageId = typeof id === 'string' ? id : undefined;
+      this.open.clear();
+      return;
+    }
+    if (event.index === undefined || this.messageId === undefined) return;
+    if (event.type === 'content_block_start') {
+      if (event.content_block?.type !== 'text') return;
+      const segment = `${this.messageId}:${event.index}`;
+      this.open.set(event.index, segment);
+      const queue = this.unclaimed.get(this.messageId) ?? [];
+      queue.push(segment);
+      this.unclaimed.set(this.messageId, queue);
+      return;
+    }
+    if (
+      event.type === 'content_block_delta' &&
+      event.delta?.type === 'text_delta' &&
+      typeof event.delta.text === 'string' &&
+      event.delta.text !== ''
+    ) {
+      const segment = this.open.get(event.index);
+      if (segment !== undefined)
+        this.opts.onTextDelta?.(segment, event.delta.text);
+    }
+  }
+
+  // A top-level assistant message: its text blocks become pending, and a tool
+  // call commits whatever was pending before it.
+  finished(message: { id?: unknown; content?: unknown }): void {
+    if (!Array.isArray(message.content)) return;
+    const apiId = typeof message.id === 'string' ? message.id : 'message';
+    for (const block of message.content as AssistantContentBlock[]) {
+      if (block.type === 'tool_use') {
+        this.commit();
+        continue;
+      }
+      if (block.type !== 'text' || typeof block.text !== 'string') continue;
+      const segment =
+        this.unclaimed.get(apiId)?.shift() ?? this.fallback(apiId);
+      if (block.text.trim() !== '') {
+        this.pending.push({ id: segment, text: block.text });
+      }
+    }
+  }
+
+  // Reports everything pending as narration, oldest first: a tool call follows.
+  commit(): void {
+    for (const segment of this.pending.splice(0)) {
+      this.opts.onNarration?.(segment.id, segment.text);
+    }
+  }
+
+  // At the result, whose text is the reply. What is pending is the reply's own
+  // text, except a segment the reply does not contain: that is committed as
+  // narration rather than lost. Returns the reply's segment, when one is.
+  settle(reply: string): string | undefined {
+    let replySegment: string | undefined;
+    for (const segment of this.pending.splice(0)) {
+      if (reply.includes(segment.text.trim())) replySegment = segment.id;
+      else this.opts.onNarration?.(segment.id, segment.text);
+    }
+    return replySegment;
+  }
+
+  private fallback(apiId: string): string {
+    const n = this.withoutStream.get(apiId) ?? 0;
+    this.withoutStream.set(apiId, n + 1);
+    return `${apiId}:${n}`;
+  }
+}
+
+// A sub-agent's messages (a Task the Overseer started) carry the id of the
+// tool call that runs it; its text, tool calls and usage are not the
+// Overseer's own. Absent counts as top-level.
+function isTopLevel(message: { parent_tool_use_id?: string | null }): boolean {
+  return (message.parent_tool_use_id ?? null) === null;
 }
 
 // Pulls the zod raw shape out of a tool's input schema for `tool()`, which
@@ -158,6 +277,17 @@ export class ClaudeOverseer implements OverseerBackend {
     );
     const allowed = new Set(allowedTools);
     const { authorizeTool } = opts;
+    // A tool call commits the text before it as narration. The tool_use block
+    // normally does that; the gates and the registry commit too, in case the
+    // CLI asks about a call before its message is read.
+    const text = new TurnText(opts);
+    const tools: OverseerToolset = {
+      tools: toolset.tools,
+      call: (name, input) => {
+        text.commit();
+        return toolset.call(name, input);
+      },
+    };
     // Floor calls the human already approved in the PreToolUse hook, by
     // tool-use id, with the input they approved: the CLI can still send such
     // a call on to canUseTool, which must not ask a second time.
@@ -166,6 +296,7 @@ export class ClaudeOverseer implements OverseerBackend {
       authorizeTool === undefined
         ? 'deny'
         : async (request) => {
+            text.commit();
             const decision = await authorizeTool(request);
             if (decision.allow) {
               approvedInHook.set(
@@ -185,6 +316,7 @@ export class ClaudeOverseer implements OverseerBackend {
       // canUseTool below (under `auto`, only what the SDK's classifier flags).
       allowedTools,
       canUseTool: async (toolName, input, callOpts) => {
+        text.commit();
         if (allowed.has(toolName)) {
           return { behavior: 'allow', updatedInput: input };
         }
@@ -234,7 +366,7 @@ export class ClaudeOverseer implements OverseerBackend {
         [SERVER_NAME]: createSdkMcpServer({
           name: SERVER_NAME,
           version: '1.0.0',
-          tools: overseerSdkTools(toolset),
+          tools: overseerSdkTools(tools),
         }),
         ...cartoMcpServers(this.rootDir),
       },
@@ -249,6 +381,10 @@ export class ClaudeOverseer implements OverseerBackend {
         append: overseerInstructions('Claude Code'),
       },
       settingSources: ['user', 'project', 'local'],
+      // Stream events only when someone shows the text as it is written.
+      ...(opts.onTextDelta !== undefined
+        ? { includePartialMessages: true }
+        : {}),
       ...(opts.permissionMode !== undefined
         ? { permissionMode: opts.permissionMode as PermissionMode }
         : {}),
@@ -266,8 +402,9 @@ export class ClaudeOverseer implements OverseerBackend {
 
     // Same CLI-resolution chain (DISPATCH_CLAUDE_BIN -> bundled SDK CLI ->
     // PATH `claude` -> install hint) the executor and planner use.
-    // Auto memory stays off: request-tier callers read overseer transcripts,
-    // so the owner's native Claude notes never load here.
+    // Auto memory stays off: others read an overseer transcript too (the
+    // operator, every deciding human through the bus and the live text), so
+    // the owner's native Claude notes never load here.
     // Attached images go to the model inline, the way a pasted screenshot does
     // in Claude Code; the input stays open until the turn settles (see
     // promptWithImages), so `turnSettled` must resolve however the turn ends.
@@ -300,7 +437,16 @@ export class ClaudeOverseer implements OverseerBackend {
           sessionId = message.session_id;
           continue;
         }
+        if (message.type === 'stream_event') {
+          if (isTopLevel(message)) {
+            text.event(message.event as unknown as StreamEvent);
+          }
+          continue;
+        }
         if (message.type === 'assistant') {
+          if (!isTopLevel(message)) continue;
+          // Narration first, so it lands ahead of the tool rows it led to.
+          text.finished(message.message);
           reportToolUses(message.message.content, opts.onToolUse);
           contextTokens = contextOf(message.message.usage) ?? contextTokens;
           continue;
@@ -315,8 +461,10 @@ export class ClaudeOverseer implements OverseerBackend {
           throw new Error(detail === '' ? 'overseer turn failed' : detail);
         }
         const reply = message.result.trim();
+        const streamId = text.settle(reply);
         return {
           reply: reply === '' ? EMPTY_REPLY_MESSAGE : reply,
+          ...(streamId !== undefined ? { streamId } : {}),
           sessionId: message.session_id ?? sessionId,
           costUsd: message.total_cost_usd,
           ...(contextTokens !== undefined ? { contextTokens } : {}),

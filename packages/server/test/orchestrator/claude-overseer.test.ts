@@ -4,7 +4,7 @@ import type {
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -630,5 +630,327 @@ describe('ClaudeOverseer attachments', () => {
         },
       ])
     ).toBe('what is this?');
+  });
+});
+
+// One message of the recordings in test/fixtures/claude-overseer-stream.json,
+// slimmed to the fields the Overseer reads (see the file's `about`).
+interface RecordedEvent {
+  type: string;
+  subtype?: string;
+  parent: string | null;
+  event?: string;
+  index?: number;
+  block?: string;
+  delta?: string;
+  text?: string;
+  msgId?: string;
+  content?: { type: string; text?: string; name?: string; id?: string }[];
+  result?: string;
+  is_error?: boolean;
+}
+
+const RECORDINGS = JSON.parse(
+  readFileSync(
+    join(import.meta.dir, '..', 'fixtures', 'claude-overseer-stream.json'),
+    'utf8'
+  )
+) as Record<'string' | 'stream', { events: RecordedEvent[] }>;
+
+// The Messages API stream event a recorded `stream_event` carried.
+function streamEventOf(e: RecordedEvent): Record<string, unknown> {
+  if (e.event === 'message_start') {
+    return { type: 'message_start', message: { id: e.msgId } };
+  }
+  if (e.event === 'content_block_start') {
+    return {
+      type: 'content_block_start',
+      index: e.index,
+      content_block: { type: e.block },
+    };
+  }
+  if (e.event === 'content_block_delta') {
+    const delta =
+      e.delta === 'text_delta'
+        ? { type: 'text_delta', text: e.text }
+        : e.delta === 'input_json_delta'
+          ? { type: 'input_json_delta', partial_json: e.text }
+          : { type: e.delta };
+    return { type: 'content_block_delta', index: e.index, delta };
+  }
+  return {
+    type: e.event,
+    ...(e.index === undefined ? {} : { index: e.index }),
+  };
+}
+
+// A recorded message back in the SDK's own shape.
+function sdkMessageOf(e: RecordedEvent): Record<string, unknown> {
+  const base = {
+    type: e.type,
+    parent_tool_use_id: e.parent,
+    session_id: 'sess-rec',
+    ...(e.subtype === undefined ? {} : { subtype: e.subtype }),
+  };
+  if (e.type === 'stream_event') return { ...base, event: streamEventOf(e) };
+  if (e.type === 'assistant') {
+    return {
+      ...base,
+      message: {
+        id: e.msgId,
+        content: (e.content ?? []).map((b) =>
+          b.type === 'tool_use' ? { ...b, input: {} } : b
+        ),
+      },
+    };
+  }
+  if (e.type === 'user') {
+    return { ...base, message: { role: 'user', content: e.content } };
+  }
+  if (e.type === 'result') {
+    return { ...base, result: e.result, is_error: e.is_error };
+  }
+  return base;
+}
+
+function recorded(
+  name: 'string' | 'stream',
+  keep: (e: RecordedEvent) => boolean = () => true
+): () => Iterable<unknown> {
+  const messages = RECORDINGS[name].events.filter(keep).map(sdkMessageOf);
+  return () => messages;
+}
+
+// Turn options that log what the backend reported, in order: every delta by
+// segment, and narration and tool rows as the transcript would get them.
+function liveRecorder(on: { live?: boolean; narration?: boolean } = {}) {
+  const rows: string[] = [];
+  const text = new Map<string, string>();
+  const options: OverseerTurnOptions = {
+    onToolUse: (name) => rows.push(`tool ${name}`),
+    ...(on.live === false
+      ? {}
+      : {
+          onTextDelta: (id: string, delta: string) =>
+            text.set(id, `${text.get(id) ?? ''}${delta}`),
+        }),
+    ...(on.narration === false
+      ? {}
+      : {
+          onNarration: (id: string, said: string) =>
+            rows.push(`narration ${id}: ${said}`),
+        }),
+  };
+  return { rows, text, options };
+}
+
+const STRING_REPLY =
+  "The current year is 2026, which matches today's date of October 23, 2026.\n\ndone";
+
+describe('ClaudeOverseer live text and narration', () => {
+  it('streams each text block under its own segment and keeps the line before a tool call as narration', async () => {
+    const { toolset } = stubToolset();
+    const { rows, text, options } = liveRecorder();
+    const { captured, turn } = await runTurn(
+      recorded('string'),
+      toolset,
+      undefined,
+      options
+    );
+    expect(captured?.includePartialMessages).toBe(true);
+    expect(Object.fromEntries(text)).toEqual({
+      'msg_string_1:0': "I'll check the date.",
+      'msg_string_2:0': STRING_REPLY,
+    });
+    // The narration lands before the call it led to, and the reply is not
+    // narration as well.
+    expect(rows).toEqual([
+      "narration msg_string_1:0: I'll check the date.",
+      'tool Bash',
+    ]);
+    expect(turn).toMatchObject({
+      reply: STRING_REPLY,
+      streamId: 'msg_string_2:0',
+    });
+  });
+
+  it('keys a text block after a thinking block by its own index, in streaming-input mode', async () => {
+    const { toolset } = stubToolset();
+    const { rows, text, options } = liveRecorder();
+    const { turn } = await runTurn(
+      recorded('stream'),
+      toolset,
+      undefined,
+      options
+    );
+    expect([...text.keys()]).toEqual(['msg_stream_1:1', 'msg_stream_2:0']);
+    expect(rows).toEqual([
+      'narration msg_stream_1:1: I will check the date.',
+      'tool Bash',
+    ]);
+    expect(turn).toMatchObject({ streamId: 'msg_stream_2:0' });
+  });
+
+  it('without live text asks for no partial messages and counts text blocks per message', async () => {
+    const { toolset } = stubToolset();
+    const { rows, options } = liveRecorder({ live: false });
+    // What the SDK sends with includePartialMessages off: no stream events.
+    const { captured, turn } = await runTurn(
+      recorded('stream', (e) => e.type !== 'stream_event'),
+      toolset,
+      undefined,
+      options
+    );
+    expect(captured?.includePartialMessages).toBeUndefined();
+    expect(rows).toEqual([
+      'narration msg_stream_1:0: I will check the date.',
+      'tool Bash',
+    ]);
+    expect(turn).toMatchObject({ streamId: 'msg_stream_2:0' });
+  });
+
+  it('with neither callback replies exactly as before', async () => {
+    const { toolset } = stubToolset();
+    const { rows, options } = liveRecorder({ live: false, narration: false });
+    const { captured, turn } = await runTurn(
+      recorded('string'),
+      toolset,
+      undefined,
+      options
+    );
+    expect(captured?.includePartialMessages).toBeUndefined();
+    expect(rows).toEqual(['tool Bash']);
+    expect(turn).toMatchObject({ reply: STRING_REPLY, sessionId: 'sess-rec' });
+  });
+
+  it("ignores a sub-agent's text, tool calls and usage", async () => {
+    const { toolset } = stubToolset();
+    const { rows, text, options } = liveRecorder();
+    const sub = { parent_tool_use_id: 'toolu_task', session_id: 's' };
+    const stream = function* stream() {
+      yield { type: 'system', subtype: 'init', session_id: 's' };
+      yield {
+        type: 'assistant',
+        parent_tool_use_id: null,
+        message: {
+          id: 'msg_top',
+          content: [{ type: 'tool_use', name: 'Task', input: {} }],
+          usage: { input_tokens: 1200 },
+        },
+      };
+      yield {
+        ...sub,
+        type: 'stream_event',
+        event: { type: 'message_start', message: { id: 'msg_sub' } },
+      };
+      yield {
+        ...sub,
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'text' },
+        },
+      };
+      yield {
+        ...sub,
+        type: 'stream_event',
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'sub-agent musing' },
+        },
+      };
+      yield {
+        ...sub,
+        type: 'assistant',
+        message: {
+          id: 'msg_sub',
+          content: [
+            { type: 'text', text: 'sub-agent musing' },
+            { type: 'tool_use', name: 'Grep', input: {} },
+          ],
+          usage: { input_tokens: 90_000 },
+        },
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        session_id: 's',
+        result: 'found it',
+      };
+    };
+    const { turn } = await runTurn(stream, toolset, undefined, options);
+    expect(text.size).toBe(0);
+    expect(rows).toEqual(['tool Task']);
+    expect(turn).toMatchObject({ reply: 'found it', contextTokens: 1200 });
+  });
+
+  it('keeps pending text the result does not contain as narration, ahead of the reply', async () => {
+    const { toolset } = stubToolset();
+    const { rows, options } = liveRecorder();
+    const stream = function* stream() {
+      yield {
+        type: 'assistant',
+        parent_tool_use_id: null,
+        message: {
+          id: 'msg_a',
+          content: [
+            { type: 'text', text: 'An aside the result leaves out.' },
+            { type: 'text', text: 'The answer.' },
+          ],
+        },
+      };
+      yield {
+        type: 'result',
+        subtype: 'success',
+        session_id: 's',
+        result: 'The answer.',
+      };
+    };
+    const { turn } = await runTurn(stream, toolset, undefined, options);
+    expect(rows).toEqual([
+      'narration msg_a:0: An aside the result leaves out.',
+    ]);
+    expect(turn).toMatchObject({ reply: 'The answer.', streamId: 'msg_a:1' });
+  });
+
+  it('commits narration when the CLI asks about a call before its message is read', async () => {
+    const { toolset } = stubToolset();
+    const { rows, options } = liveRecorder();
+    let sdkOptions: Options | undefined;
+    const stream = async function* stream() {
+      yield {
+        type: 'assistant',
+        parent_tool_use_id: null,
+        message: {
+          id: 'msg_a',
+          content: [{ type: 'text', text: 'Let me look.' }],
+        },
+      };
+      await sdkOptions?.canUseTool?.('Read', { file_path: 'a' }, callOpts);
+      yield {
+        type: 'result',
+        subtype: 'success',
+        session_id: 's',
+        result: 'Seen it.',
+      };
+    };
+    const queryFn = (args: { options?: Options }) => {
+      sdkOptions = args.options;
+      return stream() as unknown as Query;
+    };
+    const overseer = new ClaudeOverseer(
+      '/tmp/does-not-matter',
+      queryFn as unknown as typeof import('@anthropic-ai/claude-agent-sdk').query
+    );
+    await overseer.start('look', toolset, {
+      ...options,
+      authorizeTool: (request) => {
+        rows.push(`ask ${request.toolName}`);
+        return Promise.resolve({ allow: true });
+      },
+    });
+    expect(rows).toEqual(['narration msg_a:0: Let me look.', 'ask Read']);
   });
 });

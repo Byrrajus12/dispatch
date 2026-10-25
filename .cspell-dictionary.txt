@@ -23,6 +23,7 @@ assertable
 atag
 atch
 authtest
+autocompact
 autodetection
 AUTOINCREMENT
 automations
