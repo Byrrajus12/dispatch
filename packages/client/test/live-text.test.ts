@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import type { LiveText } from '../src/api';
 import {
   applyDelta,
+  dropSegment,
   type LiveFrame,
   type LiveTextState,
   LiveTextStore,
@@ -116,6 +117,37 @@ describe('applyDelta', () => {
       stale: true,
       segments: [],
     });
+  });
+});
+
+describe('an abandoned segment', () => {
+  // The model's stream broke off mid-block: no row will replace the text.
+  it('leaves the segments and is remembered for the rest of its turn', () => {
+    const { state } = fold([
+      frame(1, 'Half a sen'),
+      { ...frame(2, ''), abandoned: true },
+      frame(3, 'Whole.', 'b'),
+    ]);
+    expect(state?.segments).toEqual([{ id: 'b', text: 'Whole.' }]);
+    expect(state?.abandoned).toEqual(['a']);
+
+    // A snapshot of the same turn no longer has it, and keeps the record of it.
+    const merged = mergeSnapshot(state, snapshot(4, [])).state;
+    expect(merged?.abandoned).toEqual(['a']);
+    // A new turn starts with none.
+    const next = applyDelta(merged, frame(5, 'New', 'a', 't2')).state;
+    expect(next?.abandoned).toBeUndefined();
+  });
+});
+
+describe('dropSegment', () => {
+  it('removes a committed segment, keeping seq, and leaves anything else alone', () => {
+    const { state } = fold([frame(1, 'One'), frame(2, 'Two', 'b')]);
+    const dropped = dropSegment(state, 'a').state;
+    expect(dropped?.segments).toEqual([{ id: 'b', text: 'Two' }]);
+    expect(dropped?.seq).toBe(2);
+    expect(dropSegment(dropped, 'a').state).toBe(dropped);
+    expect(dropSegment(undefined, 'a').state).toBeUndefined();
   });
 });
 
@@ -257,6 +289,25 @@ describe('LiveTextStore', () => {
     expect(notified).toBe(4);
     unsubscribe();
     store.reset(2);
+    expect(notified).toBe(4);
+  });
+
+  it('forgets one key and drops one segment, notifying only on a change', () => {
+    const store = new LiveTextStore();
+    let notified = 0;
+    store.subscribe(() => {
+      notified += 1;
+    });
+    store.applyDelta(1, 'run:a', frame(1, 'one'), () => {});
+    store.applyDelta(1, 'run:b', frame(1, 'two'), () => {});
+    store.drop(1, 'run:a', 'a');
+    expect(store.get(1, 'run:a')?.segments).toEqual([]);
+    store.drop(1, 'run:a', 'a');
+    expect(notified).toBe(3);
+    store.forget(1, 'run:a');
+    store.forget(1, 'run:a');
+    expect(store.get(1, 'run:a')).toBeUndefined();
+    expect(store.get(1, 'run:b')).toBeDefined();
     expect(notified).toBe(4);
   });
 });

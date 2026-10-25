@@ -13,7 +13,11 @@ import type {
   ThreadDetail,
 } from '@dispatch/client';
 import * as dispatchClient from '@dispatch/client';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import {
+  QueryClient,
+  QueryClientProvider,
+  QueryObserver,
+} from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { expect, mock, spyOn, test } from 'bun:test';
 import type { ReactNode } from 'react';
@@ -561,6 +565,11 @@ test('a run delta lands in the live text store and leaves the run detail alone',
     evidence: [],
     mutations: [],
   });
+  // A surface showing the run: only a shown run's text is kept.
+  const unwatch = new QueryObserver(queryClient, {
+    queryKey: ['dispatch-run', PORT, 'r-1'],
+    enabled: false,
+  }).subscribe(() => {});
 
   act(() => {
     sink?.onEvent({
@@ -580,6 +589,7 @@ test('a run delta lands in the live text store and leaves the run detail alone',
   expect(
     queryClient.getQueryState(['dispatch-run', PORT, 'r-1'])?.isInvalidated
   ).toBe(false);
+  unwatch();
 });
 
 // hello dropped the run's live text with the rest; its detail's snapshot

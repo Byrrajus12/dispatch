@@ -36,7 +36,8 @@ function visibleLive(
  * render the segment would be in neither: its text would blink out, and a
  * "working" row flash in. A segment shown last render is kept, in place,
  * while its turn runs and the record holds no row for it yet; the server only
- * drops a segment when it commits it, or when the turn ends.
+ * drops a segment when it commits it, when the turn ends, or when it abandons
+ * it (which the store records, so the segment goes at once).
  */
 export function useLiveText(
   port: number | undefined,
@@ -53,10 +54,11 @@ export function useLiveText(
     const prev = last.current;
     if (next === null || prev?.turnId !== next.turnId) return next;
     const byId = new Map(next.segments.map((s) => [s.id, s]));
+    const ended = new Set(state?.abandoned);
     const kept = prev.segments.flatMap((s) => {
       const now = byId.get(s.id);
       if (now !== undefined) return [now];
-      return committed.has(s.id) ? [] : [s];
+      return committed.has(s.id) || ended.has(s.id) ? [] : [s];
     });
     const shownBefore = new Set(prev.segments.map((s) => s.id));
     const segments = [

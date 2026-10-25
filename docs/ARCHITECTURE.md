@@ -292,7 +292,12 @@ for its whole life, and the daemon forgets a run's live text when it ends. When
 a segment's text lands on the record, the row carries the segment as `streamId`
 and the segment leaves the live text in the same step: an Overseer `narration`
 or `assistant` row, a run's `assistant` entry (dropped before its `run.log` is
-sent). A client hides every live segment whose id a row already carries.
+sent). A client hides every live segment whose id a row already carries. A
+Claude run's text block that its API message stopped without finishing (the
+stream broke off, and the CLI sends the text again under a new message) is
+abandoned: it leaves the live text, and a `run.delta` with `abandoned: true` and
+empty `text` tells clients to drop it rather than show it for the rest of the
+run.
 
 **Snapshot.** `GET /api/overseer/:id`, `GET /api/overseer/current` and
 `GET /api/runs/:id` add `live: { seq, turnId, segments }` while a turn runs, so
@@ -311,7 +316,12 @@ they follow on, and a gap left over refetches once more. The desktop resets a
 daemon's live text on the websocket's `hello`, before it refetches every
 Overseer record and run detail: a restarted daemon counts `seq` from zero.
 `useLiveText` keeps a segment on screen until the row that replaces it reaches
-the view, so text does not blink out between the two.
+the view, so text does not blink out between the two; an abandoned segment goes
+at once. Every window hears every run's frames, so the desktop keeps text only
+for a run a surface shows (its detail query has an observer): a run opened later
+starts from its detail's snapshot. A run's segment leaves the store when the
+`run.log` entry naming it arrives, and the run's key goes once a fetched detail
+shows the run ended.
 
 **Run log order.** A `run.log` frame carries `index`, its entry's place among
 the run's transcript entries, the same position `GET /api/runs/:id` lists it at.

@@ -1281,6 +1281,25 @@ test('keeps a shown segment until the record holds its row', () => {
   expect(result.current?.segments).toEqual([]);
 });
 
+// The keep-rule above must not hold a segment the stream abandoned: no row
+// will ever arrive for it, and it would sit there for the rest of the run.
+test('drops a shown segment at once when its stream abandons it', () => {
+  const { result } = renderHook(() =>
+    useLiveText(LIVE_PORT, LIVE_KEY, true, NONE)
+  );
+  apply(1, 'a', 'Half a sen');
+  expect(result.current?.segments).toEqual([{ id: 'a', text: 'Half a sen' }]);
+  act(() => {
+    liveTextStore.applyDelta(
+      LIVE_PORT,
+      LIVE_KEY,
+      { ...frame(2, 'a', ''), abandoned: true },
+      () => {}
+    );
+  });
+  expect(result.current?.segments).toEqual([]);
+});
+
 test('reads nothing for no key', () => {
   apply(1, 'a', 'One');
   const { result } = renderHook(() => useLiveText(LIVE_PORT, null, true, NONE));

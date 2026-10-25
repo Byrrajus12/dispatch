@@ -237,13 +237,11 @@ const liveOf = () => liveTextStore.get(PORT, runLiveKey(RUN));
 describe('applyRunEvent run.delta', () => {
   // Frames are view-only: refetching the detail per frame would cancel the
   // very fetch that repairs a gap.
-  it('folds frames into the run’s live text and leaves the detail alone', () => {
-    const qc = new QueryClient();
-    qc.setQueryData(runDetailKey(PORT, RUN), {
-      meta: { id: RUN } as RunMeta,
-      entries: [],
-      evidence: [],
-      mutations: [],
+  it('folds frames into the run’s live text and leaves the detail alone', async () => {
+    const server = gatedRunServer();
+    const { qc, result } = mount(server.client);
+    await waitFor(() => {
+      expect(result.current).toBeDefined();
     });
     applyRunEvent(qc, PORT, delta(1, 'msg_1:0', 'Reading '));
     applyRunEvent(qc, PORT, delta(2, 'msg_1:0', 'the tests.'));
@@ -256,6 +254,23 @@ describe('applyRunEvent run.delta', () => {
   });
 
   it('refetches the detail once after a missed frame', async () => {
+    const server = gatedRunServer();
+    const { qc, result } = mount(server.client);
+    await waitFor(() => {
+      expect(result.current).toBeDefined();
+    });
+    applyRunEvent(qc, PORT, delta(4, 'msg_1:0', 'tail only'));
+    applyRunEvent(qc, PORT, delta(5, 'msg_1:0', ' and more'));
+    expect(liveOf()?.stale).toBe(true);
+    await waitFor(() => {
+      expect(server.fetches).toBe(2);
+      expect(qc.isFetching()).toBe(0);
+    });
+  });
+
+  // Every run's frames reach every window: a run nobody here shows would
+  // otherwise keep all the text it ever streamed, until the next hello.
+  it('keeps no text for a run no surface shows', () => {
     const qc = new QueryClient();
     qc.setQueryData(runDetailKey(PORT, RUN), {
       meta: { id: RUN } as RunMeta,
@@ -263,14 +278,23 @@ describe('applyRunEvent run.delta', () => {
       evidence: [],
       mutations: [],
     });
-    applyRunEvent(qc, PORT, delta(4, 'msg_1:0', 'tail only'));
-    applyRunEvent(qc, PORT, delta(5, 'msg_1:0', ' and more'));
+    applyRunEvent(qc, PORT, delta(1, 'msg_1:0', 'Reading '));
+    expect(liveOf()).toBeUndefined();
+  });
+
+  it('drops a segment its stream abandoned', async () => {
+    const server = gatedRunServer();
+    const { qc, result } = mount(server.client);
     await waitFor(() => {
-      expect(qc.getQueryState(runDetailKey(PORT, RUN))?.isInvalidated).toBe(
-        true
-      );
+      expect(result.current).toBeDefined();
     });
-    expect(liveOf()?.stale).toBe(true);
+    applyRunEvent(qc, PORT, delta(1, 'msg_A:0', 'Half a sen'));
+    applyRunEvent(qc, PORT, {
+      ...delta(2, 'msg_A:0', ''),
+      abandoned: true,
+    });
+    expect(liveOf()?.segments).toEqual([]);
+    expect(liveOf()?.abandoned).toEqual(['msg_A:0']);
   });
 });
 
@@ -364,6 +388,8 @@ describe('a run’s live text', () => {
         { id: 'msg_1:1', text: 'Now' },
       ]);
     });
+    // The store does not keep the text of a segment its entry now holds.
+    expect(liveOf()?.segments.map((s) => s.id)).toEqual(['msg_1:1']);
 
     server.state = 'finished';
     await act(() =>
@@ -373,7 +399,7 @@ describe('a run’s live text', () => {
       expect(result.current.detail?.meta.state).toBe('finished');
     });
     expect(result.current.live).toBeNull();
-    // The finished run's detail has no `live`, which clears the store too.
-    expect(liveOf()?.segments).toEqual([]);
+    // A finished run takes no more text: its key leaves the store.
+    expect(liveOf()).toBeUndefined();
   });
 });

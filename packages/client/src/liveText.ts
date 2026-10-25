@@ -20,6 +20,8 @@ export interface LiveFrame {
   seq: number;
   segmentId: string;
   text: string;
+  /** Ends segment `segmentId` instead: no row will ever replace it (the model's stream broke off). */
+  abandoned?: boolean;
 }
 
 /** One key's live text as a client holds it. */
@@ -33,6 +35,8 @@ export interface LiveTextState {
   stale: boolean;
   /** Frames past the gap, oldest first, replayed once a snapshot lands. */
   held: LiveFrame[];
+  /** Segments of `turnId` that ended with no row to replace them; absent when none. */
+  abandoned?: readonly string[];
 }
 
 /** A reducer step: the next state, and whether the caller should refetch the record. */
@@ -55,20 +59,35 @@ const EMPTY: LiveTextState = {
 };
 
 // Folds a frame that directly follows `state` into its segments; a frame of a
-// new turn starts that turn's segments empty.
+// new turn starts that turn's segments empty. An abandoning frame removes its
+// segment and remembers it as abandoned for the rest of the turn.
 function append(state: LiveTextState, frame: LiveFrame): LiveTextState {
-  const segments = frame.turnId === state.turnId ? state.segments : [];
-  const at = segments.findIndex((s) => s.id === frame.segmentId);
-  return {
-    ...state,
+  const sameTurn = frame.turnId === state.turnId;
+  const segments = sameTurn ? state.segments : [];
+  const abandoned = sameTurn ? (state.abandoned ?? []) : [];
+  const base = {
     turnId: frame.turnId,
     seq: frame.seq,
+    stale: state.stale,
+    held: state.held,
+  };
+  if (frame.abandoned === true) {
+    return {
+      ...base,
+      segments: segments.filter((s) => s.id !== frame.segmentId),
+      abandoned: [...abandoned, frame.segmentId],
+    };
+  }
+  const at = segments.findIndex((s) => s.id === frame.segmentId);
+  return {
+    ...base,
     segments:
       at === -1
         ? [...segments, { id: frame.segmentId, text: frame.text }]
         : segments.map((s, i) =>
             i === at ? { ...s, text: s.text + frame.text } : s
           ),
+    ...(abandoned.length > 0 ? { abandoned } : {}),
   };
 }
 
@@ -124,6 +143,10 @@ export function mergeSnapshot(
     };
   }
   const current = state ?? EMPTY;
+  // The snapshot no longer holds an abandoned segment; the view still needs
+  // to know it ended, for as long as its turn runs.
+  const abandoned =
+    live.turnId === current.turnId ? current.abandoned : undefined;
   let next: LiveTextState =
     current.turnId === null || live.seq >= current.seq
       ? {
@@ -132,6 +155,7 @@ export function mergeSnapshot(
           segments: live.segments.map((s) => ({ ...s })),
           stale: false,
           held: [],
+          ...(abandoned === undefined ? {} : { abandoned }),
         }
       : { ...current, held: [] };
   const later = current.held.filter((f) => f.seq > next.seq);
@@ -143,6 +167,27 @@ export function mergeSnapshot(
   const left = later.slice(replayed);
   const stale = left.length > 0;
   return { state: { ...next, stale, held: left }, repair: stale };
+}
+
+/**
+ * Removes one segment from the key's text, keeping its `seq`: the segment's
+ * row has reached the record (a run.log entry naming it as `streamId`), so the
+ * store need not keep its text. A no-op when the key has no such segment.
+ */
+export function dropSegment(
+  state: LiveTextState | undefined,
+  segmentId: string
+): LiveTextStep {
+  if (state === undefined || !state.segments.some((s) => s.id === segmentId)) {
+    return { state, repair: false };
+  }
+  return {
+    state: {
+      ...state,
+      segments: state.segments.filter((s) => s.id !== segmentId),
+    },
+    repair: false,
+  };
 }
 
 /** The key live text is stored under for an Overseer conversation. */
@@ -203,6 +248,19 @@ export class LiveTextStore {
       mergeSnapshot(this.get(port, key), live),
       requestRepair
     );
+  }
+
+  /** Drops one segment whose row the record now holds; see dropSegment. */
+  drop(port: number | undefined, key: string, segmentId: string): void {
+    this.step(port, key, dropSegment(this.get(port, key), segmentId), () => {});
+  }
+
+  /**
+   * Forgets one key, for a run that ended: it takes no more frames, and its
+   * state would otherwise stay until the daemon's next `hello`.
+   */
+  forget(port: number | undefined, key: string): void {
+    if (this.ports.get(port)?.delete(key) === true) this.notify();
   }
 
   /**

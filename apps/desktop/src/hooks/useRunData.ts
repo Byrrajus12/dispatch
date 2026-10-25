@@ -32,17 +32,32 @@ export function runDetailKey(port: number | undefined, runId: string) {
 // Refetches a run's detail so its `live` snapshot fills a gap in the run's live text. A
 // tick late: a repair asked for from inside the detail's own queryFn must not cancel the
 // fetch that is about to land.
+// A fetch already out is left to land (its snapshot is read after the frames that went
+// before it), so a run opened mid-stream does not throw away its first fetch.
 function repairRunLive(
   queryClient: QueryClient,
   port: number | undefined,
   runId: string
 ): void {
   setTimeout(() => {
-    void queryClient.invalidateQueries({
-      queryKey: runDetailKey(port, runId),
-      exact: true,
-    });
+    void queryClient.invalidateQueries(
+      { queryKey: runDetailKey(port, runId), exact: true },
+      { cancelRefetch: false }
+    );
   }, 0);
+}
+
+// Whether a surface of this window shows run `runId`: its detail query has an observer.
+// Only such a run's text is kept; one opened later starts from its detail's snapshot.
+function isWatched(
+  queryClient: QueryClient,
+  port: number | undefined,
+  runId: string
+): boolean {
+  const query = queryClient
+    .getQueryCache()
+    .find({ queryKey: runDetailKey(port, runId), exact: true });
+  return (query?.getObserversCount() ?? 0) > 0;
 }
 
 type RunLogFrame = Extract<ServerEvent, { type: 'run.log' }>;
@@ -85,26 +100,37 @@ function repairRunDetail(
 
 /** Keeps cached run details current from the event stream: `run.log` appends its entry to
  * the run's cached detail in place, for every surface showing that run, and `run.delta`
- * folds the text a live run is writing into the window's live text store. A frame never
- * cancels a fetch: a delta that missed another refetches the detail once, whose `live`
- * snapshot repairs the text, and a log entry that lands mid-fetch is added to the
- * response by its index (fetchRunDetail). */
+ * folds the text a live run is writing into the window's live text store, for a run a
+ * surface shows (every run's frames reach every window). A frame never cancels a fetch: a
+ * delta that missed another refetches the detail once, whose `live` snapshot repairs the
+ * text, and a log entry that lands mid-fetch is added to the response by its index
+ * (fetchRunDetail). An entry that finishes a segment takes it out of the store. */
 export function applyRunEvent(
   queryClient: QueryClient,
   port: number | undefined,
   event: ServerEvent
 ): void {
   if (event.type === 'run.delta') {
-    const { runId, turnId, seq, segmentId, text } = event;
+    const { runId, turnId, seq, segmentId, text, abandoned } = event;
+    if (!isWatched(queryClient, port, runId)) return;
     liveTextStore.applyDelta(
       port,
       runLiveKey(runId),
-      { turnId, seq, segmentId, text },
+      {
+        turnId,
+        seq,
+        segmentId,
+        text,
+        ...(abandoned === true ? { abandoned } : {}),
+      },
       () => repairRunLive(queryClient, port, runId)
     );
     return;
   }
   if (event.type !== 'run.log') return;
+  if (event.entry.streamId !== undefined) {
+    liveTextStore.drop(port, runLiveKey(event.runId), event.entry.streamId);
+  }
   for (const frames of framesInFlight.get(flightKey(port, event.runId)) ?? []) {
     frames.push(event);
   }
@@ -174,9 +200,14 @@ export async function fetchRunDetail(
     if (flights.size === 0) framesInFlight.delete(flight);
   }
   const { live, ...detail } = fetched;
-  liveTextStore.mergeSnapshot(port, runLiveKey(runId), live, () =>
-    repairRunLive(queryClient, port, runId)
-  );
+  // A run that ended takes no more text: its key goes, rather than wait for `hello`.
+  if (isTerminalRunState(detail.meta.state)) {
+    liveTextStore.forget(port, runLiveKey(runId));
+  } else {
+    liveTextStore.mergeSnapshot(port, runLiveKey(runId), live, () =>
+      repairRunLive(queryClient, port, runId)
+    );
+  }
   const { entries, gap } = withFrames(detail.entries, frames);
   if (gap) repairRunDetail(queryClient, port, runId);
   return { ...detail, entries };
