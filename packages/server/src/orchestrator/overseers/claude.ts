@@ -16,6 +16,11 @@ import { readFileSync, statSync } from 'node:fs';
 import type { z } from 'zod';
 
 import { openClaudeQuery, rewriteMissingCliError } from '../claudeCli.js';
+import {
+  apiMessageId,
+  type ClaudeStreamEvent,
+  ClaudeTextSegments,
+} from '../claudeTextSegments.js';
 import { cartoMcpServers } from '../executors/claude.js';
 import { floorGuard } from '../floorHook.js';
 import type { FloorPolicy } from '../floorHook.js';
@@ -53,85 +58,37 @@ interface AssistantContentBlock {
   text?: unknown;
 }
 
-// The fields of a Messages API stream event (a `stream_event` message, sent
-// with `includePartialMessages`) that live text reads: which API message and
-// block the stream is in, and each text delta.
-interface StreamEvent {
-  type: string;
-  index?: number;
-  message?: { id?: unknown };
-  content_block?: { type?: unknown };
-  delta?: { type?: unknown; text?: unknown };
-}
-
 /**
- * Follows the text of one turn's top-level messages. Each text block is a
- * segment, `<API message id>:<block index>` when it streamed. Its deltas go
- * to `onTextDelta` as they arrive; its finished text waits as *pending* until
- * the turn shows what it was: a tool call after it makes it narration, and
- * what is still pending at the result is the reply.
- *
- * The SDK delivers each finished block as its own `assistant` message (same
- * API message id, content = that one block) before the block's
- * `content_block_stop`, so a finished text block claims the oldest segment
- * its API message streamed. Without partial messages (live text off, or a CLI
- * that sends none) the n-th text block of a message is `<id>:<n>` instead.
+ * Follows the text of one turn's top-level messages, one segment per text
+ * block (named by ClaudeTextSegments). Its deltas go to `onTextDelta` as they
+ * arrive; its finished text waits as *pending* until the turn shows what it
+ * was: a tool call after it makes it narration, and what is still pending at
+ * the result is the reply.
  */
 class TurnText {
-  // The API message being streamed, and the segment of each of its text blocks.
-  private messageId: string | undefined;
-  private readonly open = new Map<number, string>();
-  // Per API message: segments opened by the stream and not claimed by a
-  // finished block yet, and how many blocks arrived with none to claim.
-  private readonly unclaimed = new Map<string, string[]>();
-  private readonly withoutStream = new Map<string, number>();
+  private readonly segments = new ClaudeTextSegments();
   private readonly pending: { id: string; text: string }[] = [];
 
   constructor(private readonly opts: OverseerTurnOptions) {}
 
   // One stream event of a top-level message.
-  event(event: StreamEvent): void {
-    if (event.type === 'message_start') {
-      const id = event.message?.id;
-      this.messageId = typeof id === 'string' ? id : undefined;
-      this.open.clear();
-      return;
-    }
-    if (event.index === undefined || this.messageId === undefined) return;
-    if (event.type === 'content_block_start') {
-      if (event.content_block?.type !== 'text') return;
-      const segment = `${this.messageId}:${event.index}`;
-      this.open.set(event.index, segment);
-      const queue = this.unclaimed.get(this.messageId) ?? [];
-      queue.push(segment);
-      this.unclaimed.set(this.messageId, queue);
-      return;
-    }
-    if (
-      event.type === 'content_block_delta' &&
-      event.delta?.type === 'text_delta' &&
-      typeof event.delta.text === 'string' &&
-      event.delta.text !== ''
-    ) {
-      const segment = this.open.get(event.index);
-      if (segment !== undefined)
-        this.opts.onTextDelta?.(segment, event.delta.text);
-    }
+  event(event: ClaudeStreamEvent): void {
+    const delta = this.segments.event(event);
+    if (delta !== null) this.opts.onTextDelta?.(delta.segmentId, delta.text);
   }
 
   // A top-level assistant message: its text blocks become pending, and a tool
   // call commits whatever was pending before it.
   finished(message: { id?: unknown; content?: unknown }): void {
     if (!Array.isArray(message.content)) return;
-    const apiId = typeof message.id === 'string' ? message.id : 'message';
+    const apiId = apiMessageId(message);
     for (const block of message.content as AssistantContentBlock[]) {
       if (block.type === 'tool_use') {
         this.commit();
         continue;
       }
       if (block.type !== 'text' || typeof block.text !== 'string') continue;
-      const segment =
-        this.unclaimed.get(apiId)?.shift() ?? this.fallback(apiId);
+      const segment = this.segments.claim(apiId);
       if (block.text.trim() !== '') {
         this.pending.push({ id: segment, text: block.text });
       }
@@ -155,12 +112,6 @@ class TurnText {
       else this.opts.onNarration?.(segment.id, segment.text);
     }
     return replySegment;
-  }
-
-  private fallback(apiId: string): string {
-    const n = this.withoutStream.get(apiId) ?? 0;
-    this.withoutStream.set(apiId, n + 1);
-    return `${apiId}:${n}`;
   }
 }
 
@@ -439,7 +390,7 @@ export class ClaudeOverseer implements OverseerBackend {
         }
         if (message.type === 'stream_event') {
           if (isTopLevel(message)) {
-            text.event(message.event as unknown as StreamEvent);
+            text.event(message.event as unknown as ClaudeStreamEvent);
           }
           continue;
         }

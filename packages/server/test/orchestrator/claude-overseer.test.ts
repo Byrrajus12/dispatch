@@ -4,7 +4,7 @@ import type {
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -26,6 +26,7 @@ import {
   OVERSEER_TOOL_PREFIX,
   overseerSdkTools,
 } from '../../src/orchestrator/overseers/claude.js';
+import { recorded } from './claudeRecordings.js';
 import { floorDecision, preToolUse } from './helpers.js';
 
 // The exact text the Agent SDK throws when it can't resolve its own bundled
@@ -632,94 +633,6 @@ describe('ClaudeOverseer attachments', () => {
     ).toBe('what is this?');
   });
 });
-
-// One message of the recordings in test/fixtures/claude-overseer-stream.json,
-// slimmed to the fields the Overseer reads (see the file's `about`).
-interface RecordedEvent {
-  type: string;
-  subtype?: string;
-  parent: string | null;
-  event?: string;
-  index?: number;
-  block?: string;
-  delta?: string;
-  text?: string;
-  msgId?: string;
-  content?: { type: string; text?: string; name?: string; id?: string }[];
-  result?: string;
-  is_error?: boolean;
-}
-
-const RECORDINGS = JSON.parse(
-  readFileSync(
-    join(import.meta.dir, '..', 'fixtures', 'claude-overseer-stream.json'),
-    'utf8'
-  )
-) as Record<'string' | 'stream', { events: RecordedEvent[] }>;
-
-// The Messages API stream event a recorded `stream_event` carried.
-function streamEventOf(e: RecordedEvent): Record<string, unknown> {
-  if (e.event === 'message_start') {
-    return { type: 'message_start', message: { id: e.msgId } };
-  }
-  if (e.event === 'content_block_start') {
-    return {
-      type: 'content_block_start',
-      index: e.index,
-      content_block: { type: e.block },
-    };
-  }
-  if (e.event === 'content_block_delta') {
-    const delta =
-      e.delta === 'text_delta'
-        ? { type: 'text_delta', text: e.text }
-        : e.delta === 'input_json_delta'
-          ? { type: 'input_json_delta', partial_json: e.text }
-          : { type: e.delta };
-    return { type: 'content_block_delta', index: e.index, delta };
-  }
-  return {
-    type: e.event,
-    ...(e.index === undefined ? {} : { index: e.index }),
-  };
-}
-
-// A recorded message back in the SDK's own shape.
-function sdkMessageOf(e: RecordedEvent): Record<string, unknown> {
-  const base = {
-    type: e.type,
-    parent_tool_use_id: e.parent,
-    session_id: 'sess-rec',
-    ...(e.subtype === undefined ? {} : { subtype: e.subtype }),
-  };
-  if (e.type === 'stream_event') return { ...base, event: streamEventOf(e) };
-  if (e.type === 'assistant') {
-    return {
-      ...base,
-      message: {
-        id: e.msgId,
-        content: (e.content ?? []).map((b) =>
-          b.type === 'tool_use' ? { ...b, input: {} } : b
-        ),
-      },
-    };
-  }
-  if (e.type === 'user') {
-    return { ...base, message: { role: 'user', content: e.content } };
-  }
-  if (e.type === 'result') {
-    return { ...base, result: e.result, is_error: e.is_error };
-  }
-  return base;
-}
-
-function recorded(
-  name: 'string' | 'stream',
-  keep: (e: RecordedEvent) => boolean = () => true
-): () => Iterable<unknown> {
-  const messages = RECORDINGS[name].events.filter(keep).map(sdkMessageOf);
-  return () => messages;
-}
 
 // Turn options that log what the backend reported, in order: every delta by
 // segment, and narration and tool rows as the transcript would get them.
