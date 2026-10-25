@@ -161,6 +161,8 @@ export type ServerEvent =
   // counts one conversation's frames for the daemon's life, so a gap means a
   // missed frame, which GET /api/overseer/:id's `live` snapshot repairs. Sent
   // only to the conversation's live audience (overseerLiveAudience).
+  // `abandoned` (with empty `text`) ends a segment no row will hold, as on
+  // run.delta.
   | {
       type: 'overseer.delta';
       conversationId: string;
@@ -168,6 +170,7 @@ export type ServerEvent =
       seq: number;
       segmentId: string;
       text: string;
+      abandoned?: true;
     }
   // The decision feed's contents changed: something started or stopped
   // awaiting a human. Same "go refetch" contract as task.changed — the feed is

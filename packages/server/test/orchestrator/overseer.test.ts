@@ -2071,6 +2071,49 @@ describe('overseer live text', () => {
     expect(h.manager.withLive(h.manager.get(started.id)).live).toBeUndefined();
   });
 
+  // A Claude block whose stream broke off comes again under a new segment:
+  // the half-written one must not stay on screen, nor land as narration.
+  it('drops an abandoned segment from the live text, and Stop does not keep it', async () => {
+    const h = heldManager();
+    const started = h.manager.start('look', 'held');
+    const options = h.backend.options;
+    options?.onTextDelta?.('a', 'Let me lo');
+    options?.onSegmentAbandoned?.('a');
+    const turnId = deltasOf(h)[0].turnId;
+    expect(deltasOf(h).at(-1)).toEqual({
+      type: 'overseer.delta',
+      conversationId: started.id,
+      turnId,
+      seq: 2,
+      segmentId: `${turnId}:a`,
+      text: '',
+      abandoned: true,
+    });
+    expect(h.manager.withLive(h.manager.get(started.id)).live).toEqual({
+      seq: 2,
+      turnId,
+      segments: [],
+    });
+    // A segment that never streamed, or went already, sends nothing.
+    options?.onSegmentAbandoned?.('a');
+    options?.onSegmentAbandoned?.('never');
+    expect(deltasOf(h)).toHaveLength(2);
+
+    options?.onTextDelta?.('b', 'Let me look');
+    h.manager.stop(started.id);
+    await waitFor(() => h.manager.get(started.id).state !== 'running');
+    expect(
+      h.manager.get(started.id).messages.map((m) => [m.role, m.text])
+    ).toEqual([
+      ['user', 'look'],
+      ['narration', 'Let me look'],
+      ['notice', 'Stopped'],
+    ]);
+    // After the turn, an abandon changes nothing.
+    options?.onSegmentAbandoned?.('b');
+    expect(deltasOf(h)).toHaveLength(3);
+  });
+
   it('a failed turn keeps its partial text too', async () => {
     const h = heldManager();
     const started = h.manager.start('go', 'held');
@@ -2109,12 +2152,14 @@ describe('overseer live text', () => {
     };
     const live = turnOptions();
     expect(live?.onTextDelta).toBeFunction();
+    expect(live?.onSegmentAbandoned).toBeFunction();
     expect(live?.onNarration).toBeFunction();
 
     streamMode('narration');
     const h = heldManager();
     const started = h.manager.start('hi', 'held');
     expect(h.backend.options?.onTextDelta).toBeUndefined();
+    expect(h.backend.options?.onSegmentAbandoned).toBeUndefined();
     h.backend.options?.onNarration?.('a', 'Checking first.');
     // Nothing streamed, so the row names no stream.
     expect(h.manager.get(started.id).messages.at(-1)).toEqual({
@@ -2133,6 +2178,7 @@ describe('overseer live text', () => {
     streamMode('off');
     const off = turnOptions();
     expect(off?.onTextDelta).toBeUndefined();
+    expect(off?.onSegmentAbandoned).toBeUndefined();
     expect(off?.onNarration).toBeUndefined();
   });
 
@@ -2166,7 +2212,8 @@ describe('overseer live text', () => {
     );
     h.manager.start('hi', 'held');
     h.backend.options?.onTextDelta?.('a', 'hello');
-    expect(Object.fromEntries(got)).toEqual({ operator: 1 });
+    h.backend.options?.onSegmentAbandoned?.('a');
+    expect(Object.fromEntries(got)).toEqual({ operator: 2 });
   });
 });
 

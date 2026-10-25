@@ -635,7 +635,8 @@ describe('ClaudeOverseer attachments', () => {
 });
 
 // Turn options that log what the backend reported, in order: every delta by
-// segment, and narration and tool rows as the transcript would get them.
+// segment, narration and tool rows as the transcript would get them, and
+// each segment the stream abandoned.
 function liveRecorder(on: { live?: boolean; narration?: boolean } = {}) {
   const rows: string[] = [];
   const text = new Map<string, string>();
@@ -646,6 +647,7 @@ function liveRecorder(on: { live?: boolean; narration?: boolean } = {}) {
       : {
           onTextDelta: (id: string, delta: string) =>
             text.set(id, `${text.get(id) ?? ''}${delta}`),
+          onSegmentAbandoned: (id: string) => rows.push(`abandoned ${id}`),
         }),
     ...(on.narration === false
       ? {}
@@ -826,6 +828,70 @@ describe('ClaudeOverseer live text and narration', () => {
       'narration msg_a:0: An aside the result leaves out.',
     ]);
     expect(turn).toMatchObject({ reply: 'The answer.', streamId: 'msg_a:1' });
+  });
+
+  // The CLI falls back to a non-streaming request when the stream fails
+  // mid-block: the half-streamed block never finishes, and its text comes
+  // again under a new API message.
+  it('reports a block its stream broke off as abandoned, never as narration', async () => {
+    const { toolset } = stubToolset();
+    const { rows, text, options } = liveRecorder();
+    const event = (e: object) => ({
+      type: 'stream_event',
+      session_id: 's',
+      parent_tool_use_id: null,
+      event: e,
+    });
+    const block = (id: string, said: string) => [
+      event({ type: 'message_start', message: { id } }),
+      event({
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text' },
+      }),
+      event({
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: said },
+      }),
+    ];
+    const stream = function* stream() {
+      yield* block('msg_A', 'Let me lo');
+      yield event({ type: 'content_block_stop', index: 0 });
+      yield event({ type: 'message_stop' });
+      yield* block('msg_B', 'Let me look.');
+      yield {
+        type: 'assistant',
+        parent_tool_use_id: null,
+        message: {
+          id: 'msg_B',
+          content: [
+            { type: 'text', text: 'Let me look.' },
+            { type: 'tool_use', name: 'Read', input: {} },
+          ],
+        },
+      };
+      yield event({ type: 'content_block_stop', index: 0 });
+      yield event({ type: 'message_stop' });
+      yield {
+        type: 'result',
+        subtype: 'success',
+        session_id: 's',
+        result: 'Seen it.',
+      };
+    };
+    const { turn } = await runTurn(stream, toolset, undefined, options);
+    expect(Object.fromEntries(text)).toEqual({
+      'msg_A:0': 'Let me lo',
+      'msg_B:0': 'Let me look.',
+    });
+    expect(rows).toEqual([
+      'abandoned msg_A:0',
+      'narration msg_B:0: Let me look.',
+      'tool Read',
+    ]);
+    expect(turn).toMatchObject({ reply: 'Seen it.' });
+    expect(turn).not.toHaveProperty('streamId');
   });
 
   it('commits narration when the CLI asks about a call before its message is read', async () => {

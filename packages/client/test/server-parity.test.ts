@@ -122,11 +122,12 @@ describe('events mirror dispatchd', () => {
       'seq',
       'segmentId',
       'text',
+      'abandoned?',
     ]);
     expect(client).toEqual(server);
   });
 
-  it("run.delta declares overseer.delta's fields keyed by run, plus abandoned", () => {
+  it("run.delta declares overseer.delta's fields, keyed by run", () => {
     const member = (source: string): string[] | null => {
       const body = /\{\n {6}type: 'run\.delta';([\s\S]*?)\n {4}\}/.exec(
         source

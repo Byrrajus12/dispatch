@@ -63,10 +63,13 @@ interface AssistantContentBlock {
  * block (named by ClaudeTextSegments). Its deltas go to `onTextDelta` as they
  * arrive; its finished text waits as *pending* until the turn shows what it
  * was: a tool call after it makes it narration, and what is still pending at
- * the result is the reply.
+ * the result is the reply. A block whose stream broke off before it finished
+ * never becomes pending: it goes to `onSegmentAbandoned`.
  */
 class TurnText {
-  private readonly segments = new ClaudeTextSegments();
+  private readonly segments = new ClaudeTextSegments((id) =>
+    this.opts.onSegmentAbandoned?.(id)
+  );
   private readonly pending: { id: string; text: string }[] = [];
 
   constructor(private readonly opts: OverseerTurnOptions) {}

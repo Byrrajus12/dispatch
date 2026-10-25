@@ -293,11 +293,12 @@ a segment's text lands on the record, the row carries the segment as `streamId`
 and the segment leaves the live text in the same step: an Overseer `narration`
 or `assistant` row, a run's `assistant` entry (dropped before its `run.log` is
 sent). A client hides every live segment whose id a row already carries. A
-Claude run's text block that its API message stopped without finishing (the
-stream broke off, and the CLI sends the text again under a new message) is
-abandoned: it leaves the live text, and a `run.delta` with `abandoned: true` and
-empty `text` tells clients to drop it rather than show it for the rest of the
-run.
+Claude text block that its API message stopped without finishing (the stream
+broke off, and the CLI sends the text again under a new message) is abandoned,
+in a run and in an Overseer turn alike: it leaves the live text, so a stopped
+Overseer turn never keeps it as narration, and a frame with `abandoned: true`
+and empty `text` tells clients to drop it rather than show it for the rest of
+the turn.
 
 **Snapshot.** `GET /api/overseer/:id`, `GET /api/overseer/current` and
 `GET /api/runs/:id` add `live: { seq, turnId, segments }` while a turn runs, so

@@ -518,6 +518,8 @@ export class OverseerManager {
         ? {
             onTextDelta: (segmentId: string, text: string) =>
               this.textDelta(conversationId, turnId, segmentId, text),
+            onSegmentAbandoned: (segmentId: string) =>
+              this.abandonSegment(conversationId, turnId, segmentId),
           }
         : {}),
       ...(stream !== 'off'
@@ -551,6 +553,33 @@ export class OverseerManager {
         seq,
         segmentId: id,
         text,
+      },
+      overseerLiveAudience(record)
+    );
+  }
+
+  // A segment no row will ever hold (the model's stream broke off, and the
+  // text comes again under a new one) leaves the live text, so a Stop does
+  // not keep it as narration, and a frame tells the sockets to drop it too.
+  private abandonSegment(
+    conversationId: string,
+    turnId: string,
+    segmentId: string
+  ): void {
+    const record = this.conversations.get(conversationId);
+    if (record === undefined) return;
+    const id = streamIdOf(turnId, segmentId);
+    const seq = this.live.abandon(conversationId, turnId, id);
+    if (seq === undefined) return;
+    this.ctx.events.broadcast(
+      {
+        type: 'overseer.delta',
+        conversationId,
+        turnId,
+        seq,
+        segmentId: id,
+        text: '',
+        abandoned: true,
       },
       overseerLiveAudience(record)
     );

@@ -124,6 +124,13 @@ export interface OverseerTurnOptions {
    */
   onTextDelta?: (segmentId: string, text: string) => void;
   /**
+   * A segment `onTextDelta` streamed that will never be finished: the model's
+   * stream broke off mid-block, and the text comes again under a new
+   * segment. View-only like `onTextDelta`, and given only with it; the
+   * manager drops the segment, so a stopped turn never keeps it as narration.
+   */
+  onSegmentAbandoned?: (segmentId: string) => void;
+  /**
    * A finished segment that is not the reply: prose the model wrote between
    * tool calls. Reported before the tool call that follows it, so the
    * transcript keeps the order the model wrote in; never for the reply's own

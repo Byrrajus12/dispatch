@@ -1233,6 +1233,9 @@ export type ServerEvent =
       seq: number;
       segmentId: string;
       text: string;
+      // Ends a segment no row will hold (the model's stream broke off);
+      // `text` is empty.
+      abandoned?: true;
     }
   | { type: 'review.changed'; runId: string }
   | { type: 'config.changed' }
