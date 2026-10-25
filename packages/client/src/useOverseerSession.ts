@@ -222,13 +222,14 @@ export interface OverseerSession {
    * `OverseerRecord.pendingApprovals`) by answering its `tool-approval` gate.
    * Allowing runs the call at once and the turn continues; denying hands the
    * reason to the model. Owns the lock and the failure exactly as
-   * `confirmAction` does, and never rejects: the outcome is readable on
-   * `decidingRequestId` and `decideError`.
+   * `confirmAction` does, and never rejects: it resolves true once the gate
+   * is answered and false when it was not (the reason is on `decideError`,
+   * or another decision was in flight), so a card can keep what was typed.
    */
   decideApproval: (
     requestId: string,
     decision: OverseerApprovalDecision
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   /** Which parked call `decideApproval` is currently deciding, or `null`. */
   decidingRequestId: string | null;
   /**
@@ -669,11 +670,14 @@ export function useOverseerSession(
   // be on screen together, and deciding one must not grey out the other for
   // no reason — but a second click on the same kind is still a no-op.
   const decideApproval = useCallback(
-    async (requestId: string, decision: OverseerApprovalDecision) => {
-      if (decidingRequestId !== null) return;
+    async (
+      requestId: string,
+      decision: OverseerApprovalDecision
+    ): Promise<boolean> => {
+      if (decidingRequestId !== null) return false;
       if (client === null || conversationId === null) {
         setDecideError('no overseer conversation open');
-        return;
+        return false;
       }
       setDecidingRequestId(requestId);
       setDecideError(null);
@@ -695,8 +699,10 @@ export function useOverseerSession(
         await queryClient.invalidateQueries({
           queryKey: overseerKey(port, conversationId),
         });
+        return true;
       } catch (err) {
         setDecideError(err instanceof Error ? err.message : String(err));
+        return false;
       } finally {
         setDecidingRequestId(null);
       }

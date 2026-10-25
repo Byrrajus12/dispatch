@@ -28,8 +28,9 @@ export type ToolApprovalCardProps = {
   sessionScope?: string;
   /** One line under the session option: how far the grant reaches. */
   sessionDescription?: string;
-  /** Answers the call. A rejection leaves the card as it was, reason box and all, so
-   * the human can try again; showing why is the caller's (in `children`). */
+  /** Answers the call. A rejection leaves the card ready for another try: a denial keeps
+   * its reason box and what was typed, a failed allow is no longer shown as selected.
+   * Showing why is the caller's (in `children`). */
   onDecide: (decision: ToolApprovalDecision) => Promise<void>;
   /** A decision is in flight on another card that shares this one's lock. */
   busy?: boolean;
@@ -83,7 +84,9 @@ export function ToolApprovalCard({
       setDenying(false);
       setReason('');
     } catch {
-      // The caller reports the failure; the card stays ready for another try.
+      // The caller reports the failure; the card stays ready for another try,
+      // with no answer shown as picked unless the reason box is still open.
+      if (decision.allow) setSelectedId(undefined);
     } finally {
       setDeciding(false);
     }

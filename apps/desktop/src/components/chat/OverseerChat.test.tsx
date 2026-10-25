@@ -57,7 +57,7 @@ function overseerSession(over: Partial<OverseerSession> = {}): OverseerSession {
     revoked: false,
     confirmAction: () => Promise.resolve(),
     decidingActionId: null,
-    decideApproval: () => Promise.resolve(),
+    decideApproval: () => Promise.resolve(true),
     decidingRequestId: null,
     decideError: null,
     model: 'claude-opus-5',
@@ -868,7 +868,7 @@ function parkedSession(decisions: unknown[], held = false): OverseerSession {
     }),
     decideApproval: (requestId, decision) => {
       decisions.push([requestId, decision]);
-      return Promise.resolve();
+      return Promise.resolve(true);
     },
   });
 }
@@ -925,6 +925,37 @@ test('denying a parked call collects an optional reason', async () => {
     ['req-1', { allow: false, reason: 'Use git diff --stat, not status.' }],
     ['req-1', { allow: false }],
   ]);
+});
+
+// The session reports a failed decision on decideError and resolves false;
+// the card must not take that as done and throw away the typed reason.
+test('a deny that did not go through keeps the reason box and the reason', async () => {
+  const decisions: unknown[] = [];
+  render(
+    <ChatWithDraft
+      overseer={{
+        ...parkedSession(decisions),
+        decideApproval: (requestId, decision) => {
+          decisions.push([requestId, decision]);
+          return Promise.resolve(false);
+        },
+      }}
+    />
+  );
+  fireEvent.click(screen.getByRole('radio', { name: /^Deny and tell it why/ }));
+  fireEvent.change(screen.getByLabelText('Reason for denying'), {
+    target: { value: 'use make clean' },
+  });
+  await clickAndSettle(
+    screen.getByRole('button', { name: 'Deny and tell it why' })
+  );
+  expect(decisions).toEqual([
+    ['req-1', { allow: false, reason: 'use make clean' }],
+  ]);
+  expect(screen.getByLabelText('Reason for denying')).toHaveProperty(
+    'value',
+    'use make clean'
+  );
 });
 
 // A held call (the floor, or Dispatch's own surfaces) is allowed once only.

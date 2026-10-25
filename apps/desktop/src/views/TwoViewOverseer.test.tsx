@@ -41,7 +41,7 @@ function session(over: Partial<OverseerSession>): OverseerSession {
     revoked: false,
     confirmAction: () => Promise.resolve(),
     decidingActionId: null,
-    decideApproval: () => Promise.resolve(),
+    decideApproval: () => Promise.resolve(true),
     decidingRequestId: null,
     decideError: null,
     model: 'claude-opus-5-5',

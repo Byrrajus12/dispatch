@@ -96,6 +96,18 @@ describe('ToolApprovalCard', () => {
     );
   });
 
+  test('a failed allow is not left showing as picked', async () => {
+    card(() => Promise.reject(new Error('gate closed')));
+    fireEvent.click(screen.getByRole('radio', { name: /^Approve once/ }));
+    await settle();
+    expect(screen.queryByText(/^Selected/)).toBeNull();
+    expect(
+      screen
+        .getByRole('radio', { name: /^Approve once/ })
+        .hasAttribute('disabled')
+    ).toBe(false);
+  });
+
   test('busy and disabled cards take no answer', () => {
     const onDecide = mock((_: ToolApprovalDecision) => Promise.resolve());
     const { rerender } = card(onDecide, { busy: true });

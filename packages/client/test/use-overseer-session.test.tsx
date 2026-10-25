@@ -651,9 +651,11 @@ test('decideApproval answers the tool-approval gate with approve, approve-sessio
   ]);
   const result = await openedSession(client);
 
+  let answered: boolean | undefined;
   await act(async () => {
-    await result.current.decideApproval('rq-1', { allow: true });
+    answered = await result.current.decideApproval('rq-1', { allow: true });
   });
+  expect(answered).toBe(true);
   await act(async () => {
     await result.current.decideApproval('rq-2', {
       allow: true,
@@ -688,9 +690,12 @@ test('a decision whose gate is no longer open surfaces decideError', async () =>
     'This action is no longer waiting for you.'
   );
 
+  let answered: boolean | undefined;
   await act(async () => {
-    await result.current.decideApproval('rq-1', { allow: true });
+    answered = await result.current.decideApproval('rq-1', { allow: true });
   });
+  // Resolved, never rejected, but false: a card keeps what was typed.
+  expect(answered).toBe(false);
   expect(result.current.decideError).toBe(
     'This approval is no longer waiting for you.'
   );

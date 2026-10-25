@@ -916,11 +916,15 @@ export function OverseerChat({
     void overseer.confirmAction(actionId, approve);
   }
 
-  function decideApproval(
+  // The card keeps its reason box only when its decision rejects; the session
+  // reports the failure on decideError and resolves false, so say so here.
+  async function decideApproval(
     requestId: string,
     decision: OverseerApprovalDecision
   ): Promise<void> {
-    return overseer.decideApproval(requestId, decision);
+    if (!(await overseer.decideApproval(requestId, decision))) {
+      throw new Error('the decision did not go through');
+    }
   }
 
   // A failed turn's fixes: re-send the last ask, or hand the error to the agent.
