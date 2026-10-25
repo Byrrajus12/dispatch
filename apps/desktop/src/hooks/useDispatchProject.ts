@@ -161,7 +161,12 @@ import {
   resetLiveText,
 } from './useOverseerSession';
 import { readinessKey, useReadiness } from './useReadiness';
-import { applyRunEvent, runDiffKey, runReviewKey } from './useRunData';
+import {
+  applyRunEvent,
+  fetchRunDetail,
+  runDiffKey,
+  runReviewKey,
+} from './useRunData';
 import { commentsRootKey, taskCommentsKey } from './useTaskComments';
 import { taskDocKey, tasksKey } from './useTaskDoc';
 import { applyThreadEvent } from './useThreads';
@@ -1225,7 +1230,7 @@ export function useDispatchProject(
       if (client === null || selectedRunId === null) {
         throw new Error('no run selected');
       }
-      return client.fetchRun(selectedRunId);
+      return fetchRunDetail(client, queryClient, port, selectedRunId);
     },
     enabled: client !== null && selectedRunId !== null,
     retry: false,
@@ -1618,6 +1623,11 @@ export function useDispatchProject(
           void queryClient.invalidateQueries({
             queryKey: overseerKeyPrefix(port),
           });
+          // The same for runs: a live run's detail refills its live text, and
+          // brings back any run.log entry sent while the socket was down.
+          void queryClient.invalidateQueries({
+            queryKey: ['dispatch-run', port],
+          });
           // Who this window is: the answer never goes stale, so a whoami that
           // failed while the daemon was coming up is asked again here.
           void queryClient.invalidateQueries({ queryKey: whoamiQueryKey });
@@ -1675,6 +1685,10 @@ export function useDispatchProject(
           void queryClient.invalidateQueries({ queryKey: branchesQueryKey });
         } else if (event.type === 'run.log') {
           runSteps.record(event.runId, event.entry);
+          applyRunEvent(queryClient, port, event);
+        } else if (event.type === 'run.delta') {
+          // A live run's text as the model writes it: view-only, into the live
+          // text store, never the detail cache (see applyRunEvent).
           applyRunEvent(queryClient, port, event);
         } else if (event.type === 'message.new') {
           const message = event.message;

@@ -550,6 +550,58 @@ test('hello drops the live text held for this daemon', async () => {
   expect(dispatchClient.liveTextStore.get(PORT, key)).toBeUndefined();
 });
 
+// A live run's text goes to the same store, keyed by run; the detail cache
+// never sees a frame (applyRunEvent's own tests cover the fold).
+test('a run delta lands in the live text store and leaves the run detail alone', async () => {
+  const queryClient = await mountConnected();
+  dispatchClient.resetLiveText(PORT);
+  queryClient.setQueryData(['dispatch-run', PORT, 'r-1'], {
+    meta: runFixture('r-1', 'running'),
+    entries: [],
+    evidence: [],
+    mutations: [],
+  });
+
+  act(() => {
+    sink?.onEvent({
+      type: 'run.delta',
+      runId: 'r-1',
+      turnId: 'turn-1',
+      seq: 1,
+      segmentId: 'msg_1:0',
+      text: 'Reading',
+    });
+  });
+
+  expect(
+    dispatchClient.liveTextStore.get(PORT, dispatchClient.runLiveKey('r-1'))
+      ?.segments
+  ).toEqual([{ id: 'msg_1:0', text: 'Reading' }]);
+  expect(
+    queryClient.getQueryState(['dispatch-run', PORT, 'r-1'])?.isInvalidated
+  ).toBe(false);
+});
+
+// hello dropped the run's live text with the rest; its detail's snapshot
+// refills it, and brings back entries logged while the socket was down.
+test('hello refetches every cached run detail for this daemon', async () => {
+  const queryClient = await mountConnected();
+  queryClient.setQueryData(['dispatch-run', PORT, 'r-1'], {
+    meta: runFixture('r-1', 'running'),
+    entries: [],
+    evidence: [],
+    mutations: [],
+  });
+
+  act(() => {
+    sink?.onEvent({ type: 'hello', version: '0.0.1' });
+  });
+
+  expect(
+    queryClient.getQueryState(['dispatch-run', PORT, 'r-1'])?.isInvalidated
+  ).toBe(true);
+});
+
 // A new message joins the open thread from the event itself, without a refetch.
 test('a new message lands in its cached thread through the event handler', async () => {
   const queryClient = await mountConnected();

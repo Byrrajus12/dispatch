@@ -762,3 +762,73 @@ test('without results, only the last tool call of a running run shimmers', () =>
   expect(chipState('ls')).toBe('done');
   expect(chipState('pwd')).toBe('running');
 });
+
+function renderLive(
+  entries: NormalizedEntry[],
+  live: { id: string; text: string }[],
+  state: RunMeta['state'] = 'running'
+) {
+  return render(
+    <RunLogView
+      meta={meta({ state })}
+      entries={entries}
+      live={live}
+      pendingApprovals={[]}
+      onApprove={noop}
+      onSendMessage={noop}
+      openQuestions={[]}
+      onAnswerQuestion={noop}
+      pendingScopeRequest={null}
+      onDecideScopeRequest={noop}
+      scopeDecide={CAN_DECIDE}
+      onRestartDaemon={noop}
+      onRequestChanges={noop}
+      onOpenMessage={null}
+      me={null}
+      readsAllThreads
+    />
+  );
+}
+
+// What the agent is writing comes after everything it finished, as the same
+// prose; the text a row mounts with shows at once rather than being typed out
+// again, and the words arriving stand in for the "Working…" spinner.
+test('a running run shows the text being written at the tail of its log', () => {
+  const said: NormalizedEntry = {
+    ts: '2026-10-25T10:00:00.000Z',
+    kind: 'assistant',
+    text: 'Read the tests.',
+    streamId: 'msg_1:0',
+  };
+  renderLive([said], [{ id: 'msg_2:0', text: 'Now the **fix**.' }]);
+
+  const log = screen.getByRole('region', { name: 'Run log' });
+  const finished = within(log).getByText('Read the tests.');
+  const writing = within(log).getByText('fix');
+  expect(writing.tagName).toBe('STRONG');
+  expect(
+    finished.compareDocumentPosition(writing) & Node.DOCUMENT_POSITION_FOLLOWING
+  ).toBeTruthy();
+  expect(within(log).getByText(/Now the/).textContent).toBe('Now the fix.');
+  expect(within(log).queryByText('Working…')).toBeNull();
+});
+
+test('the spinner stands in again once nothing is being written', () => {
+  renderLive(
+    [
+      {
+        ts: '2026-10-25T10:00:00.000Z',
+        kind: 'assistant',
+        text: 'Read the tests.',
+      },
+    ],
+    []
+  );
+  expect(screen.getByText('Working…')).toBeDefined();
+});
+
+test('a run with nothing logged yet shows its first words instead of the spinner', () => {
+  renderLive([], [{ id: 'msg_1:0', text: 'Looking around.' }]);
+  expect(screen.getByText('Looking around.')).toBeDefined();
+  expect(screen.queryByText('Working…')).toBeNull();
+});

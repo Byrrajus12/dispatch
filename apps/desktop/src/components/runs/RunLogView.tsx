@@ -1,5 +1,5 @@
 import { foldSubagents, providerById } from '@dispatch-foo/core/browser';
-import type { NormalizedEntry, RunMeta } from '@dispatch/client';
+import type { LiveSegment, NormalizedEntry, RunMeta } from '@dispatch/client';
 import {
   Info,
   Mail,
@@ -46,6 +46,8 @@ const SENDABLE_STATES = new Set<RunMeta['state']>([
   'running',
   'awaiting-approval',
 ]);
+
+const NO_LIVE: readonly LiveSegment[] = [];
 
 // The agent-facing prompt to answer with msg_reply; a person reading the chat has no use for it.
 const WAITING_NOTE = 'The sender is waiting.';
@@ -205,6 +207,9 @@ const ChatMessageBubble = memo(function ChatMessageBubble({
 interface RunLogViewProps {
   meta: RunMeta;
   entries: NormalizedEntry[];
+  /** The text the agent is writing right now and `entries` does not hold yet, one segment
+   * per text block (useRunLive); none once the run has ended. */
+  live?: readonly LiveSegment[];
   /** Each tool call this run is parked on, oldest first, one card per call. Empty while
    * this window cannot read gates or the list has not loaded; a banner covers that. */
   pendingApprovals: readonly PendingApproval[];
@@ -252,6 +257,7 @@ interface RunLogViewProps {
 export function RunLogView({
   meta,
   entries,
+  live = NO_LIVE,
   pendingApprovals,
   onApprove,
   onLoadApprovalInput,
@@ -282,8 +288,9 @@ export function RunLogView({
   const terminal = isTerminalRunState(meta.state);
   const canSend = SENDABLE_STATES.has(meta.state);
   // The transcript's genuinely live entries, only ever while the run is actually producing
-  // output: its last *rendered* entry, and in a run whose executor reports how its calls end,
-  // each call of the agent's own still waiting for its result (several can run at once).
+  // output: its last *rendered* entry (unless the agent is already writing past it, in the
+  // live text below), and in a run whose executor reports how its calls end, each call of
+  // the agent's own still waiting for its result (several can run at once).
   // Drives `TranscriptRow`'s `live` prop (StreamingText's reveal, Thinking's shimmer,
   // ToolChip's running state); never true for a paused or finished run, so history never
   // fakes still being written. A sub-agent's calls never get a result, so they follow the
@@ -297,9 +304,10 @@ export function RunLogView({
     lastGroup !== undefined
       ? lastGroup.entries[lastGroup.entries.length - 1]
       : undefined;
+  const writing = live.length > 0;
   const isLive = (entry: NormalizedEntry) =>
     meta.state === 'running' &&
-    (entry === lastEntry ||
+    ((entry === lastEntry && !writing) ||
       (settlesCalls &&
         entry.kind === 'tool' &&
         entry.status === 'running' &&
@@ -368,6 +376,7 @@ export function RunLogView({
             </div>
           )}
           {groups.length === 0 &&
+            !writing &&
             (meta.state === 'provisioning' || meta.state === 'running' ? (
               <div className="flex flex-1 items-center justify-center">
                 <LoadingState
@@ -417,6 +426,17 @@ export function RunLogView({
             )
           )}
 
+          {/* What the agent is writing right now, after everything it has finished: each text
+              block it has not ended yet, revealed as it grows through the same Markdown its
+              settled row uses. A block leaves here in the render its entry lands in. */}
+          {live.map((segment) => (
+            <TranscriptRow
+              key={`live:${segment.id}`}
+              entry={{ ts: '', kind: 'assistant', text: segment.text }}
+              live
+            />
+          ))}
+
           {/* Why the run stopped, in the run itself — without this a force-failed run (a
               daemon restart, not the agent's doing) reads as "failed, $0" with zero
               explanation. Rendered at the end of the transcript because the failure is
@@ -462,8 +482,9 @@ export function RunLogView({
           {/* A live run that has not printed anything for a moment is indistinguishable from a
               wedged one without this. Only while genuinely running — never on a paused or
               finished run, where a spinner would be a lie. Suppressed when the empty-state
-              LoadingState above is already showing the same "Working…" label. */}
-          {meta.state === 'running' && groups.length > 0 && (
+              LoadingState above is already showing the same "Working…" label, and while the
+              agent's words are arriving, which say it is working better than a spinner. */}
+          {meta.state === 'running' && groups.length > 0 && !writing && (
             <LoadingState
               label="Working…"
               startedAt={Date.parse(meta.createdAt)}

@@ -1,11 +1,13 @@
 import type {
   ApiClient,
   DiffResult,
+  LiveTextView,
   ReviewComment,
   ReviewVerdict,
   RunDetail,
   ServerEvent,
 } from '@dispatch/client';
+import { liveTextStore, runLiveKey, useLiveText } from '@dispatch/client';
 import {
   type QueryClient,
   useQuery,
@@ -13,22 +15,55 @@ import {
 } from '@tanstack/react-query';
 import { useCallback, useMemo } from 'react';
 
+import { isTerminalRunState } from '../lib/runState';
+
 // One run's detail, diff and line comments for a surface that shows a run of its own
 // choosing (the task page in a split pane or peek), rather than the app's selected run.
 // The keys are the ones useDispatchProject uses for the selected run, so both share one
 // cache: `run.log` appends to this detail, and `run.changed`/`review.changed` refresh it.
+// A live run's text in progress is not in the cache but the window's live text store,
+// which `run.delta` feeds and each detail fetch repairs (applyRunEvent, fetchRunDetail).
 
 export function runDetailKey(port: number | undefined, runId: string) {
   return ['dispatch-run', port, runId] as const;
 }
 
+// Refetches a run's detail so its `live` snapshot fills a gap in the run's live text. A
+// tick late: a repair asked for from inside the detail's own queryFn must not cancel the
+// fetch that is about to land.
+function repairRunLive(
+  queryClient: QueryClient,
+  port: number | undefined,
+  runId: string
+): void {
+  setTimeout(() => {
+    void queryClient.invalidateQueries({
+      queryKey: runDetailKey(port, runId),
+      exact: true,
+    });
+  }, 0);
+}
+
 /** Keeps cached run details current from the event stream: `run.log` appends its entry to
- * the run's cached detail in place, for every surface showing that run. */
+ * the run's cached detail in place, for every surface showing that run, and `run.delta`
+ * folds the text a live run is writing into the window's live text store. A frame never
+ * touches the cache: one that missed another refetches the detail once, whose `live`
+ * snapshot repairs the text. */
 export function applyRunEvent(
   queryClient: QueryClient,
   port: number | undefined,
   event: ServerEvent
 ): void {
+  if (event.type === 'run.delta') {
+    const { runId, turnId, seq, segmentId, text } = event;
+    liveTextStore.applyDelta(
+      port,
+      runLiveKey(runId),
+      { turnId, seq, segmentId, text },
+      () => repairRunLive(queryClient, port, runId)
+    );
+    return;
+  }
   if (event.type !== 'run.log') return;
   const key = runDetailKey(port, event.runId);
   queryClient.setQueryData<RunDetail>(key, (prev) =>
@@ -55,17 +90,62 @@ export function runReviewKey(port: number | undefined, runId: string) {
   return ['dispatch-review', port, runId] as const;
 }
 
+/** Reads a run's detail for a run detail query: the `live` snapshot it carries goes to the
+ * live text store (repairing a gap there), and the detail is cached without it. Every query
+ * on these keys fetches through here, so the store has whichever snapshot landed last. */
+export async function fetchRunDetail(
+  client: ApiClient,
+  queryClient: QueryClient,
+  port: number | undefined,
+  runId: string
+): Promise<RunDetail> {
+  const { live, ...detail } = await client.fetchRun(runId);
+  liveTextStore.mergeSnapshot(port, runLiveKey(runId), live, () =>
+    repairRunLive(queryClient, port, runId)
+  );
+  return detail;
+}
+
+const NO_STREAM_IDS: ReadonlySet<string> = new Set();
+
+/** The text a run's agent is writing right now and its transcript does not hold yet, one
+ * segment per text block, as the run's chat shows it; null once the run has ended. */
+export function useRunLive(
+  port: number | undefined,
+  detail: RunDetail | undefined
+): LiveTextView | null {
+  const entries = detail?.entries;
+  const committed = useMemo(
+    () =>
+      entries === undefined
+        ? NO_STREAM_IDS
+        : new Set(
+            entries.flatMap((e) =>
+              e.streamId === undefined ? [] : [e.streamId]
+            )
+          ),
+    [entries]
+  );
+  return useLiveText(
+    port,
+    detail === undefined ? null : runLiveKey(detail.meta.id),
+    detail !== undefined && !isTerminalRunState(detail.meta.state),
+    committed
+  );
+}
+
 /** A run's transcript and meta; undefined until fetched or with no run. */
 export function useRunDetail(
   client: ApiClient | null,
   port: number | undefined,
   runId: string | null
 ): RunDetail | undefined {
+  const queryClient = useQueryClient();
   const { data } = useQuery({
     queryKey: runDetailKey(port, runId ?? ''),
     queryFn: () => {
       if (client === null || runId === null) throw new Error('no run');
-      return client.fetchRun(runId);
+      return fetchRunDetail(client, queryClient, port, runId);
     },
     enabled: client !== null && runId !== null,
     // A stale id from another daemon should surface, not retry forever.
