@@ -44,6 +44,7 @@ import { cn } from '@/lib/utils';
 import { IconButton, type IconButtonProps } from '@/ui/ai/icon-button';
 import { PillButton } from '@/ui/ai/pill';
 import { PromptBar } from '@/ui/ai/prompt-bar';
+import { StreamingText } from '@/ui/ai/streaming-text';
 import { ToolChip, ToolChipGroup } from '@/ui/ai/tool-chips';
 import { Button } from '@/ui/button';
 import {
@@ -175,26 +176,52 @@ function ErrorLine({ children }: { children: ReactNode }) {
   );
 }
 
+/** The agent's own prose, as Markdown. While `streaming`, what the text grows
+ * by is revealed as it arrives, through the same Markdown, so the row looks the
+ * same once the record holds it. */
+function AgentProse({
+  text,
+  streaming = false,
+  className,
+}: {
+  text: string;
+  streaming?: boolean;
+  className?: string;
+}) {
+  const draw = (shown: string) => (
+    <Markdown content={shown} className={cn('text-[13px]', className)} />
+  );
+  return streaming ? (
+    <StreamingText text={text} streaming render={draw} />
+  ) : (
+    draw(text)
+  );
+}
+
 /** One turn of the overseer conversation — the same bubble treatment as the plan
  * thread: the assistant's replies are markdown (it's an agent transcript), the
- * user's own words render verbatim. */
+ * user's own words render verbatim. A `streaming` reply is the running turn's
+ * text still arriving: it has no time yet. */
 function OverseerMessageBubble({
-  role,
+  speaker,
   text,
   at,
+  streaming = false,
   plain = false,
   attachments = [],
   fetchAttachment,
 }: {
-  role: 'user' | 'assistant';
+  speaker: 'user' | 'assistant';
   text: string;
-  at: string;
+  at?: string;
+  streaming?: boolean;
   /** Two views: a pill for you, bare text for the agent, the time on hover. */
   plain?: boolean;
   attachments?: OverseerAttachment[];
   fetchAttachment: (attachment: OverseerAttachment) => Promise<Blob>;
 }) {
-  const fromUser = role === 'user';
+  const fromUser = speaker === 'user';
+  const live = streaming ? 'overseer-live' : undefined;
   const files =
     attachments.length > 0 ? (
       <SentAttachments
@@ -203,7 +230,7 @@ function OverseerMessageBubble({
       />
     ) : null;
   if (plain) {
-    const when = new Date(at).toLocaleString();
+    const when = at === undefined ? undefined : new Date(at).toLocaleString();
     return fromUser ? (
       <>
         {files}
@@ -217,13 +244,18 @@ function OverseerMessageBubble({
         )}
       </>
     ) : (
-      <div title={when} className="max-w-full self-stretch px-1">
-        <Markdown content={text} className="text-[13px]" />
+      <div
+        title={when}
+        data-testid={live}
+        className="max-w-full self-stretch px-1"
+      >
+        <AgentProse text={text} streaming={streaming} />
       </div>
     );
   }
   return (
     <div
+      data-testid={live}
       className={cn(
         'rounded-card flex max-w-[85%] flex-col gap-1 px-3 py-2',
         fromUser
@@ -233,7 +265,9 @@ function OverseerMessageBubble({
     >
       <div className="text-muted-foreground flex items-baseline gap-1.5 text-[12px] font-medium">
         {fromUser ? 'You' : 'Assistant'}
-        <span className="font-book">{formatRelativeTimeFromIso(at)}</span>
+        {at !== undefined && (
+          <span className="font-book">{formatRelativeTimeFromIso(at)}</span>
+        )}
       </div>
       {fromUser ? (
         <>
@@ -243,8 +277,33 @@ function OverseerMessageBubble({
           )}
         </>
       ) : (
-        <Markdown content={text} className="text-[13px]" />
+        <AgentProse text={text} streaming={streaming} />
       )}
+    </div>
+  );
+}
+
+/** Prose the agent wrote between tool calls (or before a Stop): the agent's
+ * own voice, so Markdown in its column with no speaker line of its own, and
+ * muted, so the reply stays what the eye lands on. */
+function OverseerNarration({
+  text,
+  at,
+  plain,
+}: {
+  text: string;
+  at: string;
+  plain: boolean;
+}) {
+  return (
+    <div
+      title={new Date(at).toLocaleString()}
+      data-testid="overseer-narration"
+      className={
+        plain ? 'max-w-full self-stretch px-1' : 'max-w-[85%] self-start px-3'
+      }
+    >
+      <AgentProse text={text} className="text-muted-foreground" />
     </div>
   );
 }
@@ -769,8 +828,8 @@ export function OverseerChat({
   const decideError = overseer.decideError;
 
   const fullThread = useMemo(
-    () => buildOverseerThread(overseer.record),
-    [overseer.record]
+    () => buildOverseerThread(overseer.record, overseer.live),
+    [overseer.record, overseer.live]
   );
   const [query, setQuery] = useState<string | null>(null);
   const thread = useMemo(
@@ -815,6 +874,25 @@ export function OverseerChat({
     const el = scrollRef.current;
     if (el !== null && followRef.current) el.scrollTop = el.scrollHeight;
   }, [thread.length, lastKey]);
+
+  // A row growing in place (live text revealing, its Markdown reflowing)
+  // changes neither the row count nor the last key, so the log's own DOM is
+  // watched too, and followed for a reader at the bottom. Only the open
+  // conversation renders the log.
+  const hasLog = overseer.conversationId !== null;
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!hasLog || el === null) return;
+    const observer = new MutationObserver(() => {
+      if (followRef.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+    return () => observer.disconnect();
+  }, [hasLog]);
 
   function onLogScroll() {
     const el = scrollRef.current;
@@ -892,11 +970,31 @@ export function OverseerChat({
         return (
           <OverseerMessageBubble
             key={item.key}
-            role={item.role}
+            speaker={item.role}
             text={item.text}
             at={item.at}
             plain={durable}
             attachments={item.attachments}
+            fetchAttachment={overseer.fetchAttachment}
+          />
+        );
+      case 'narration':
+        return (
+          <OverseerNarration
+            key={item.key}
+            text={item.text}
+            at={item.at}
+            plain={durable}
+          />
+        );
+      case 'live':
+        return (
+          <OverseerMessageBubble
+            key={item.key}
+            speaker="assistant"
+            text={item.text}
+            streaming
+            plain={durable}
             fetchAttachment={overseer.fetchAttachment}
           />
         );

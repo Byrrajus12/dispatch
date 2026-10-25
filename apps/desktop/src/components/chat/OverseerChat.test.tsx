@@ -1,5 +1,11 @@
 import type { OverseerAction, OverseerRecord } from '@dispatch/client';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import { expect, test } from 'bun:test';
 import { useState } from 'react';
 
@@ -629,6 +635,203 @@ test('a turn settling in place re-pins to the bottom', () => {
   // Still two rows — only the identity of the last one changed.
   expect(log.children).toHaveLength(2);
   expect(log.scrollTop).toBe(512);
+});
+
+// A running turn with the user's question asked and `live` written so far.
+function writingSession(
+  segments: { id: string; text: string }[] | null,
+  over: Partial<OverseerRecord> = {}
+): OverseerSession {
+  return overseerSession({
+    conversationId: 'w-1',
+    record: overseerRecord({
+      state: 'running',
+      messages: [{ role: 'user', text: 'status?', at: '2026-08-10T00:00:01Z' }],
+      ...over,
+    }),
+    live: segments === null ? null : { turnId: 't1', segments },
+  });
+}
+
+// The words the turn is writing say it is working; the spinner row is only
+// for the wait before the first of them.
+test('live text takes the working row’s place while the turn writes', () => {
+  const { rerender } = render(
+    <OverseerChat overseer={writingSession(null)} durable />
+  );
+  expect(screen.getByText('The overseer is working…')).toBeDefined();
+
+  rerender(
+    <OverseerChat
+      overseer={writingSession([
+        { id: 's1', text: 'Two runs are **blocked**' },
+      ])}
+      durable
+    />
+  );
+  expect(screen.queryByText('The overseer is working…')).toBeNull();
+  const live = screen.getByTestId('overseer-live');
+  // Markdown while it streams, not raw asterisks that turn bold at the end.
+  expect(live.querySelector('strong')?.textContent).toBe('blocked');
+});
+
+// Once the record holds the text as rows, the session's `live` no longer has
+// it: the narration and the reply each show exactly once.
+test('a settled turn shows its narration and its reply once each', () => {
+  const { rerender } = render(
+    <OverseerChat
+      overseer={writingSession([
+        { id: 's1', text: 'Checking the queue.' },
+        { id: 's2', text: 'Both wait on review.' },
+      ])}
+      durable
+    />
+  );
+  expect(screen.getAllByTestId('overseer-live')).toHaveLength(2);
+
+  rerender(
+    <OverseerChat
+      overseer={overseerSession({
+        conversationId: 'w-1',
+        record: overseerRecord({
+          messages: [
+            { role: 'user', text: 'status?', at: '2026-08-10T00:00:01Z' },
+            {
+              role: 'narration',
+              text: 'Checking the queue.',
+              at: '2026-08-10T00:00:02Z',
+              streamId: 's1',
+            },
+            {
+              role: 'assistant',
+              text: 'Both wait on review.',
+              at: '2026-08-10T00:00:03Z',
+              streamId: 's2',
+            },
+          ],
+        }),
+      })}
+      durable
+    />
+  );
+  expect(screen.queryByTestId('overseer-live')).toBeNull();
+  expect(screen.getAllByText('Checking the queue.')).toHaveLength(1);
+  expect(screen.getAllByText('Both wait on review.')).toHaveLength(1);
+});
+
+// Narration is the agent's own voice, so it sits in the reply's column, but
+// muted: the answer stays what the eye lands on.
+test('narration reads as the agent’s quieter voice beside its reply', () => {
+  render(
+    <OverseerChat
+      overseer={overseerSession({
+        conversationId: 'w-1',
+        record: overseerRecord({
+          messages: [
+            {
+              role: 'narration',
+              text: 'Checking the queue.',
+              at: '2026-08-10T00:00:02Z',
+            },
+            {
+              role: 'assistant',
+              text: 'Both wait on review.',
+              at: '2026-08-10T00:00:03Z',
+            },
+          ],
+        }),
+      })}
+      durable
+    />
+  );
+  const narration = screen.getByTestId('overseer-narration');
+  const reply = screen.getByText('Both wait on review.').closest('div');
+  expect(narration.className).toContain('self-stretch');
+  expect(
+    narration.querySelector('[data-slot="markdown"]')?.className
+  ).toContain('text-muted-foreground');
+  expect(reply?.className ?? '').not.toContain('text-muted-foreground');
+});
+
+// Live text grows inside one row, which moves neither the row count nor the
+// last key the pin effect follows; the log follows its own DOM for that.
+// scrollHeight is a getter so the test can grow the content by hand.
+test('live text growing in place keeps a reader at the bottom following', async () => {
+  const { rerender } = render(
+    <OverseerChat
+      overseer={writingSession([{ id: 's1', text: 'Checking' }])}
+      compact
+    />
+  );
+  const log = screen.getByRole('log');
+  let height = 480;
+  Object.defineProperty(log, 'scrollHeight', {
+    get: () => height,
+    configurable: true,
+  });
+  Object.defineProperty(log, 'clientHeight', {
+    value: 480,
+    configurable: true,
+  });
+  Object.defineProperty(log, 'scrollTop', {
+    value: 0,
+    writable: true,
+    configurable: true,
+  });
+  fireEvent.scroll(log);
+
+  height = 900;
+  rerender(
+    <OverseerChat
+      overseer={writingSession([
+        {
+          id: 's1',
+          text: 'Checking the merge queue: two runs wait on review.',
+        },
+      ])}
+      compact
+    />
+  );
+  await waitFor(() => {
+    expect(log.scrollTop).toBe(900);
+  });
+});
+
+test('a reader scrolled up stays put while live text grows', async () => {
+  const { rerender } = render(
+    <OverseerChat
+      overseer={writingSession([{ id: 's1', text: 'Checking' }])}
+      compact
+    />
+  );
+  const log = screen.getByRole('log');
+  Object.defineProperty(log, 'scrollHeight', {
+    value: 900,
+    configurable: true,
+  });
+  Object.defineProperty(log, 'clientHeight', {
+    value: 300,
+    configurable: true,
+  });
+  Object.defineProperty(log, 'scrollTop', {
+    value: 100,
+    writable: true,
+    configurable: true,
+  });
+  fireEvent.scroll(log);
+
+  rerender(
+    <OverseerChat
+      overseer={writingSession([
+        { id: 's1', text: 'Checking the merge queue: two runs wait.' },
+      ])}
+      compact
+    />
+  );
+  await waitFor(() => {
+    expect(screen.getByText(/two runs wait/)).toBeDefined();
+  });
+  expect(log.scrollTop).toBe(100);
 });
 
 // A parked built-in call is the one row where the session is blocked right
