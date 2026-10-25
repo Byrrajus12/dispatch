@@ -24,6 +24,11 @@ import {
   mergeFlagSettings,
 } from '../../memory/claudeModes.js';
 import { openClaudeQuery, rewriteMissingCliError } from '../claudeCli.js';
+import {
+  apiMessageId,
+  type ClaudeStreamEvent,
+  ClaudeTextSegments,
+} from '../claudeTextSegments.js';
 import type { StdioServerSpec } from '../dispatchMcp.js';
 import { cartoMcpSpec, cartoSpecFor, dispatchMcpSpec } from '../dispatchMcp.js';
 import { activeExperiments } from '../experiments.js';
@@ -514,12 +519,15 @@ interface UserContentBlock {
 // agent spawning a sub-agent and is logged through `tracker` as an `agent`
 // entry instead of a plain tool entry. The id of every other tool call the
 // agent itself made goes into `toolCalls`, so its result can be logged too.
+// `streamIdOf`, given for a top-level message while the run streams, names
+// the segment each text block streamed under (ClaudeTextSegments.claim).
 function entriesForAssistantContent(
   content: unknown,
   ts: string,
   tracker: SubagentTracker,
   parentToolUseId: string | undefined,
-  toolCalls: Set<string>
+  toolCalls: Set<string>,
+  streamIdOf?: () => string
 ): NormalizedEntry[] {
   const blocks = content as AssistantContentBlock[];
   const entries: NormalizedEntry[] = [];
@@ -527,7 +535,14 @@ function entriesForAssistantContent(
     parentToolUseId !== undefined ? { parentToolUseId } : ({} as const);
   for (const block of blocks) {
     if (block.type === 'text' && block.text !== undefined) {
-      entries.push({ ts, kind: 'assistant', text: block.text, ...parent });
+      const streamId = streamIdOf?.();
+      entries.push({
+        ts,
+        kind: 'assistant',
+        text: block.text,
+        ...parent,
+        ...(streamId !== undefined ? { streamId } : {}),
+      });
     } else if (block.type === 'thinking' && block.thinking !== undefined) {
       entries.push({ ts, kind: 'thinking', text: block.thinking, ...parent });
     } else if (block.type === 'tool_use' && block.name !== undefined) {
@@ -1122,6 +1137,8 @@ export class ClaudeExecutor implements Executor {
       // these to actually find.
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       settingSources: ['user', 'project', 'local'],
+      // Stream events only when someone shows the text as it is written.
+      ...(events.onDelta !== undefined ? { includePartialMessages: true } : {}),
       ...experimentOptions(experiments),
       // Bug fix (fix/executor-mcp-wiring): `query()` does NOT auto-load a
       // project's committed `.mcp.json` the way the interactive `claude` CLI
@@ -1260,6 +1277,10 @@ export class ClaudeExecutor implements Executor {
       const subagents = new SubagentTracker();
       // The agent's own tool calls still waiting for their result.
       const toolCalls = new Set<string>();
+      // Names the agent's text blocks while the run streams, so each
+      // finished block's entry carries the segment its deltas went to.
+      const segments =
+        events.onDelta === undefined ? undefined : new ClaudeTextSegments();
       // The session's live background tasks (background_tasks_changed
       // carries the whole set each time), so windDown can stop them.
       let backgroundTasks: string[] = [];
@@ -1281,14 +1302,33 @@ export class ClaudeExecutor implements Executor {
               };
             }
             const ts = new Date().toISOString();
+            const topLevel = (message.parent_tool_use_id ?? null) === null;
+            const apiId = apiMessageId(message.message);
             for (const entry of entriesForAssistantContent(
               message.message.content,
               ts,
               subagents,
               message.parent_tool_use_id ?? undefined,
-              toolCalls
+              toolCalls,
+              segments !== undefined && topLevel
+                ? () => segments.claim(apiId)
+                : undefined
             )) {
               events.onEntry(entry);
+            }
+          } else if (message.type === 'stream_event') {
+            // A sub-agent's text is not the run's own; its entries say so,
+            // and its stream is not shown live.
+            if (
+              segments !== undefined &&
+              (message.parent_tool_use_id ?? null) === null
+            ) {
+              const delta = segments.event(
+                message.event as unknown as ClaudeStreamEvent
+              );
+              if (delta !== null) {
+                events.onDelta?.(delta.segmentId, delta.text);
+              }
             }
           } else if (message.type === 'user') {
             const ts = new Date().toISOString();

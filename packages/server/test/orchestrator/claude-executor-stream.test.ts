@@ -1,3 +1,4 @@
+import type { Options } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, describe, expect, it } from 'bun:test';
 import { rmSync } from 'node:fs';
 
@@ -7,6 +8,7 @@ import {
   MAX_TOOL_RESULT_TEXT,
   type NormalizedEntry,
 } from '../../src/orchestrator/types.js';
+import { recorded } from './claudeRecordings.js';
 import { initGitRepo, withRunEndControls } from './helpers.js';
 
 const repos: string[] = [];
@@ -26,34 +28,58 @@ const RESULT = {
   result: '',
 };
 
-// Runs a ClaudeExecutor over a scripted SDK message stream and collects every
-// entry it logs until the run finishes.
-async function entriesFor(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  messages: any[]
-): Promise<NormalizedEntry[]> {
+// Runs a ClaudeExecutor over an SDK message stream until the run finishes,
+// collecting the entries it logs, the deltas it streams (only when `live`, the
+// one case a run is given onDelta) and the options it opened the query with.
+async function runOver(
+  messages: Iterable<unknown>,
+  live = false
+): Promise<{
+  entries: NormalizedEntry[];
+  deltas: [string, string][];
+  options: Options | undefined;
+}> {
   const repo = initGitRepo('dispatch-claude-stream-');
   repos.push(repo);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function* stream(): Generator<any> {
-    yield { type: 'system', subtype: 'init', session_id: 's-1' };
-    yield* messages;
-    yield RESULT;
-  }
-  const executor = new ClaudeExecutor(() => withRunEndControls(stream()));
+  let options: Options | undefined;
+  const executor = new ClaudeExecutor((args: { options?: Options }) => {
+    options = args.options;
+    return withRunEndControls([...messages]);
+  });
   const entries: NormalizedEntry[] = [];
+  const deltas: [string, string][] = [];
   await new Promise<void>((resolve) => {
     const events: ExecutorEvents = {
       onEntry: (entry) => entries.push(entry),
       onApprovalRequest: () => {},
       onFinish: () => resolve(),
+      ...(live
+        ? { onDelta: (id: string, text: string) => deltas.push([id, text]) }
+        : {}),
     };
     executor.start(
       { cwd: repo, prompt: 'go', permissionMode: 'acceptEdits' },
       events
     );
   });
+  return { entries, deltas, options };
+}
+
+// The entries a scripted session between an init and a result logs.
+async function entriesFor(messages: unknown[]): Promise<NormalizedEntry[]> {
+  const { entries } = await runOver([
+    { type: 'system', subtype: 'init', session_id: 's-1' },
+    ...messages,
+    RESULT,
+  ]);
   return entries;
+}
+
+// The text each segment streamed, joined in order.
+function streamedText(deltas: [string, string][]): Record<string, string> {
+  const text: Record<string, string> = {};
+  for (const [id, delta] of deltas) text[id] = (text[id] ?? '') + delta;
+  return text;
 }
 
 function toolUse(id: string, name: string, parent: string | null = null) {
@@ -172,6 +198,112 @@ describe('ClaudeExecutor tool results', () => {
       ['tu-sub', 'running', 'tu-spawn'],
       ['tu-1', 'running', null],
       ['tu-1', 'done', null],
+    ]);
+  });
+});
+
+// Live text replays a real Agent SDK 0.3.293 session recorded with partial
+// messages on (test/fixtures/claude-overseer-stream.json, "stream"): a line,
+// a Bash call, then the answer. Each text block streams under its own
+// segment, and the entry it ends as names that segment.
+describe('ClaudeExecutor live text', () => {
+  const LINE = 'msg_stream_1:1';
+  const ANSWER = 'msg_stream_2:0';
+
+  it('streams each text block and stamps its entry with the segment', async () => {
+    const { entries, deltas, options } = await runOver(
+      recorded('stream')(),
+      true
+    );
+
+    expect(options?.includePartialMessages).toBe(true);
+    const answer = entries.at(-1)?.text ?? '';
+    expect(answer).toStartWith('The year is 2026');
+    expect(streamedText(deltas)).toEqual({
+      [LINE]: 'I will check the date.',
+      [ANSWER]: answer,
+    });
+    expect(
+      entries.map((e) => [e.kind, e.toolName ?? null, e.streamId ?? null])
+    ).toEqual([
+      ['assistant', null, LINE],
+      ['tool', 'Bash', null],
+      ['tool', null, null],
+      ['assistant', null, ANSWER],
+    ]);
+  });
+
+  it('asks for no partial messages and stamps nothing when no one watches', async () => {
+    const { entries, deltas, options } = await runOver(recorded('stream')());
+
+    expect(options?.includePartialMessages).toBeUndefined();
+    expect(deltas).toEqual([]);
+    expect(entries.some((e) => e.streamId !== undefined)).toBe(false);
+  });
+
+  // An older CLI, or one that sends no stream events: nothing streams, and
+  // each text block is still named, by its place in its API message.
+  it('names text blocks by their place when the stream sends no events', async () => {
+    const { entries, deltas } = await runOver(
+      recorded('stream', (e) => e.type !== 'stream_event')(),
+      true
+    );
+
+    expect(deltas).toEqual([]);
+    expect(
+      entries.filter((e) => e.kind === 'assistant').map((e) => e.streamId)
+    ).toEqual(['msg_stream_1:0', 'msg_stream_2:0']);
+  });
+
+  it("does not stream a sub-agent's text", async () => {
+    const sub = { parent_tool_use_id: 'tu-spawn', session_id: 's-1' };
+    const { entries, deltas } = await runOver(
+      [
+        { type: 'system', subtype: 'init', session_id: 's-1' },
+        {
+          ...sub,
+          type: 'stream_event',
+          event: { type: 'message_start', message: { id: 'msg-sub' } },
+        },
+        {
+          ...sub,
+          type: 'stream_event',
+          event: {
+            type: 'content_block_start',
+            index: 0,
+            content_block: { type: 'text' },
+          },
+        },
+        {
+          ...sub,
+          type: 'stream_event',
+          event: {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'text_delta', text: 'sub-agent words' },
+          },
+        },
+        {
+          ...sub,
+          type: 'assistant',
+          message: {
+            id: 'msg-sub',
+            content: [{ type: 'text', text: 'sub-agent words' }],
+          },
+        },
+        RESULT,
+      ],
+      true
+    );
+
+    expect(deltas).toEqual([]);
+    expect(entries).toEqual([
+      {
+        ts: expect.any(String),
+        kind: 'assistant',
+        text: 'sub-agent words',
+        parentToolUseId: 'tu-spawn',
+      },
     ]);
   });
 });

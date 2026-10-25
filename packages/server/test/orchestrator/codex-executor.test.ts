@@ -163,15 +163,19 @@ function startHarness(
       | undefined;
     permissionMode?: string;
     cwd?: string;
+    /** Gives the run onDelta, which only a streaming run gets. */
+    live?: boolean;
   } = {}
 ): {
   entries: NormalizedEntry[];
+  deltas: [string, string][];
   approvals: Parameters<ExecutorEvents['onApprovalRequest']>[0][];
   sessions: string[];
   finishes: Parameters<ExecutorEvents['onFinish']>[0][];
   run: ReturnType<CodexExecutor['start']>;
 } {
   const entries: NormalizedEntry[] = [];
+  const deltas: [string, string][] = [];
   const approvals: Parameters<ExecutorEvents['onApprovalRequest']>[0][] = [];
   const sessions: string[] = [];
   const finishes: Parameters<ExecutorEvents['onFinish']>[0][] = [];
@@ -196,9 +200,12 @@ function startHarness(
       onApprovalRequest: (approval) => approvals.push(approval),
       onSession: (sessionId) => sessions.push(sessionId),
       onFinish: (finish) => finishes.push(finish),
+      ...(options.live === true
+        ? { onDelta: (id: string, text: string) => deltas.push([id, text]) }
+        : {}),
     }
   );
-  return { entries, approvals, sessions, finishes, run };
+  return { entries, deltas, approvals, sessions, finishes, run };
 }
 
 // The tool names the real dispatch MCP server lists, spawned from the same
@@ -1014,6 +1021,65 @@ describe('CodexExecutor', () => {
       ['codex.commandExecution', 'cmd-1', 'error'],
       ['mcp.dispatch.task_get', 'mcp-1', 'done'],
     ]);
+  });
+
+  // Deltas can land before turn/start answers, so they wait with the turn's
+  // other notifications; another thread's or turn's never count.
+  it('streams agentMessage deltas by item id and stamps the message with it', async () => {
+    const script = (fake: FakeCodexProcess) => {
+      const delta = (turnId: string, itemId: string, text: string) =>
+        fake.notify('item/agentMessage/delta', {
+          threadId: 'thread-new',
+          turnId,
+          itemId,
+          delta: text,
+        });
+      delta('turn-1', 'msg-1', 'Look');
+      delta('turn-1', 'msg-1', '');
+      delta('turn-0', 'msg-1', 'stale');
+      fake.notify('item/agentMessage/delta', {
+        threadId: 'thread-other',
+        turnId: 'turn-1',
+        itemId: 'msg-1',
+        delta: 'elsewhere',
+      });
+      delta('turn-1', 'msg-1', 'ing.');
+      fake.notify('item/completed', {
+        threadId: 'thread-new',
+        turnId: 'turn-1',
+        item: { type: 'agentMessage', id: 'msg-1', text: 'Looking.' },
+      });
+      fake.notify('turn/completed', {
+        threadId: 'thread-new',
+        turn: { id: 'turn-1', status: 'completed', error: null },
+      });
+    };
+    const live = startHarness(
+      scriptedProcess({ afterTurn: script }),
+      undefined,
+      undefined,
+      {
+        live: true,
+      }
+    );
+    await waitFor(() => live.finishes.length === 1);
+    expect(live.deltas).toEqual([
+      ['msg-1', 'Look'],
+      ['msg-1', 'ing.'],
+    ]);
+    expect(live.entries).toEqual([
+      expect.objectContaining({
+        kind: 'assistant',
+        text: 'Looking.',
+        streamId: 'msg-1',
+      }),
+    ]);
+
+    // A run nobody streams logs the message as it always has.
+    const quiet = startHarness(scriptedProcess({ afterTurn: script }));
+    await waitFor(() => quiet.finishes.length === 1);
+    expect(quiet.deltas).toEqual([]);
+    expect(quiet.entries[0]?.streamId).toBeUndefined();
   });
 
   it('keeps failed child diagnostics without poisoning a completed turn', async () => {

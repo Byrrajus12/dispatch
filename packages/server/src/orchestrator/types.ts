@@ -59,6 +59,10 @@ export interface NormalizedEntry {
   // Set on entries delivered via `Orchestrator.notifyRun` — a non-interrupting
   // channel digest rather than a message the agent must respond to.
   digest?: boolean;
+  // `assistant` entries whose text streamed: the segment its `onDelta` text
+  // was keyed by, so a client showing that text live drops it once the
+  // entry lands.
+  streamId?: string;
 }
 
 // How much of a tool's result a transcript keeps: a run's tool result entry,
@@ -172,6 +176,12 @@ export interface ExecutorRun {
 // id, so the executor implementation itself never needs to know a run id.
 export interface ExecutorEvents {
   onEntry(entry: NormalizedEntry): void;
+  // Text as the model writes it, keyed by the segment it belongs to (one
+  // Claude text block, one Codex agentMessage item). Never persisted: the
+  // finished text arrives as an `assistant` entry whose `streamId` is that
+  // segment. Optional: an executor streams only when it is given, and must
+  // work the same when the model's stream sends none.
+  onDelta?(segmentId: string, text: string): void;
   onApprovalRequest(request: {
     requestId: string;
     toolName: string;
