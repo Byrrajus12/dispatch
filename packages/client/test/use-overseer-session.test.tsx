@@ -13,8 +13,9 @@ import {
   type OverseerRecordView,
   type ReplyInput,
 } from '../src/api';
-import { resetLiveText } from '../src/liveText';
+import { liveTextStore, resetLiveText, runLiveKey } from '../src/liveText';
 import { memoryStorage } from '../src/storage';
+import { useLiveText } from '../src/useLiveText';
 import {
   applyOverseerDelta,
   invalidateOverseerEvent,
@@ -1202,4 +1203,86 @@ test('a segment never vanishes between its live text and its row', async () => {
   });
   expect(seen).not.toContain('none');
   expect(result.current.live).toBeNull();
+});
+
+// useLiveText, the generic hook under `live` above, as a run's chat reads it:
+// keyed by run, on a port of its own so the Overseer tests' resets miss it.
+const LIVE_PORT = 4322;
+const LIVE_KEY = runLiveKey('r-1');
+const NONE: ReadonlySet<string> = new Set();
+
+afterEach(() => {
+  resetLiveText(LIVE_PORT);
+});
+
+function frame(seq: number, segmentId: string, text: string) {
+  return { turnId: 't1', seq, segmentId, text };
+}
+
+function apply(seq: number, segmentId: string, text: string): void {
+  act(() => {
+    liveTextStore.applyDelta(
+      LIVE_PORT,
+      LIVE_KEY,
+      frame(seq, segmentId, text),
+      () => {}
+    );
+  });
+}
+
+// The generic hook a run's chat reads (the Overseer's session uses it too):
+// only a running record shows live text, and never a segment it holds.
+test('shows a running key’s segments minus the committed ones', () => {
+  const { result, rerender } = renderHook(
+    ({ running, committed }) =>
+      useLiveText(LIVE_PORT, LIVE_KEY, running, committed),
+    { initialProps: { running: true, committed: NONE } }
+  );
+  expect(result.current).toBeNull();
+
+  apply(1, 'a', 'One');
+  apply(2, 'b', 'Two');
+  expect(result.current).toEqual({
+    turnId: 't1',
+    segments: [
+      { id: 'a', text: 'One' },
+      { id: 'b', text: 'Two' },
+    ],
+  });
+
+  rerender({ running: true, committed: new Set(['a']) });
+  expect(result.current?.segments).toEqual([{ id: 'b', text: 'Two' }]);
+
+  rerender({ running: false, committed: new Set(['a']) });
+  expect(result.current).toBeNull();
+});
+
+// A snapshot without a segment can reach the store a render before the record
+// that holds its row: the segment stays shown until that row arrives.
+test('keeps a shown segment until the record holds its row', () => {
+  const { result, rerender } = renderHook(
+    ({ committed }) => useLiveText(LIVE_PORT, LIVE_KEY, true, committed),
+    { initialProps: { committed: NONE } }
+  );
+  apply(1, 'a', 'Said');
+  expect(result.current?.segments).toEqual([{ id: 'a', text: 'Said' }]);
+
+  act(() => {
+    liveTextStore.mergeSnapshot(
+      LIVE_PORT,
+      LIVE_KEY,
+      { seq: 1, turnId: 't1', segments: [] },
+      () => {}
+    );
+  });
+  expect(result.current?.segments).toEqual([{ id: 'a', text: 'Said' }]);
+
+  rerender({ committed: new Set(['a']) });
+  expect(result.current?.segments).toEqual([]);
+});
+
+test('reads nothing for no key', () => {
+  apply(1, 'a', 'One');
+  const { result } = renderHook(() => useLiveText(LIVE_PORT, null, true, NONE));
+  expect(result.current).toBeNull();
 });

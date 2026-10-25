@@ -294,6 +294,8 @@ export {
   runLiveKey,
 } from './liveText';
 export type { LiveFrame, LiveTextState } from './liveText';
+export { useLiveText } from './useLiveText';
+export type { LiveTextView } from './useLiveText';
 export {
   applyOverseerDelta,
   invalidateOverseerEvent,

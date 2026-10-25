@@ -5,19 +5,11 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import type { Dispatch, SetStateAction } from 'react';
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   type ApiClient,
   ApiError,
-  type LiveSegment,
   type OverseerAttachment,
   type OverseerRecord,
   type OverseerRecordView,
@@ -28,12 +20,7 @@ import {
   findOverseerApprovalGate,
   openGatesKey,
 } from './gates';
-import {
-  type LiveFrame,
-  type LiveTextState,
-  liveTextStore,
-  overseerLiveKey,
-} from './liveText';
+import { type LiveFrame, liveTextStore, overseerLiveKey } from './liveText';
 import {
   DEFAULT_EFFORT_ID,
   effortFromId,
@@ -42,6 +29,7 @@ import {
   storeRoleModelOverride,
 } from './models';
 import { browserStorage, type KeyValueStore } from './storage';
+import { type LiveTextView, useLiveText } from './useLiveText';
 
 /** What the host supplies: where the composer's model pick persists, and the dev fake-backend switch. */
 export interface OverseerSessionOptions {
@@ -113,10 +101,9 @@ function mergeOverseerLive(
 
 /** The running turn's text as a view shows it: what it has written and the
  *  record does not hold as a row yet, one entry per segment. */
-export interface OverseerLive {
-  turnId: string;
-  segments: LiveSegment[];
-}
+export type OverseerLive = LiveTextView;
+
+const NO_SEGMENTS: ReadonlySet<string> = new Set();
 
 // The stream ids of the record's rows: the segments it already holds.
 function committedSegments(record: OverseerRecord): Set<string> {
@@ -125,63 +112,6 @@ function committedSegments(record: OverseerRecord): Set<string> {
       m.streamId === undefined ? [] : [m.streamId]
     )
   );
-}
-
-// The live text worth showing: none unless the record's turn is running, and
-// no segment the record already holds as a narration or reply row.
-function visibleLive(
-  record: OverseerRecord | undefined,
-  state: LiveTextState | undefined
-): OverseerLive | null {
-  if (record?.state !== 'running' || !state?.turnId) return null;
-  const committed = committedSegments(record);
-  return {
-    turnId: state.turnId,
-    segments: state.segments.filter((s) => !committed.has(s.id)),
-  };
-}
-
-/**
- * `visibleLive`, minus one blink. The refetch that brings a segment's row also
- * brings a `live` without that segment, but the store takes the snapshot as
- * the fetch lands and the record reaches the view a tick later, so for one
- * render the segment would be in neither: its text would blink out at every
- * narration, and the "working" row flash in before every reply. A segment
- * shown last render is kept, in place, while its turn runs and the record
- * holds no row for it yet; the server only drops a segment when it commits
- * it, or when the turn ends.
- */
-function useVisibleLive(
-  record: OverseerRecord | undefined,
-  state: LiveTextState | undefined
-): OverseerLive | null {
-  const last = useRef<OverseerLive | null>(null);
-  const live = useMemo(() => {
-    const next = visibleLive(record, state);
-    const prev = last.current;
-    if (next === null || prev?.turnId !== next.turnId || record === undefined) {
-      return next;
-    }
-    const committed = committedSegments(record);
-    const byId = new Map(next.segments.map((s) => [s.id, s]));
-    const kept = prev.segments.flatMap((s) => {
-      const now = byId.get(s.id);
-      if (now !== undefined) return [now];
-      return committed.has(s.id) ? [] : [s];
-    });
-    const shownBefore = new Set(prev.segments.map((s) => s.id));
-    const segments = [
-      ...kept,
-      ...next.segments.filter((s) => !shownBefore.has(s.id)),
-    ];
-    return segments.length === next.segments.length
-      ? next
-      : { turnId: next.turnId, segments };
-  }, [record, state]);
-  useEffect(() => {
-    last.current = live;
-  }, [live]);
-  return live;
 }
 
 /** What the human answered to a parked built-in tool call, sent as the answer
@@ -871,12 +801,16 @@ export function useOverseerSession(
     error instanceof ApiError && (error.status === 404 || error.status === 410);
   const shown = recordGone ? undefined : record;
 
-  const liveKey =
-    conversationId === null ? null : overseerLiveKey(conversationId);
-  const liveState = useSyncExternalStore(liveTextStore.subscribe, () =>
-    liveKey === null ? undefined : liveTextStore.get(port, liveKey)
+  const committed = useMemo(
+    () => (shown === undefined ? NO_SEGMENTS : committedSegments(shown)),
+    [shown]
   );
-  const live = useVisibleLive(shown, liveState);
+  const live = useLiveText(
+    port,
+    conversationId === null ? null : overseerLiveKey(conversationId),
+    shown?.state === 'running',
+    committed
+  );
 
   return {
     conversationId,
