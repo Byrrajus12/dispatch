@@ -55,6 +55,19 @@ function makeSync(): LinearSync {
   });
 }
 
+// A sync whose orchestrator reports a finished run for `id`.
+function withFinished(id: string): LinearSync {
+  return new LinearSync({
+    rootDir: root,
+    store,
+    cache,
+    events,
+    client: fake,
+    localHumanRef: 'human:wyat',
+    finishedRuns: () => new Set([id]),
+  });
+}
+
 // Moves the clock on for a remote edit, the way Linear stamps a write.
 function touch(issue: LinearIssue): void {
   issue.updatedAt = fake.stamp();
@@ -157,6 +170,51 @@ describe('workflow states and people', () => {
       finished.meta.updated
     );
     expect(fake.created).toHaveLength(0);
+  });
+
+  it('sends a linked task’s move into a review state the team adds', async () => {
+    fake.states = STATES.filter((s) => s.name !== 'In Review');
+    const { id } = await linkedPair();
+    const updated = store.get(id)?.meta.updated;
+    fake.states = STATES;
+
+    await withFinished(id).syncOnce();
+
+    expect(store.get(id)?.meta.status).toBe('In Review');
+    expect(store.get(id)?.meta.updated).toBe(updated);
+    expect(fake.updated.map((u) => u.input.stateId)).toEqual(['s-review']);
+  });
+
+  it('lets a newer state edit in Linear win over that move', async () => {
+    fake.states = STATES.filter((s) => s.name !== 'In Review');
+    const { issue, id } = await linkedPair();
+    const remote = fake.issues.find((i) => i.id === issue.id);
+    if (remote === undefined) throw new Error('issue vanished');
+    // A teammate closed it before the pass, after the task's last edit.
+    remote.state = STATES.find((s) => s.name === 'Done') ?? null;
+    remote.updatedAt = new Date(Date.now() - 1000).toISOString();
+    fake.states = STATES;
+
+    await withFinished(id).syncOnce();
+
+    expect(store.get(id)?.meta.status).toBe('Done');
+    expect(fake.updated.map((u) => u.input.stateId)).not.toContain('s-review');
+  });
+
+  it('moves tasks waiting for review into a review state picked in Settings', async () => {
+    fake.states = STATES.map((s) =>
+      s.id === 's-review' ? { ...s, name: 'QA' } : s
+    );
+    const finished = store.create({ title: 'Run finished', status: 'working' });
+    await withFinished(finished.meta.id).syncOnce();
+    expect(loadConfig(root).statusRoles?.review).toBe('In Progress');
+
+    updateConfig(root, {
+      statusRoles: { ...loadConfig(root).statusRoles!, review: 'QA' },
+    });
+    await withFinished(finished.meta.id).syncOnce();
+
+    expect(store.get(finished.meta.id)?.meta.status).toBe('QA');
   });
 
   it('keeps a role the user overrode, and follows a renamed state', async () => {

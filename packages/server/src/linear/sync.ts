@@ -2,6 +2,7 @@ import {
   clearProjectCredential,
   DEFAULT_LINEAR,
   fieldHash,
+  isDoneStatus,
   isOutstanding,
   loadConfig,
   parseLinearExternal,
@@ -67,6 +68,7 @@ import {
   linearCoverage,
 } from './coverage.js';
 import type {
+  CreateRemoteResult,
   LinearSyncSummary,
   ReconcileMode,
   RemoteRecord,
@@ -528,7 +530,8 @@ function clearPause(state: LinearSyncState): void {
 // Whether a measurement shows room under `limit` that ends the pause. It
 // must have begun after Linear refused the create; and since it counts only
 // the teams the key can see, it must also be lower than the count measured
-// before, unless that one showed no room (or there was none).
+// before, unless that one showed no room (or there was none). A count taken
+// before the limit was known is held to the limit now in force.
 function measuredRoom(
   prior: LinearCapacityState | null,
   active: number | null,
@@ -539,10 +542,7 @@ function measuredRoom(
   const limitedAt = prior?.limitedAt ?? null;
   if (limitedAt !== null && Date.parse(limitedAt) >= startedAt) return false;
   const before = prior?.active ?? null;
-  const priorLimit = prior?.limit ?? null;
-  if (before === null || priorLimit === null || before >= priorLimit) {
-    return true;
-  }
+  if (before === null || before >= (prior?.limit ?? limit)) return true;
   return active < before;
 }
 
@@ -684,7 +684,13 @@ export class LinearSync {
     closedAt: number;
     data: LinearCapacity;
   } | null = null;
-  private capacityInFlight: Promise<LinearResult<LinearCapacity>> | null = null;
+  // The measurement running, and whether it walks the closed counts afresh.
+  private capacityInFlight: {
+    refresh: boolean;
+    done: Promise<LinearResult<LinearCapacity>>;
+  } | null = null;
+  // Bumped by each measurement and each reset; only the newest one caches.
+  private capacityEpoch = 0;
   // Labels found blocked in Linear, kept across passes (see PassDeps).
   private readonly blockedLabels = new Map<
     string,
@@ -793,7 +799,7 @@ export class LinearSync {
    *  key. The machine-wide key is never written, staying a read-only fallback. */
   connect(apiKey: string): void {
     this.workspaceCache = null;
-    this.capacityCache = null;
+    this.resetCapacity();
     writeProjectCredential(this.deps.rootDir, 'linear', { apiKey });
   }
 
@@ -811,7 +817,7 @@ export class LinearSync {
       writeLinearState(this.deps.rootDir, state);
     }
     this.workspaceCache = null;
-    this.capacityCache = null;
+    this.resetCapacity();
     clearProjectCredential(this.deps.rootDir, 'linear');
   }
 
@@ -1178,10 +1184,21 @@ export class LinearSync {
     if (cached !== null && fresh && !refresh) {
       return { ok: true, data: cached.data };
     }
-    this.capacityInFlight ??= this.measureCapacity(refresh).finally(() => {
-      this.capacityInFlight = null;
+    // A refresh never shares one that may reuse the closed counts.
+    const running = this.capacityInFlight;
+    if (running !== null && (running.refresh || !refresh)) return running.done;
+    const done = this.measureCapacity(refresh).finally(() => {
+      if (this.capacityInFlight?.done === done) this.capacityInFlight = null;
     });
-    return this.capacityInFlight;
+    this.capacityInFlight = { refresh, done };
+    return done;
+  }
+
+  // Forgets the measurement and any running, which no longer caches.
+  private resetCapacity(): void {
+    this.capacityCache = null;
+    this.capacityInFlight = null;
+    this.capacityEpoch++;
   }
 
   private async measureCapacity(
@@ -1212,6 +1229,7 @@ export class LinearSync {
         ? cached
         : null;
     const startedAt = Date.now();
+    const epoch = ++this.capacityEpoch;
     const measured = await client.capacity(
       teamIds.length > 0 ? teamIds : undefined,
       reuse?.data
@@ -1248,11 +1266,13 @@ export class LinearSync {
       limitSource: counted.limitSource,
       limitHitAt: counted.limitedAt,
     };
-    this.capacityCache = {
-      at: Date.now(),
-      closedAt: reuse?.closedAt ?? Date.now(),
-      data,
-    };
+    if (epoch === this.capacityEpoch) {
+      this.capacityCache = {
+        at: Date.now(),
+        closedAt: reuse?.closedAt ?? Date.now(),
+        data,
+      };
+    }
     return { ok: true, data };
   }
 
@@ -2069,7 +2089,7 @@ export class LinearSync {
       if (outcome.action === 'archive') state.lastArchive = outcome;
       else state.lastExport = outcome;
       this.running = null;
-      this.capacityCache = null;
+      this.resetCapacity();
     }
     for (const edit of this.stateEdits.splice(0)) edit(state);
     writeLinearState(this.deps.rootDir, state);
@@ -2649,7 +2669,20 @@ export class LinearSync {
       if (paused) continue;
       const archive =
         run.archiveOnArrival.has(id) || state.pushQueue[id]?.archive === true;
-      const result = await pass.createRemote(current, { archive });
+      let result: CreateRemoteResult;
+      try {
+        result = await pass.createRemote(current, { archive });
+      } catch (err) {
+        // A throttle after the create linked the task: it is no longer held
+        // back, so its unsent follow-ups stay outstanding, and its comments
+        // wait in the queue for a later pass.
+        if (parseLinearExternal(docs.get(id)?.meta.external) !== null) {
+          delete state.localOnly?.[id];
+          clearPause(state);
+          run.comments?.queueAll(id);
+        }
+        throw err;
+      }
       report(++attempted);
       if (result.created) {
         delete state.pushQueue[id];
@@ -2681,15 +2714,34 @@ export class LinearSync {
   }
 
   // Archives the issues an export meant to land archived whose archive
-  // failed then, while each task is still linked to its issue.
+  // failed then, while each task is still linked to its issue and finished
+  // or archived. Stops as archiveClosed does; a refused one goes to the back.
   private async retryArrivalArchives(run: Run): Promise<void> {
-    const { pass, state, docs } = run;
+    const { pass, state, docs, ctx } = run;
     const pending = state.pendingArchives ?? {};
+    let failedInRow = 0;
     for (const [taskId, issueId] of Object.entries(pending)) {
-      const ref = parseLinearExternal(docs.get(taskId)?.meta.external);
-      const linked = ref?.entity === 'issue' && ref.id === issueId;
-      if (linked && !(await pass.archiveOnArrival(taskId, issueId))) continue;
+      const doc = docs.get(taskId);
+      const ref = parseLinearExternal(doc?.meta.external);
+      const wanted =
+        doc !== undefined &&
+        ref?.entity === 'issue' &&
+        ref.id === issueId &&
+        (doc.meta.archivedAt !== undefined ||
+          isDoneStatus(doc.meta.status, ctx.model));
+      if (!wanted || (await pass.archiveOnArrival(taskId, issueId))) {
+        if (wanted) failedInRow = 0;
+        delete pending[taskId];
+        continue;
+      }
       delete pending[taskId];
+      pending[taskId] = issueId;
+      if (
+        pass.lastFailureKind === 'auth' ||
+        ++failedInRow >= ARCHIVE_FAILURE_RUN
+      ) {
+        break;
+      }
     }
   }
 

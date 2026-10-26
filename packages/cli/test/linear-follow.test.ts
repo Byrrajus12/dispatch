@@ -186,6 +186,38 @@ describe('followLinearPass', () => {
     expect(result).toEqual(joined);
   });
 
+  test('a sync that joined a pass queued behind another takes the queued one’s summary', async () => {
+    const before = summary(T0 - 600_000);
+    const ahead = summary(T0 - 120_000, {
+      createdIssues: 40,
+      errors: ['issue limit'],
+    });
+    const joined = summary(T0 + 70_000, { pulled: 2 });
+    const api = statuses(
+      status({ syncing: true, lastSummary: before }),
+      // The export ahead of it ended; the joined pass is running.
+      status({ syncing: true, lastSummary: ahead }),
+      status({ syncing: false, lastSummary: joined })
+    );
+    const result = await followLinearPass(
+      api,
+      () => Promise.reject(new DaemonUnreachableError('timed out')),
+      { ...fast, joins: true }
+    );
+    expect(result).toEqual(joined);
+  });
+
+  test('a sync whose joined pass ended before the first poll takes its summary', async () => {
+    const joined = summary(T0 - 30_000, { pulled: 5 });
+    const api = statuses(status({ syncing: false, lastSummary: joined }));
+    const result = await followLinearPass(
+      api,
+      () => Promise.reject(new DaemonUnreachableError('timed out')),
+      { ...fast, joins: true }
+    );
+    expect(result).toEqual(joined);
+  });
+
   test('at the deadline it points at dispatch linear status', async () => {
     let clock = T0;
     const api = statuses(status({ syncing: true }));

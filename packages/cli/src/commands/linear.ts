@@ -673,20 +673,28 @@ export async function followLinearPass(
   // The first summary to land after the request is this pass's: a pass
   // queued behind it (a push a task edit scheduled) replaces it before the
   // daemon goes idle. summary.at is when a pass started, with a second of
-  // slack for rounding; a joined pass may have started earlier, so for it any
-  // summary replacing the one the first poll found is new.
+  // slack for rounding. A joined pass queued behind another starts after the
+  // request too; one already running started before it, so with none after
+  // it is the last summary to replace the one the first poll found, or that
+  // one when the first poll found the daemon idle.
   let found: string | null | undefined;
   let ours: LinearSyncSummary | null = null;
+  let joined: LinearSyncSummary | null = null;
   return pollStatus(api, opts, began, report, (status) => {
     const last = status.lastSummary;
-    if (found === undefined && status.syncing) found = last?.at ?? null;
-    const fresh =
-      last !== null &&
-      (Date.parse(last.at) >= began - 1000 ||
-        (opts.joins === true && found !== undefined && last.at !== found));
-    if (ours === null && fresh) ours = last;
+    const first = found === undefined;
+    if (first) found = last?.at ?? null;
+    if (last !== null) {
+      if (ours === null && Date.parse(last.at) >= began - 1000) ours = last;
+      if (
+        opts.joins === true &&
+        (last.at !== found || (first && !status.syncing))
+      )
+        joined = last;
+    }
     if (status.syncing) return undefined;
-    if (ours !== null) return ours;
+    const result = ours ?? joined;
+    if (result !== null) return result;
     throw new CliError(
       'the Linear pass ended without a summary; check it with: dispatch linear status'
     );

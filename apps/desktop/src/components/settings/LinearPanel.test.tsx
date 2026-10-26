@@ -521,6 +521,43 @@ test('the export dialog says when the workspace cannot fit the export', async ()
   expect(dialog.textContent).toContain('This export adds 47 and 10 are free');
 });
 
+// The open tasks fill every free slot, leaving none for an arrival to land in.
+test('the export dialog counts the slot an archived arrival needs', async () => {
+  const cap: LinearCapacity = {
+    teams: [],
+    active: 240,
+    activeScope: 'workspace',
+    limit: 250,
+    limitSource: 'plan',
+    plan: 'free',
+    limitHitAt: null,
+    truncated: false,
+    checkedAt: '2026-10-25T00:00:00.000Z',
+  };
+  render(
+    <LinearPanel
+      data={linked({
+        linearExportPreview: { ...PREVIEW, open: 10 },
+        linearCapacity: cap,
+      })}
+    />
+  );
+  fireEvent.click(
+    within(row('Export to Linear')).getByRole('button', {
+      name: 'Export to Linear…',
+    })
+  );
+  const dialog = await screen.findByRole('dialog');
+  expect(dialog.textContent).toContain('This export fits.');
+  fireEvent.click(
+    within(dialog).getByRole('radio', {
+      name: /Everything, finished tasks archived on arrival/,
+    })
+  );
+  expect(dialog.textContent).not.toContain('This export fits.');
+  expect(dialog.textContent).toContain('This export adds 10 and 10 are free');
+});
+
 test('export progress shows under Export, not under Import', () => {
   render(
     <LinearPanel

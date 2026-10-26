@@ -160,6 +160,9 @@ export interface LinearSyncState {
   stateNames: Record<string, string>;
   /** The roles the last generation defaulted to; a config role differing is an override. */
   generatedRoles: StatusRoles | null;
+  /** The roles in force after the last generation, so a review role split
+   *  off the dispatched one in Settings is noticed on the next pass. */
+  appliedRoles?: StatusRoles;
   webhook: WebhookRecord | null;
   webhookError: string | null;
   /** When a failed registration may be tried again. */

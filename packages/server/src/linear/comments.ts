@@ -223,6 +223,15 @@ export class CommentSync {
     );
   }
 
+  /** Queues every comment on a task for a later pass to send, for one that
+   *  got its issue on a pass a throttle stopped. */
+  queueAll(taskId: string): void {
+    const ids = this.d.comments.list(taskId).map((c) => c.id);
+    if (ids.length === 0) return;
+    const pending = this.d.state.pendingComments;
+    pending[taskId] = [...new Set([...(pending[taskId] ?? []), ...ids])];
+  }
+
   private async sendDelete(localId: string): Promise<boolean> {
     const link = this.d.state.comments[localId];
     if (link === undefined) return true;

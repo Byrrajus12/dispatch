@@ -344,7 +344,7 @@ function plainLabel(label: LinearLabel): LinearLabel {
 }
 
 /** A create's outcome; `capped` means the usage limit stopped it. */
-type CreateRemoteResult =
+export type CreateRemoteResult =
   | { created: true }
   | { created: false; error: string; capped: boolean };
 

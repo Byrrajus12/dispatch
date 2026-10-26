@@ -64,7 +64,9 @@ function fitLine(
     return `${base} Linear refuses every new issue, even one archived on arrival, until you archive closed issues or upgrade.`;
   }
   const adds = exportActiveCount(preview, scope);
-  return adds <= free
+  // An issue archived on arrival needs one free slot to land, then frees it.
+  const arriving = exportScopeCount(preview, scope) - adds;
+  return adds < free || (adds === free && arriving === 0)
     ? `${base} This export fits.`
     : `${base} This export adds ${n(adds)} and ${n(free)} are free; the rest wait in the retry queue until there is room.`;
 }

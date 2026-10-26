@@ -2168,6 +2168,113 @@ describe('LinearSync creates a throttle cuts short', () => {
     expect(store.get(open.meta.id)?.meta.external).not.toBeNull();
     expect(store.get(moved.meta.id)?.meta.external).toBeNull();
   });
+
+  it('sends the archive and comments of a create a throttle stopped after it landed', async () => {
+    const comments = new FileCommentStore(root);
+    const doc = store.create({ title: 'Shelved' });
+    const shelved = store.update(doc.meta.id, {
+      archivedAt: '2026-07-01T00:00:00.000Z',
+    });
+    comments.add({ taskId: doc.meta.id, author: 'human:me', body: 'Context' });
+    // Held back, as linking the board records every unlinked task.
+    seedState({
+      bootstrappedAt: '2030-01-01T00:00:00.000Z',
+      localOnly: { [doc.meta.id]: shelved.meta.updated },
+    });
+    cache.rebuild(store);
+    fake.failures.archiveIssue = {
+      ok: false,
+      kind: 'rate-limit',
+      error: 'linear rate limit reached',
+      retryAfterMs: 1,
+    };
+    const sync = new LinearSync({
+      rootDir: root,
+      store,
+      cache,
+      events,
+      client: fake,
+      comments,
+    });
+
+    sync.startExport('all-archive-finished');
+    await sync.idle();
+    expect(store.get(doc.meta.id)?.meta.external).toBe('linear:issue-1');
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    delete fake.failures.archiveIssue;
+    await sync.syncOnce();
+
+    expect(createCalls()).toBe(1);
+    expect(fake.issues[0]?.archivedAt).not.toBeNull();
+    expect(fake.commentList.map((c) => c.body)).toEqual(['Context']);
+  });
+
+  it('drops an arrival archive once the task is reopened', async () => {
+    seedState({ bootstrappedAt: '2030-01-01T00:00:00.000Z' });
+    const doc = store.create({ title: 'Finished', status: 'done' });
+    cache.rebuild(store);
+    fake.failures.archiveIssue = {
+      ok: false,
+      kind: 'network',
+      error: 'socket hang up',
+    };
+    const sync = makeSync();
+    sync.startExport('all-archive-finished');
+    await sync.idle();
+    expect(readLinearState(root).pendingArchives).toEqual({
+      [doc.meta.id]: 'issue-1',
+    });
+
+    delete fake.failures.archiveIssue;
+    const issue = fake.issues[0];
+    if (issue === undefined) throw new Error('no issue created');
+    issue.state = STATES[2];
+    issue.updatedAt = fake.stamp();
+    fake.calls = [];
+    await sync.syncOnce();
+
+    expect(store.get(doc.meta.id)?.meta.status).toBe('In Progress');
+    expect(fake.calls).not.toContain('archiveIssue');
+    expect(issue.archivedAt).toBeNull();
+    expect(readLinearState(root).pendingArchives).toEqual({});
+  });
+
+  it('stops retrying arrival archives at an auth refusal or a run of refusals', async () => {
+    seedState({ bootstrappedAt: '2030-01-01T00:00:00.000Z' });
+    for (let i = 0; i < 8; i++) {
+      store.create({ title: `Finished ${i}`, status: 'done' });
+    }
+    cache.rebuild(store);
+    fake.failures.archiveIssue = {
+      ok: false,
+      kind: 'graphql',
+      error: 'forbidden',
+    };
+    const sync = makeSync();
+    sync.startExport('all-archive-finished');
+    await sync.idle();
+    const pending = () =>
+      Object.keys(readLinearState(root).pendingArchives ?? {});
+    const first = pending();
+    expect(first).toHaveLength(8);
+
+    fake.calls = [];
+    await sync.syncOnce();
+    expect(fake.calls.filter((c) => c === 'archiveIssue')).toHaveLength(5);
+    // The refused ones go to the back, so the next pass tries the others.
+    expect(pending().slice(0, 3)).toEqual(first.slice(5));
+
+    fake.failures.archiveIssue = {
+      ok: false,
+      kind: 'auth',
+      error: 'invalid Linear API key',
+    };
+    fake.calls = [];
+    await sync.syncOnce();
+    expect(fake.calls.filter((c) => c === 'archiveIssue')).toHaveLength(1);
+    expect(pending()).toHaveLength(8);
+  });
 });
 
 describe('LinearSync capacity and the pause', () => {
@@ -2212,6 +2319,35 @@ describe('LinearSync capacity and the pause', () => {
 
     await sync.capacity(true);
     expect(sync.status().capacity?.retryAt).toBe('2099-01-01T00:00:00.000Z');
+
+    fake.issues = [];
+    await sync.capacity(true);
+    expect(sync.status().capacity?.retryAt).toBeNull();
+  });
+
+  it('ends a pause on an unread plan only once the count drops', async () => {
+    seedState({
+      bootstrappedAt: '2030-01-01T00:00:00.000Z',
+      capacity: {
+        limitedAt: '2026-07-01T00:00:00.000Z',
+        retryAt: '2099-01-01T00:00:00.000Z',
+        message: LINEAR_USAGE_LIMIT_MESSAGE,
+        active: 1,
+        limit: null,
+        limitSource: null,
+        plan: 'unknown',
+        checkedAt: '2026-06-30T00:00:00.000Z',
+      },
+    });
+    fake.plan = 'unknown';
+    fake.issues = [fake.issue()];
+    const sync = makeSync();
+
+    await sync.capacity(true);
+    expect(sync.status().capacity).toMatchObject({
+      retryAt: '2099-01-01T00:00:00.000Z',
+      limit: 250,
+    });
 
     fake.issues = [];
     await sync.capacity(true);
@@ -2271,6 +2407,65 @@ describe('LinearSync capacity and the pause', () => {
     expect(fake.capacityReuse).toHaveLength(2);
     expect(fake.capacityReuse[0]).toBeUndefined();
     expect(fake.capacityReuse[1]?.teams.map((t) => t.id)).toEqual(['team-1']);
+  });
+
+  it('answers a refresh with closed counts walked afresh, even beside a plain read', async () => {
+    fake.plan = 'paid';
+    fake.issues = [fake.issue({ state: DONE_STATE })];
+    const sync = makeSync();
+    await sync.capacity(true);
+    fake.issues.push(
+      fake.issue({ state: DONE_STATE }),
+      fake.issue({ state: DONE_STATE })
+    );
+
+    const realNow = Date.now;
+    Date.now = () => realNow() + 2 * 60_000;
+    try {
+      const [, refreshed] = await Promise.all([
+        sync.capacity(),
+        sync.capacity(true),
+      ]);
+      expect(refreshed.ok && refreshed.data.teams[0]?.completed).toBe(3);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  it('never caches a measurement begun before an archive pass ended', async () => {
+    fake.plan = 'paid';
+    fake.issues = [
+      fake.issue({ state: DONE_STATE }),
+      fake.issue({ state: DONE_STATE }),
+    ];
+    seedState({ bootstrappedAt: '2020-01-01T00:00:00.000Z' });
+    const sync = makeSync();
+    await sync.capacity(true);
+
+    // A plain read, held open while the archive runs, reuses the counts.
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const measure = fake.capacity.bind(fake);
+    fake.capacity = (teamIds, reuse) =>
+      gate.then(() => measure(teamIds, reuse));
+    const realNow = Date.now;
+    Date.now = () => realNow() + 2 * 60_000;
+    let held: Promise<unknown>;
+    try {
+      held = sync.capacity();
+    } finally {
+      Date.now = realNow;
+    }
+    sync.startArchiveClosed({ includeCanceled: false });
+    await sync.idle();
+    release();
+    await held;
+    fake.capacity = measure;
+
+    const after = await sync.capacity();
+    expect(after.ok && after.data.teams[0]?.completed).toBe(0);
   });
 });
 

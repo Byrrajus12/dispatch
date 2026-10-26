@@ -102,6 +102,32 @@ export function linkedIssueTeam(
   return teamByKey.get(key) ?? null;
 }
 
+// A review role split off the shared dispatched one (a workflow change, or
+// a role picked in Settings): tasks whose run had finished were waiting for
+// review there, so they move to it as a finish would have moved them. Each
+// keeps `updated`; a linked one is left outstanding so its issue follows,
+// unless a newer edit in Linear wins the merge.
+function moveFinishedToReview(
+  store: TaskStorePort,
+  docs: Map<string, TaskDoc>,
+  state: LinearSyncState,
+  prior: StatusRoles,
+  roles: StatusRoles,
+  finishedRuns: ReadonlySet<string>,
+  migrated: string[]
+): void {
+  if (prior.review !== prior.dispatched || roles.review === roles.dispatched) {
+    return;
+  }
+  for (const doc of docs.values()) {
+    const { id, status, external, updated } = doc.meta;
+    if (!finishedRuns.has(id) || status !== roles.dispatched) continue;
+    docs.set(id, store.update(id, { status: roles.review }, updated));
+    if (parseLinearExternal(external) !== null) delete state.pushed[id];
+    if (!migrated.includes(id)) migrated.push(id);
+  }
+}
+
 // Moves each task whose status `statusFor` changes, keeping `updated` (a
 // migration is bookkeeping), and returns the ids moved.
 function migrateTasks(
@@ -156,8 +182,10 @@ export function regenerateStatuses(
     names,
     renames.shared
   );
+  const prior = state.appliedRoles ?? statusModelOf(config).roles;
   state.stateNames = generated.names;
   state.generatedRoles = fresh;
+  state.appliedRoles = roles;
   const after = { definitions: generated.definitions, roles };
   if (
     sameDefinitions(config.statusDefinitions, generated.definitions) &&
@@ -175,6 +203,15 @@ export function regenerateStatuses(
       hasStatusDefinition(doc.meta.status, after)
         ? doc.meta.status
         : migrateStatus(doc.meta.status, sweep)
+    );
+    moveFinishedToReview(
+      store,
+      docs,
+      state,
+      prior,
+      roles,
+      finishedRuns,
+      migrated
     );
     return { config, configChanged: false, migrated };
   }
@@ -212,23 +249,15 @@ export function regenerateStatuses(
       names: generated.names,
     })
   );
-  // A review state split off the shared dispatched one: tasks whose run had
-  // finished were waiting for review there, so they move to it as a finish
-  // would have moved them. A linked one is stamped now so its issue follows;
-  // an unlinked one keeps `updated`, so the move sends nothing on its own.
-  if (
-    before.roles.review === before.roles.dispatched &&
-    roles.review !== roles.dispatched
-  ) {
-    const now = new Date().toISOString();
-    for (const doc of docs.values()) {
-      const { id, status, external, updated } = doc.meta;
-      if (!finishedRuns.has(id) || status !== roles.dispatched) continue;
-      const stamp = parseLinearExternal(external) === null ? updated : now;
-      docs.set(id, store.update(id, { status: roles.review }, stamp));
-      if (!migrated.includes(id)) migrated.push(id);
-    }
-  }
+  moveFinishedToReview(
+    store,
+    docs,
+    state,
+    prior,
+    roles,
+    finishedRuns,
+    migrated
+  );
   return { config: next, configChanged: true, migrated };
 }
 
