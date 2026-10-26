@@ -2751,6 +2751,9 @@ export interface LinearStatus {
   lastError: string | null;
   lastSummary: LinearSyncSummary | null;
   syncing: boolean;
+  /** Asked for by request id: the summary that sync or import answered
+   *  with, null until its pass ends. */
+  answered?: LinearSyncSummary | null;
   /** Field conflicts resolved since the link. Absent from older daemons. */
   conflicts?: { total: number; recent: LinearConflict[] };
   /** Set while an import or other long pass is running. */
