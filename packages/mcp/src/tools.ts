@@ -1,7 +1,6 @@
 import {
   ACCEPTED_KINDS,
   ASSIGNEES,
-  canonicalStatus,
   ConfigError,
   FileCommentStore,
   KINDS,
@@ -9,12 +8,18 @@ import {
   PRIORITIES,
   readyTasks,
   resolveMilestoneRef,
+  resolveStatusName,
   statusModelOf,
   TASK_RISKS,
   TaskParseError,
   TaskStore,
 } from '@dispatch-foo/core';
-import type { ListSafeError, TaskComment, TaskDoc } from '@dispatch-foo/core';
+import type {
+  DispatchConfig,
+  ListSafeError,
+  TaskComment,
+  TaskDoc,
+} from '@dispatch-foo/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { basename } from 'node:path';
 import { z } from 'zod';
@@ -82,6 +87,27 @@ function validate<T extends string>(
     );
   }
   return value as T;
+}
+
+// A caller's status as one of config.statuses: exact, then case-insensitive,
+// then a legacy alias, then a built-in word read through statusRoles (core's
+// resolveStatusName). Mirrors the CLI's resolveStatus message for message.
+function resolveStatus(
+  value: string | undefined,
+  config: DispatchConfig
+): string | undefined {
+  if (value === undefined) return undefined;
+  const resolved = resolveStatusName(
+    value,
+    config.statuses,
+    statusModelOf(config)
+  );
+  if (resolved === null) {
+    throw new ToolError(
+      `invalid status: ${value} (expected ${config.statuses.join('|')})`
+    );
+  }
+  return resolved;
 }
 
 // TaskSummary: the fields task_list/task_next return, chosen to keep list
@@ -396,11 +422,7 @@ async function taskList(
   // reads, so an invalid enum reads identically whether or not a daemon is
   // up — and so an obviously-bad filter never costs a round trip.
   const config = loadConfig(route.configRoot);
-  const status = validate(
-    args.status === undefined ? undefined : canonicalStatus(args.status),
-    config.statuses,
-    'status'
-  );
+  const status = resolveStatus(args.status, config);
   const kind = validate(args.kind, ACCEPTED_KINDS, 'kind');
 
   if (route.via === 'daemon') {
@@ -553,11 +575,7 @@ async function taskSave(
   const route = await resolveStoreRoute(rootDir);
   if (route.via === 'refused') return toolError(route.message);
   const config = loadConfig(route.configRoot);
-  const status = validate(
-    input.status === undefined ? undefined : canonicalStatus(input.status),
-    config.statuses,
-    'status'
-  );
+  const status = resolveStatus(input.status, config);
   const priority = validate(input.priority, PRIORITIES, 'priority');
   const assignee = validate(input.assignee, ASSIGNEES, 'assignee');
 
@@ -593,8 +611,13 @@ async function taskSave(
     }
     const store = requireStore(rootDir);
     const parent = localMilestoneParent(store, input, kind ?? 'task');
+    // Omitted, a task starts in the board's ready role, as dispatchd does.
+    const local = {
+      ...create,
+      status: status ?? statusModelOf(config).roles.ready,
+    };
     const doc = store.create(
-      parent === undefined ? create : { ...create, parent }
+      parent === undefined ? local : { ...local, parent }
     );
     return toolResult({ meta: doc.meta, body: doc.body });
   }
@@ -949,11 +972,14 @@ async function recordMutation(
 const STATUS_PARAM_DOC =
   "A status name from this project's .dispatch/config.yml, which is what " +
   'this is checked against; a board imported from Linear keeps its own ' +
-  'names (Backlog, Todo, In Progress, Done, …). Each status has a workflow ' +
-  'type (triage | backlog | unstarted | started | completed | canceled), and ' +
-  'Dispatch keys off the type and config `statusRoles`, never the name. ' +
-  'With no statuses configured the built-ins apply: draft | ready | working ' +
-  '| review | landing | landed | dropped.';
+  'names (Backlog, Todo, In Progress, Done, …), matched case-insensitively. ' +
+  'Each status has a workflow type (triage | backlog | unstarted | started ' +
+  '| completed | canceled), and Dispatch keys off the type and config ' +
+  '`statusRoles`, never the name. With no statuses configured the built-ins ' +
+  'apply: draft | ready | working | review | landing | landed | dropped. On ' +
+  'any board those built-in words are also accepted and mapped through ' +
+  '`statusRoles` (landed → the landed role, working → dispatched, draft → ' +
+  'the first backlog status).';
 
 // Registers every dispatch tool against a fixed root. Each call re-resolves the
 // store, config and daemon file, so a later init or daemon start is picked up.

@@ -42,6 +42,7 @@ import {
   OrchestratorClientError,
   OrchestratorConflictError,
   OrchestratorNotFoundError,
+  tasksWithFinishedRun,
   TERMINAL_RUN_STATES,
 } from './types.js';
 
@@ -234,11 +235,13 @@ function tasksWithRunBranch(runs: readonly RunMeta[]): Set<string> {
 // A blocker as a fan-out working for `holder`'s dispatcher sees it.
 function blockerView(
   holder: (task: TaskListItem) => string | null,
-  withRunBranch: ReadonlySet<string>
+  withRunBranch: ReadonlySet<string>,
+  finished: ReadonlySet<string>
 ): (blocker: TaskListItem) => FanoutBlocker {
   return (blocker) => ({
     held: holder(blocker) !== null,
     hasRunBranch: withRunBranch.has(blocker.meta.id),
+    finishedRun: finished.has(blocker.meta.id),
   });
 }
 
@@ -271,6 +274,8 @@ interface ProgressBoard {
   liveRun: Map<string, RunMeta>;
   /** See tasksWithRunBranch. */
   withRunBranch: Set<string>;
+  /** See tasksWithFinishedRun. */
+  finished: Set<string>;
   /** Readings by `<dispatcher> <task id>`, filled as containers ask. */
   readings: Map<string, ChildReading>;
   runCostEstimateUsd: number;
@@ -589,17 +594,21 @@ export class EpicEngine {
         liveRun.set(run.taskId, run);
       }
     }
+    const finished = tasksWithFinishedRun(runs);
     return {
       statuses,
       byId: new Map(tasks.map((t) => [t.meta.id, t])),
       children: childrenIndex(tasks),
       dispatchable: new Set(
-        dispatchableTasks(tasks, statuses).map((t) => t.meta.id)
+        dispatchableTasks(tasks, statuses, (id) => finished.has(id)).map(
+          (t) => t.meta.id
+        )
       ),
       runs,
       latestRun,
       liveRun,
       withRunBranch: tasksWithRunBranch(runs),
+      finished,
       readings: new Map(),
       runCostEstimateUsd: loadConfig(this.ctx.rootDir).orchestrator
         .runCostEstimateUsd,
@@ -615,7 +624,7 @@ export class EpicEngine {
     const waves = deriveWaves(children);
     const session = this.sessions.get(epicId);
     const { dispatcher, holder } = this.holderFor(session);
-    const blocker = blockerView(holder, board.withRunBranch);
+    const blocker = blockerView(holder, board.withRunBranch, board.finished);
     const progressChildren: EpicProgressChild[] = children.map((task) => {
       const id = task.meta.id;
       const key = `${dispatcher} ${id}`;
@@ -637,6 +646,7 @@ export class EpicEngine {
           dispatchable: dispatchable.has(id),
           heldBy: holder(task),
           statuses,
+          finishedRun: board.finished.has(id),
         });
         reading = {
           id,
@@ -958,14 +968,17 @@ export class EpicEngine {
       work.filter((t) => holder(t) === null).map((t) => t.meta.id)
     );
     const byId = new Map(tasks.map((t) => [t.meta.id, t]));
-    const blocker = blockerView(holder, tasksWithRunBranch(runs));
+    const finished = tasksWithFinishedRun(runs);
+    const blocker = blockerView(holder, tasksWithRunBranch(runs), finished);
     const waitingOn = (t: TaskDoc) =>
       fanoutWaitingOn(t, (id) => byId.get(id), statuses, blocker);
     this.noteWatched(epicId, work, mine, statuses, waitingOn);
     // The scope includes archived children (see scopeOf); dispatchability
     // must exclude them explicitly. dispatchableTasks releases a dependent at
     // a blocker's review role; a fan-out also wants a branch to stack on.
-    const ready = dispatchableTasks(tasks, statuses).filter(
+    const ready = dispatchableTasks(tasks, statuses, (id) =>
+      finished.has(id)
+    ).filter(
       (t) =>
         mine.has(t.meta.id) &&
         t.meta.archivedAt === undefined &&
@@ -1285,6 +1298,7 @@ export class EpicEngine {
   private onTasksChanged(ids: readonly string[] | undefined): void {
     let statuses: StatusModel | null = null;
     let withRunBranch: Set<string> | null = null;
+    let finished: Set<string> | null = null;
     for (const [epicId, { waiting, held }] of this.watching) {
       if (!this.armed.has(epicId)) continue;
       const session = this.sessions.get(epicId);
@@ -1295,10 +1309,14 @@ export class EpicEngine {
       const holding = touched(held);
       if (blockers.length === 0 && holding.length === 0) continue;
       statuses ??= statusModelFor(this.ctx.rootDir);
-      withRunBranch ??= tasksWithRunBranch(this.ctx.orchestrator.list());
+      if (withRunBranch === null || finished === null) {
+        const runs = this.ctx.orchestrator.list();
+        withRunBranch = tasksWithRunBranch(runs);
+        finished = tasksWithFinishedRun(runs);
+      }
       const model = statuses;
       const { holder } = this.holderFor(session);
-      const view = blockerView(holder, withRunBranch);
+      const view = blockerView(holder, withRunBranch, finished);
       const released = blockers.some((id) => {
         const blocker = this.ctx.cache.get(id);
         return (

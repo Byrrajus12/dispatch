@@ -5,8 +5,8 @@ import type {
 } from '@dispatch-foo/core/browser';
 import {
   canonicalAssignee,
-  hasStatusRole,
   isContainer,
+  isReviewStatus,
   isStartedStatus,
   parentIdsOf,
   PRIORITY_ORDER,
@@ -116,7 +116,8 @@ export interface CockpitIndex {
   taskById: ReadonlyMap<string, TaskListItem>;
   /** Unstarted and unblocked, ranked by `compareReady`. */
   ready: readonly TaskListItem[];
-  /** In the review role and not archived. */
+  /** In the review role and not archived. A review status shared with dispatched cannot
+   * say so without a run, so those reach Needs you through their run's attention. */
   inReview: readonly TaskListItem[];
   /** Started, not a container, not archived — most recently updated first. */
   started: readonly TaskListItem[];
@@ -217,7 +218,7 @@ export function indexCockpitTasks(
   const started: TaskListItem[] = [];
   for (const task of tasks) {
     if (task.meta.archivedAt !== undefined) continue;
-    if (hasStatusRole(task.meta.status, 'review', model)) inReview.push(task);
+    if (isReviewStatus(task.meta.status, model)) inReview.push(task);
     if (
       !isContainer(task.meta, parentIds) &&
       isStartedStatus(task.meta.status, model)

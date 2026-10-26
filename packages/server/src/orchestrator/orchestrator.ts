@@ -6,6 +6,7 @@ import {
   isCompletedStatus,
   isContainerKind,
   isDoneStatus,
+  isReviewStatus,
   loadConfig,
   nextSubagentStatus,
   runSettings,
@@ -123,6 +124,7 @@ import {
   runKind,
   runLineage,
   runOperator,
+  tasksWithFinishedRun,
   TERMINAL_RUN_STATES,
 } from './types.js';
 import type { RunUsage } from './usage.js';
@@ -1541,7 +1543,9 @@ export class Orchestrator {
    *
    * Only `in-review` blockers matter here: a done/cancelled blocker's work is
    * already in the base branch, and an `in-progress` blocker means the task
-   * isn't dispatchable at all (see core's dispatchableTasks).
+   * isn't dispatchable at all (see core's dispatchableTasks). Where review
+   * shares the dispatched status, a blocker is in review only once its latest
+   * run has ended.
    *
    * Two or more unmerged blockers need a base containing all of their work,
    * which only jj can express (`jj new -r A -r B`). When jj isn't available
@@ -1556,11 +1560,13 @@ export class Orchestrator {
     task: TaskDoc
   ): Promise<{ base: string; stackParents: string[] }> {
     const parents: string[] = [];
+    const model = this.statuses();
+    const finished = tasksWithFinishedRun(this.registry.list());
     for (const blockerId of task.meta.blockedBy) {
       const blocker = this.ctx.store.get(blockerId);
       if (
         blocker === null ||
-        !hasStatusRole(blocker.meta.status, 'review', this.statuses())
+        !isReviewStatus(blocker.meta.status, model, finished.has(blockerId))
       ) {
         continue;
       }

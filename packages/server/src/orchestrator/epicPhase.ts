@@ -4,6 +4,7 @@ import {
   hasStatusRole,
   isCompletedStatus,
   isDoneStatus,
+  isReviewStatus,
   isUnstartedStatus,
 } from '@dispatch-foo/core';
 import type { StatusModel, TaskListItem } from '@dispatch-foo/core';
@@ -87,6 +88,9 @@ export interface ChildPhaseInput {
   heldBy?: string | null;
   /** The project's status model; the built-in one when omitted. */
   statuses?: StatusModel;
+  /** Whether the task's newest execute run has ended (the server's
+   *  tasksWithFinishedRun); read off `latestRun` when omitted. */
+  finishedRun?: boolean;
 }
 
 export interface ChildPhase {
@@ -122,7 +126,10 @@ export function deriveChildPhase(input: ChildPhaseInput): ChildPhase {
   const { task, liveRun, latestRun, fixLoop } = input;
   const model = input.statuses ?? DEFAULT_STATUS_MODEL;
   const status = canonicalStatus(task.meta.status);
-  const inReview = hasStatusRole(status, 'review', model);
+  const finishedRun =
+    input.finishedRun ??
+    (latestRun !== null && TERMINAL_RUN_STATES.has(latestRun.state));
+  const inReview = isReviewStatus(status, model, finishedRun);
   const inLanding = hasStatusRole(status, 'landing', model);
   if (isDoneStatus(status, model)) {
     return withRun(

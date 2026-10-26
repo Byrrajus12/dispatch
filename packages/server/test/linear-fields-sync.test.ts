@@ -148,6 +148,32 @@ describe('workflow states and people', () => {
     expect(store.get(inReview.meta.id)?.meta.status).toBe('Code Review');
   });
 
+  it('moves a status outside the vocabulary on later passes too, and pushes its state', async () => {
+    const { id, sync } = await linkedPair();
+    const configBefore = loadConfig(root);
+    // A local create or a stale writer: a built-in name the board has dropped.
+    edit(id, { status: 'landed' });
+    const stray = store.create({ title: 'Local', status: 'ready' });
+    const updatedBefore = store.get(stray.meta.id)?.meta.updated;
+    broadcasts = [];
+
+    const summary = await sync.syncOnce();
+
+    expect(store.get(id)?.meta.status).toBe('Done');
+    expect(store.get(stray.meta.id)?.meta.status).toBe('Todo');
+    expect(store.get(stray.meta.id)?.meta.updated).toBe(updatedBefore);
+    expect(summary.migrated).toBe(2);
+    expect(fake.updated.map((u) => u.input.stateId)).toEqual(['s-done']);
+    // Only the tasks moved; the vocabulary itself stayed put.
+    expect(loadConfig(root).statusDefinitions).toEqual(
+      configBefore.statusDefinitions
+    );
+    expect(broadcasts.some((e) => e.type === 'config.changed')).toBe(false);
+
+    const again = await sync.syncOnce();
+    expect(again.migrated).toBe(0);
+  });
+
   it('folds team members into people, the key’s own user as the local human', async () => {
     await makeSync().syncOnce();
 

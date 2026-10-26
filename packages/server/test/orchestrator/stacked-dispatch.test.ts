@@ -1,6 +1,12 @@
 import { TaskStore } from '@dispatch-foo/core';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { chmodSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -283,6 +289,74 @@ describe('base selection', () => {
     const meta = await h.orchestrator.dispatch(dependent.meta.id, 'fake');
     expect(meta.baseBranch).toBe('main');
     expect(meta.stackParents ?? []).toEqual([]);
+  });
+});
+
+// A Linear team with no review state: review shares the dispatched status, so
+// only the blocker's run says whether its work is up for review.
+const SHARED_REVIEW_CONFIG = `statuses:
+  - { name: Todo, type: unstarted }
+  - { name: In Progress, type: started }
+  - { name: Done, type: completed }
+  - { name: Canceled, type: canceled }
+statusRoles:
+  ready: Todo
+  dispatched: In Progress
+  review: In Progress
+  landing: null
+  landed: Done
+  dropped: Canceled
+`;
+
+describe('base selection when review shares the dispatched status', () => {
+  // A blocker whose first run finished with a commit, left In Progress.
+  async function finishedBlocker(h: Harness) {
+    writeFileSync(join(repo, '.dispatch', 'config.yml'), SHARED_REVIEW_CONFIG);
+    const blocker = h.store.create({ title: 'A', status: 'Todo' });
+    const run = await h.orchestrator.dispatch(blocker.meta.id, 'fake');
+    await waitFor(
+      () => h.orchestrator.getRun(run.id)?.meta.state === 'finished'
+    );
+    await Bun.write(join(run.worktreePath, 'a.txt'), 'a');
+    runGitSync(run.worktreePath, ['add', '-A']);
+    runGitSync(run.worktreePath, ['commit', '-m', 'A work']);
+    const dependent = h.store.create({
+      title: 'B',
+      status: 'Todo',
+      blockedBy: [blocker.meta.id],
+    });
+    h.cache.rebuild(h.store);
+    return { blocker, run, dependent };
+  }
+
+  it('stacks on a blocker whose run has finished', async () => {
+    const h = makeHarness();
+    const { blocker, run, dependent } = await finishedBlocker(h);
+    expect(h.store.get(blocker.meta.id)?.meta.status).toBe('In Progress');
+
+    const meta = await h.orchestrator.dispatch(dependent.meta.id, 'fake');
+    expect(meta.baseBranch).toBe(run.branch);
+    expect(meta.stackParents).toEqual([run.branch]);
+  });
+
+  it('does not stack on an earlier branch while the blocker runs again', async () => {
+    const h = makeHarness();
+    h.orchestrator.registerExecutor(
+      'slow',
+      new FakeExecutor({
+        steps: [{ delayMs: 60_000 }],
+        finish: { state: 'finished' },
+      })
+    );
+    const { blocker, dependent } = await finishedBlocker(h);
+    const again = await h.orchestrator.dispatch(blocker.meta.id, 'slow');
+    try {
+      const meta = await h.orchestrator.dispatch(dependent.meta.id, 'fake');
+      expect(meta.baseBranch).toBe('main');
+      expect(meta.stackParents ?? []).toEqual([]);
+    } finally {
+      await h.orchestrator.cancel(again.id).catch(() => {});
+    }
   });
 });
 

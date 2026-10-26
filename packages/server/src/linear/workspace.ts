@@ -2,6 +2,7 @@
 // the project's statuses, their users folded into the people registry, and the
 // mapping context every field projection reads.
 import {
+  hasStatusDefinition,
   labelColorIndex,
   labelKey,
   loadConfig,
@@ -101,13 +102,32 @@ export function linkedIssueTeam(
   return teamByKey.get(key) ?? null;
 }
 
+// Moves each task whose status `statusFor` changes, keeping `updated` (a
+// migration is bookkeeping), and returns the ids moved.
+function migrateTasks(
+  store: TaskStorePort,
+  docs: Map<string, TaskDoc>,
+  statusFor: (doc: TaskDoc) => string
+): string[] {
+  const migrated: string[] = [];
+  for (const doc of docs.values()) {
+    const status = statusFor(doc);
+    if (status === doc.meta.status) continue;
+    const moved = store.update(doc.meta.id, { status }, doc.meta.updated);
+    docs.set(moved.meta.id, moved);
+    migrated.push(moved.meta.id);
+  }
+  return migrated;
+}
+
 /**
  * Makes the project's statuses the linked teams' workflow states (names,
  * types, colors, order; merged across teams by name and type, see
  * statusesFromTeams) and its roles the generated defaults plus any user
  * override, then moves every task whose status left the vocabulary onto its
- * successor, following its own issue's team's renames. A migration is
- * bookkeeping, so it keeps each task's `updated`.
+ * successor, following its own issue's team's renames. With the config
+ * unchanged it still moves strays (a status outside the vocabulary, such as a
+ * local create's built-in 'ready'), since their state never pushes.
  */
 export function regenerateStatuses(
   rootDir: string,
@@ -137,14 +157,27 @@ export function regenerateStatuses(
   );
   state.stateNames = generated.names;
   state.generatedRoles = fresh;
+  const after = { definitions: generated.definitions, roles };
   if (
     sameDefinitions(config.statusDefinitions, generated.definitions) &&
     sameRoles(config.statusRoles, roles)
   ) {
-    return { config, configChanged: false, migrated: [] };
+    const sweep = {
+      renames: new Map<string, string>(),
+      before: after,
+      after,
+      legacyMap: config.linear.statusMap,
+      states,
+      names: generated.names,
+    };
+    const migrated = migrateTasks(store, docs, (doc) =>
+      hasStatusDefinition(doc.meta.status, after)
+        ? doc.meta.status
+        : migrateStatus(doc.meta.status, sweep)
+    );
+    return { config, configChanged: false, migrated };
   }
   const before = statusModelOf(config);
-  const after = { definitions: generated.definitions, roles };
   const next = updateConfig(rootDir, {
     statuses: generated.definitions.map((d) => ({
       name: d.name,
@@ -168,21 +201,16 @@ export function regenerateStatuses(
     }
     return own;
   };
-  const migrated: string[] = [];
-  for (const doc of docs.values()) {
-    const status = migrateStatus(doc.meta.status, {
+  const migrated = migrateTasks(store, docs, (doc) =>
+    migrateStatus(doc.meta.status, {
       renames: renamesOf(doc),
       before,
       after,
       legacyMap: config.linear.statusMap,
       states,
       names: generated.names,
-    });
-    if (status === doc.meta.status) continue;
-    const moved = store.update(doc.meta.id, { status }, doc.meta.updated);
-    docs.set(moved.meta.id, moved);
-    migrated.push(moved.meta.id);
-  }
+    })
+  );
   return { config: next, configChanged: true, migrated };
 }
 

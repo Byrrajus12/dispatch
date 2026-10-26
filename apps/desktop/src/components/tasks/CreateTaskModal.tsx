@@ -5,7 +5,11 @@ import type {
   TaskKind,
   TaskListItem,
 } from '@dispatch-foo/core/browser';
-import { isContainerKind, isValidParentKind } from '@dispatch-foo/core/browser';
+import {
+  draftStatus,
+  isContainerKind,
+  isValidParentKind,
+} from '@dispatch-foo/core/browser';
 import {
   Box,
   Check,
@@ -31,6 +35,7 @@ import { useRef, useState } from 'react';
 import { usePersistedDraft } from '../../hooks/usePersistedDraft';
 import { filesFromDataTransfer, splitOversized } from '../../lib/attachments';
 import { colorForLabel } from '../../lib/labelColor';
+import { useActiveStatusModel } from '../../lib/statusModel';
 import {
   assigneeLabel,
   kindLabel,
@@ -319,8 +324,9 @@ function ParentChip({
  * Linear's new-issue dialog (§9): a ~1024px sheet near the top of the window with a crumb
  * header, a borderless 18px title over a 15px description, a row of 28px property chips,
  * and a footer with `Create more` + the indigo `Create task`. Title is the only required
- * field; `⌘⏎` creates, `Save as draft` files it under `draft`, and `Create more` keeps the
- * dialog open with the properties intact for the next one.
+ * field; `⌘⏎` creates, `Save as draft` files it under the board's draft status (core's
+ * `draftStatus`), and `Create more` keeps the dialog open with the properties intact for
+ * the next one.
  */
 export function CreateTaskModal({
   statuses,
@@ -334,6 +340,7 @@ export function CreateTaskModal({
 }: CreateTaskModalProps) {
   const { createPreset } = useShellActions();
   const toasts = useToasts();
+  const statusModel = useActiveStatusModel();
   // Title and description survive an accidental close (Escape, outside click) — the two
   // fields with real typing in them. The chips cost one click to redo and stay ephemeral.
   const [title, setTitle] = usePersistedDraft(CREATE_TASK_TITLE_KEY);
@@ -642,7 +649,7 @@ export function CreateTaskModal({
             <Button
               variant="ghost"
               disabled={submitting}
-              onClick={() => void submit('draft')}
+              onClick={() => void submit(draftStatus(statusModel))}
             >
               Save as draft
             </Button>

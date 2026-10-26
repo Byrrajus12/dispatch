@@ -53,6 +53,7 @@ function shared(
     local: 'human:wyat',
     sessions: new Map((opts.sessions ?? []).map((p) => [p.epicId, p])),
     withRunBranch: new Set(),
+    withFinishedRun: new Set(),
     landing: new Map((opts.landing ?? []).map((id) => [id, 'queued'])),
   };
 }

@@ -218,6 +218,7 @@ export function SpecMode({ page }: { page: TaskPageModel }) {
                 tasks={project.tasksIncludingArchived}
                 tasksById={page.tasksById}
                 model={page.statusModel}
+                finishedRun={page.finishedRun}
                 onPatch={(patch) => void page.patch(patch)}
                 onOpenTask={page.openTask}
               />

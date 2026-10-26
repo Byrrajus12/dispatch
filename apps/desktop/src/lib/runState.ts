@@ -15,6 +15,26 @@ export function isTerminalRunState(state: RunState): boolean {
   return TERMINAL_RUN_STATES.has(state);
 }
 
+/** Tasks whose newest execute run has ended (the server's `tasksWithFinishedRun`): where the
+ * review status is also the dispatched one, this says the work is up for review. */
+export function tasksWithFinishedRun(
+  runs: readonly Pick<RunMeta, 'taskId' | 'kind' | 'state' | 'createdAt'>[]
+): Set<string> {
+  const newest = new Map<string, (typeof runs)[number]>();
+  for (const run of runs) {
+    if ((run.kind ?? 'execute') !== 'execute') continue;
+    const seen = newest.get(run.taskId);
+    if (seen === undefined || run.createdAt > seen.createdAt) {
+      newest.set(run.taskId, run);
+    }
+  }
+  const out = new Set<string>();
+  for (const [taskId, run] of newest) {
+    if (isTerminalRunState(run.state)) out.add(taskId);
+  }
+  return out;
+}
+
 /**
  * The live review agent working over an execute run's branch, if any: the aux
  * run whose `baseBranch` is exactly that branch (the same pairing rule as the

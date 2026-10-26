@@ -12,6 +12,8 @@ import {
   isValidAssignee,
   loadConfig,
   PRIORITIES,
+  resolveStatusName,
+  statusModelOf,
   syncPlace,
   syncSettings,
   TaskParseError,
@@ -641,6 +643,27 @@ function validateLinearFields(value: Record<string, unknown>): string | null {
   return null;
 }
 
+// A request's status as one of config.statuses: exact, then case-insensitive,
+// then a legacy alias, then a built-in word read through statusRoles (core's
+// resolveStatusName). Null when none fits.
+function requestStatus(raw: string, config: DispatchConfig): string | null {
+  return resolveStatusName(raw, config.statuses, statusModelOf(config));
+}
+
+// GET /api/tasks?status=, resolved like a write's status. A value that fits no
+// name, or a config that will not load, filters by the raw value as before.
+function listStatusFilter(
+  ctx: Pick<ApiContext, 'rootDir'>,
+  raw: string | null
+): string | undefined {
+  if (raw === null) return undefined;
+  try {
+    return requestStatus(raw, loadConfig(ctx.rootDir)) ?? raw;
+  } catch {
+    return raw;
+  }
+}
+
 // Validates every field createTask/updateTask accept beyond title, entirely
 // before either one touches the store — a request that fails here writes no
 // file. `includeKind` is create-only: UpdatePatch has no `kind` field, since
@@ -669,16 +692,14 @@ function validateTaskFields(
     // would otherwise get the template back with their text silently dropped.
     return 'invalid body: a new task builds its body from the template — set it with PATCH instead';
   }
-  // Canonicalized before the membership check so callers speaking the
-  // pre-rename names ('done', 'in-progress', …) stay valid forever — the
-  // store canonicalizes again at write, so the alias never reaches disk.
-  const statusError = validateEnumField(
-    typeof value.status === 'string'
-      ? canonicalStatus(value.status)
-      : value.status,
-    config.statuses,
-    'status'
-  );
+  // Valid when it resolves onto a configured name (requestStatus), so callers
+  // speaking the pre-rename names or built-in role words stay valid; the
+  // error names what the caller actually sent.
+  const statusError =
+    typeof value.status === 'string' &&
+    requestStatus(value.status, config) !== null
+      ? null
+      : validateEnumField(value.status, config.statuses, 'status');
   if (statusError) return statusError;
   const priorityError = validateEnumField(
     value.priority,
@@ -769,11 +790,16 @@ export function createTaskChecked(
     input.kind ?? 'task'
   );
   if (!legacy.ok) return { ok: false, error: legacy.error };
+  const config = loadConfig(ctx.rootDir);
   const doc = ctx.store.create({
     ...withoutLegacyMilestone(input),
     ...(legacy.parent === undefined ? {} : { parent: legacy.parent }),
-    // Omitted, a task starts in the project's ready role.
-    status: input.status ?? statusModelFor(ctx.rootDir).roles.ready,
+    // Omitted, a task starts in the project's ready role; given, as the
+    // configured name it resolves to.
+    status:
+      input.status === undefined
+        ? statusModelOf(config).roles.ready
+        : (requestStatus(input.status, config) ?? input.status),
   });
   markA2AChild(ctx, doc.meta.id, doc.meta.parent);
   ctx.cache.refresh(ctx.store, [doc.meta.id]);
@@ -902,6 +928,12 @@ async function updateTask(
   const patch: UpdatePatch = {
     ...withoutLegacyMilestone(requested),
     ...(legacy.parent === undefined ? {} : { parent: legacy.parent }),
+    // Written as the configured name it resolves to (validated above).
+    ...(requested.status === undefined
+      ? {}
+      : {
+          status: requestStatus(requested.status, config) ?? requested.status,
+        }),
   };
 
   // A gated A2A draft moves only through its gate; a decide-tier status
@@ -5471,7 +5503,7 @@ export async function handleApi(
       }
       if (segments.length === 1 && method === 'GET') {
         const filter = {
-          status: url.searchParams.get('status') ?? undefined,
+          status: listStatusFilter(ctx, url.searchParams.get('status')),
           kind: url.searchParams.get('kind') ?? undefined,
           parent: url.searchParams.get('parent') ?? undefined,
           includeArchived: url.searchParams.get('archived') === '1',

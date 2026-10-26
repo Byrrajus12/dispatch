@@ -33,6 +33,7 @@ import { landingStateByTaskId } from '../../lib/landingBadge';
 import { resolveLinearLink } from '../../lib/linearSettings';
 import { rollupMilestoneStatus } from '../../lib/milestoneRollup';
 import { pendingStarts } from '../../lib/optimisticDispatch';
+import { tasksWithFinishedRun } from '../../lib/runState';
 import { assigneeRef } from '../../lib/taskDisplay';
 import { FanoutControls } from '../milestones/FanoutControls';
 import { usePeople } from '../people/PeopleContext';
@@ -395,6 +396,10 @@ export function FlightPlan({
     () => tasksWithRunBranch(data.runs),
     [data.runs]
   );
+  const withFinishedRun = useMemo(
+    () => tasksWithFinishedRun(data.runs),
+    [data.runs]
+  );
   const plan = useMemo(
     () =>
       buildFlightPlan(nodes, {
@@ -408,6 +413,7 @@ export function FlightPlan({
         ownerOf,
         startedByOf,
         withRunBranch,
+        withFinishedRun,
         lookup,
       }),
     [
@@ -422,6 +428,7 @@ export function FlightPlan({
       ownerOf,
       startedByOf,
       withRunBranch,
+      withFinishedRun,
       lookup,
     ]
   );

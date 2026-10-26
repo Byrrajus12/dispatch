@@ -1,7 +1,9 @@
 import type { CreateInput, TaskDoc } from '@dispatch-foo/core/browser';
+import { statusModelOf } from '@dispatch-foo/core/browser';
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, expect, test } from 'bun:test';
+import { afterEach, beforeEach, expect, test } from 'bun:test';
 
+import { setActiveStatusModel } from '../../lib/statusModel';
 import {
   type CreateTaskPreset,
   type ShellActions,
@@ -21,6 +23,11 @@ const STATUSES = ['draft', 'ready', 'working', 'review', 'landed'];
 beforeEach(() => {
   window.localStorage.removeItem(CREATE_TASK_TITLE_KEY);
   window.localStorage.removeItem(CREATE_TASK_DESCRIPTION_KEY);
+});
+
+// Reset inside act: the dialog may still be mounted and subscribed to the model.
+afterEach(() => {
+  act(() => setActiveStatusModel(null));
 });
 
 function epic(id: string, title: string, kind = 'milestone'): TaskDoc {
@@ -261,6 +268,36 @@ test('Save as draft appears once a title exists and files the task as draft', as
   await settle();
 
   expect(created[0]?.status).toBe('draft');
+});
+
+// A board linked to Linear has no `draft`; the daemon would refuse it.
+test('Save as draft files the task under a Linear board’s backlog status', async () => {
+  setActiveStatusModel(
+    statusModelOf({
+      statuses: ['Backlog', 'Todo', 'In Progress', 'Done', 'Canceled'],
+      statusDefinitions: [
+        { name: 'Backlog', type: 'backlog', color: null },
+        { name: 'Todo', type: 'unstarted', color: null },
+        { name: 'In Progress', type: 'started', color: null },
+        { name: 'Done', type: 'completed', color: null },
+        { name: 'Canceled', type: 'canceled', color: null },
+      ],
+      statusRoles: {
+        ready: 'Todo',
+        dispatched: 'In Progress',
+        review: 'In Progress',
+        landing: null,
+        landed: 'Done',
+        dropped: 'Canceled',
+      },
+    })
+  );
+  const { created } = mount({ preset: { status: 'Todo' } });
+  fireEvent.change(titleField(), { target: { value: 'Later' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save as draft' }));
+  await settle();
+
+  expect(created[0]?.status).toBe('Backlog');
 });
 
 test('a failed create keeps the dialog open with the title intact and says why', async () => {

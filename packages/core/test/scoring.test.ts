@@ -9,6 +9,7 @@ import {
   rankTasks,
   UNBLOCKING_HALF_VALUE,
 } from '../src/scoring.js';
+import type { StatusModel } from '../src/status.js';
 import type { TaskDoc, TaskMeta } from '../src/types.js';
 import { defaultTaskFields } from '../src/types.js';
 
@@ -86,6 +87,40 @@ describe('rankTasks candidate set', () => {
     });
 
     expect(ranked.map((entry) => entry.task.meta.id)).toEqual(['t-bbbbbb']);
+  });
+
+  it('waits on a blocker whose review status is its dispatched one until its run ends', () => {
+    const statuses: StatusModel = {
+      definitions: [
+        { name: 'Todo', type: 'unstarted', color: null },
+        { name: 'In Progress', type: 'started', color: null },
+        { name: 'Done', type: 'completed', color: null },
+      ],
+      roles: {
+        ready: 'Todo',
+        dispatched: 'In Progress',
+        review: 'In Progress',
+        landing: null,
+        landed: 'Done',
+        dropped: 'Done',
+      },
+    };
+    const blocker = make({ id: 't-aaaaaa', status: 'In Progress' });
+    const dependent = make({
+      id: 't-bbbbbb',
+      status: 'Todo',
+      blockedBy: ['t-aaaaaa'],
+    });
+    const rank = (finishedRun?: (id: string) => boolean) =>
+      rankTasks([blocker, dependent], {
+        weights: DEFAULT_QUEUE_WEIGHTS,
+        now: NOW,
+        statuses,
+        finishedRun,
+      }).map((entry) => entry.task.meta.id);
+
+    expect(rank()).toEqual([]);
+    expect(rank((id) => id === 't-aaaaaa')).toEqual(['t-bbbbbb']);
   });
 
   it('returns an empty ranking when nothing is ready', () => {

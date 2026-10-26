@@ -537,6 +537,26 @@ export function runKind(meta: Pick<RunMeta, 'kind'>): RunKind {
   return meta.kind ?? 'execute';
 }
 
+// Tasks whose newest execute run has ended: when the review status is also
+// the dispatched one, this is what says the work is up for review.
+export function tasksWithFinishedRun(
+  runs: readonly Pick<RunMeta, 'taskId' | 'kind' | 'state' | 'createdAt'>[]
+): Set<string> {
+  const newest = new Map<string, (typeof runs)[number]>();
+  for (const run of runs) {
+    if (runKind(run) !== 'execute') continue;
+    const seen = newest.get(run.taskId);
+    if (seen === undefined || run.createdAt > seen.createdAt) {
+      newest.set(run.taskId, run);
+    }
+  }
+  const out = new Set<string>();
+  for (const [taskId, run] of newest) {
+    if (TERMINAL_RUN_STATES.has(run.state)) out.add(taskId);
+  }
+  return out;
+}
+
 // The human a run acts for; null means no one. Runs from before the field
 // fall back to dispatchedBy.
 export function runOperator(
