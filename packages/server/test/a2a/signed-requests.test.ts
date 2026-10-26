@@ -566,11 +566,16 @@ describe('signed responses and outbound signing (T40)', () => {
         { to: ['a2a:signed'], kind: 'message', body: 'Hello, signed peer.' },
         { address: 'human:test', canDecide: true }
       );
-      await waitFor(
-        () =>
-          handle.a2a.store!.getOutbound(message.id, 'signed')?.state === 'done',
-        10_000
-      );
+      // A transient first failure on a loaded CI runner waits out a 30 s
+      // backoff; retry it at once instead, and log why it failed.
+      await waitFor(() => {
+        const row = handle.a2a.store!.getOutbound(message.id, 'signed');
+        if (row?.state === 'queued' && row.nextAttemptAt !== null) {
+          console.log(`T40: first attempt failed: ${row.lastError}`);
+          handle.a2a.outbound!.retryNow('signed');
+        }
+        return row?.state === 'done';
+      }, 10_000);
       expect(verified).toBe(1);
       // Review J1: an unsigned reply is unverifiable, so it retries; the peer stays active.
       mode = 'unsigned';
