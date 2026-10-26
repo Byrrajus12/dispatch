@@ -673,26 +673,26 @@ describe('relations and hierarchy', () => {
     expect(fake.calls).not.toContain('projectMilestones');
   });
 
-  it('publishes a legacy epic as a parent issue with its tasks as sub-issues', async () => {
+  it('publishes a legacy milestone as a parent issue with its tasks as sub-issues', async () => {
     const sync = makeSync();
     await sync.syncOnce();
-    const epic = store.create(
-      { title: 'Epic', kind: 'milestone' },
+    const milestone = store.create(
+      { title: 'Milestone', kind: 'milestone' },
       new Date(Date.now() + 1000).toISOString()
     );
     store.create(
-      { title: 'Part one', parent: epic.meta.id },
+      { title: 'Part one', parent: milestone.meta.id },
       new Date(Date.now() + 2000).toISOString()
     );
 
     await sync.syncOnce();
 
-    const epicIssue = fake.issues.find((i) => i.title === 'Epic');
+    const milestoneIssue = fake.issues.find((i) => i.title === 'Milestone');
     const part = fake.issues.find((i) => i.title === 'Part one');
-    expect(epicIssue).toBeDefined();
-    expect(part?.parentId).toBe(epicIssue?.id);
-    expect(store.get(epic.meta.id)?.meta.external).toBe(
-      `linear:${epicIssue?.id}`
+    expect(milestoneIssue).toBeDefined();
+    expect(part?.parentId).toBe(milestoneIssue?.id);
+    expect(store.get(milestone.meta.id)?.meta.external).toBe(
+      `linear:${milestoneIssue?.id}`
     );
   });
 

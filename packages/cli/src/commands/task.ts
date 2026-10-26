@@ -1,10 +1,10 @@
 import {
-  ACCEPTED_KINDS,
   ActorContext,
   ASSIGNEES,
   canonicalStatus,
   childEnv,
   DISPATCH_DIR,
+  KINDS,
   loadConfig,
   PRIORITIES,
   readProjectBackend,
@@ -79,7 +79,7 @@ export function requireStore(ctx: CliContext): TaskStore {
  *
  * Unlike `requireStore` this accepts either backend: a database-backed
  * project has no `.dispatch/tasks` directory, and gating on one would refuse
- * every orchestrate/plan/scope command in exactly the projects this epic is
+ * every orchestrate/plan/scope command in exactly the projects this milestone is
  * moving towards.
  *
  * Checked at the resolved project root first: a run's worktree carries only
@@ -207,7 +207,9 @@ function taskRow(t: TaskDoc): string[] {
 const TABLE_HEADER = ['ID', 'STATUS', 'PRI', 'KIND', 'TITLE'];
 
 export function registerTaskCommands(program: Command, ctx: CliContext): void {
-  const task = program.command('task').description('Manage tasks and epics');
+  const task = program
+    .command('task')
+    .description('Manage tasks and milestones');
 
   task
     .command('create')
@@ -234,11 +236,7 @@ export function registerTaskCommands(program: Command, ctx: CliContext): void {
         const config = loadConfig(ctx.cwd);
         const input: CreateInput = {
           title,
-          kind: validate(
-            opts.kind as string,
-            ACCEPTED_KINDS,
-            'kind'
-          ) as TaskKind,
+          kind: validate(opts.kind as string, KINDS, 'kind') as TaskKind,
           status: validate(
             canonicalStatusOpt(opts.status as string | undefined),
             config.statuses,
@@ -298,7 +296,7 @@ export function registerTaskCommands(program: Command, ctx: CliContext): void {
           config.statuses,
           'status'
         ),
-        kind: validate(opts.kind as string | undefined, ACCEPTED_KINDS, 'kind'),
+        kind: validate(opts.kind as string | undefined, KINDS, 'kind'),
         parent: opts.parent as string | undefined,
       };
       const docs =

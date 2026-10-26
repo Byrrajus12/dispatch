@@ -274,9 +274,9 @@ export function TasksView({
   const requestFilter = useCallback(() => setFilterOpen(true), []);
   const requestDisplay = useCallback(() => setDisplayOpen(true), []);
   const byPerson = groupedByPerson(prefs, mode);
-  const epicById = useMemo(
-    () => new Map(data.epics.map((e) => [e.meta.id, e])),
-    [data.epics]
+  const milestoneById = useMemo(
+    () => new Map(data.milestones.map((e) => [e.meta.id, e])),
+    [data.milestones]
   );
   // Every group's folded status, in the same units as the top bar.
   const groupAccessory = useCallback(
@@ -290,13 +290,13 @@ export function TasksView({
           }
         )}
         dueDate={
-          group.epicId === null
+          group.milestoneId === null
             ? null
-            : (epicById.get(group.epicId)?.meta.dueDate ?? null)
+            : (milestoneById.get(group.milestoneId)?.meta.dueDate ?? null)
         }
       />
     ),
-    [presetContext.bucketOf, needs.byTask, epicById]
+    [presetContext.bucketOf, needs.byTask, milestoneById]
   );
   const footer = (
     <TasksExtraGroups
@@ -317,9 +317,13 @@ export function TasksView({
               ? data.tasks
               : data.tasks.filter(taskFilter),
             TWO_VIEWS_TASKS_DISPLAY,
-            { statuses: data.config.statuses, epics: data.epics, model }
+            {
+              statuses: data.config.statuses,
+              milestones: data.milestones,
+              model,
+            }
           ),
-    [mode, data.config, data.tasks, data.epics, taskFilter, model]
+    [mode, data.config, data.tasks, data.milestones, taskFilter, model]
   );
   const presetLabel =
     TASKS_PRESETS.find((p) => p.id === preset)?.label ?? 'All';
@@ -466,7 +470,9 @@ export function TasksView({
                   bucketOf={presetContext.bucketOf}
                   asksByTask={needs.byTask}
                   projectKey={projectKey}
-                  dueDateOf={(id) => epicById.get(id)?.meta.dueDate ?? null}
+                  dueDateOf={(id) =>
+                    milestoneById.get(id)?.meta.dueDate ?? null
+                  }
                   layouts={{
                     projects: {
                       body: (

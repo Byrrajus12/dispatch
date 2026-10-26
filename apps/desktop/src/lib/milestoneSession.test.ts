@@ -1,18 +1,18 @@
 import type {
-  EpicChildPhase,
-  EpicProgressChild,
-  EpicSpend,
-  EpicWave,
+  MilestoneChildPhase,
+  MilestoneProgressChild,
+  MilestoneSpend,
+  MilestoneWave,
 } from '@dispatch/client';
 import { describe, expect, test } from 'bun:test';
 
-import type { EpicPausedEvent } from './epicSession';
+import type { MilestonePausedEvent } from './milestoneSession';
 import {
   defaultMaxRuns,
   defaultSpendCeiling,
   drillTargetFor,
-  epicPausedNotice,
   formatUsd,
+  milestonePausedNotice,
   pausedReasonLabel,
   PHASE_CHIP_ORDER,
   PHASE_LABEL,
@@ -24,9 +24,9 @@ import {
   spendTitle,
   spendTone,
   waveSteps,
-} from './epicSession';
+} from './milestoneSession';
 
-const ALL_PHASES: EpicChildPhase[] = [
+const ALL_PHASES: MilestoneChildPhase[] = [
   'draft',
   'waiting',
   'queued',
@@ -44,9 +44,9 @@ const ALL_PHASES: EpicChildPhase[] = [
 ];
 
 function child(
-  phase: EpicChildPhase,
-  overrides: Partial<EpicProgressChild> = {}
-): EpicProgressChild {
+  phase: MilestoneChildPhase,
+  overrides: Partial<MilestoneProgressChild> = {}
+): MilestoneProgressChild {
   return {
     id: `t-${phase}`,
     title: phase,
@@ -58,7 +58,7 @@ function child(
   };
 }
 
-function spend(overrides: Partial<EpicSpend> = {}): EpicSpend {
+function spend(overrides: Partial<MilestoneSpend> = {}): MilestoneSpend {
   return {
     settledUsd: 41.2,
     liveCount: 3,
@@ -72,16 +72,18 @@ function spend(overrides: Partial<EpicSpend> = {}): EpicSpend {
 
 function wave(
   index: number,
-  byPhase: Partial<Record<EpicChildPhase, number>>
-): EpicWave {
+  byPhase: Partial<Record<MilestoneChildPhase, number>>
+): MilestoneWave {
   const total = Object.values(byPhase).reduce((sum, n) => sum + n, 0);
   return { index, total, byPhase };
 }
 
-function paused(overrides: Partial<EpicPausedEvent> = {}): EpicPausedEvent {
+function paused(
+  overrides: Partial<MilestonePausedEvent> = {}
+): MilestonePausedEvent {
   return {
-    type: 'epic.paused',
-    epicId: 'e-1',
+    type: 'milestone.paused',
+    milestoneId: 'e-1',
     reason: 'budget',
     settledUsd: 41.2,
     estimatedLiveUsd: 30,
@@ -177,7 +179,7 @@ describe('phase chips', () => {
 describe('showsPhasePill', () => {
   test('is true for exactly the eight phases a row pill adds to', () => {
     const shown = ALL_PHASES.filter(showsPhasePill).sort();
-    const expected: EpicChildPhase[] = [
+    const expected: MilestoneChildPhase[] = [
       'working',
       'reviewing',
       'fixing',
@@ -297,9 +299,9 @@ describe('dialog defaults', () => {
   });
 });
 
-describe('epicPausedNotice', () => {
+describe('milestonePausedNotice', () => {
   test('budget carries the numbers the gate stopped on', () => {
-    const notice = epicPausedNotice('Auth rewrite', paused());
+    const notice = milestonePausedNotice('Auth rewrite', paused());
     expect(notice.title).toBe('Auth rewrite paused — spend ceiling');
     expect(notice.body).toBe(
       '$41.20 settled + ~$30.00 in flight of $60.00. Resume or raise the ceiling to continue.'
@@ -307,7 +309,7 @@ describe('epicPausedNotice', () => {
   });
 
   test('budget omits the halves it has no number for', () => {
-    const notice = epicPausedNotice(
+    const notice = milestonePausedNotice(
       'Auth rewrite',
       paused({ estimatedLiveUsd: 0, maxSpendUsd: null })
     );
@@ -317,7 +319,7 @@ describe('epicPausedNotice', () => {
   });
 
   test('runs reads started over ceiling', () => {
-    const notice = epicPausedNotice(
+    const notice = milestonePausedNotice(
       'Auth rewrite',
       paused({ reason: 'runs', runsStarted: 20 })
     );
@@ -326,13 +328,13 @@ describe('epicPausedNotice', () => {
       '20/20 runs started. Resume or raise the ceiling to continue.'
     );
     expect(
-      epicPausedNotice('E', paused({ reason: 'runs', maxRuns: null })).body
+      milestonePausedNotice('E', paused({ reason: 'runs', maxRuns: null })).body
     ).toBe('7 runs started. Resume or raise the ceiling to continue.');
   });
 
   test('fill-failed carries the detail when there is one', () => {
     expect(
-      epicPausedNotice(
+      milestonePausedNotice(
         'Auth rewrite',
         paused({ reason: 'fill-failed', detail: ' git worktree add failed ' })
       )
@@ -341,13 +343,14 @@ describe('epicPausedNotice', () => {
       body: 'git worktree add failed. Resume to try again.',
     });
     expect(
-      epicPausedNotice('Auth rewrite', paused({ reason: 'fill-failed' })).body
+      milestonePausedNotice('Auth rewrite', paused({ reason: 'fill-failed' }))
+        .body
     ).toBe('Auto-dispatch kept failing. Resume to try again.');
   });
 
   test('human names the person', () => {
     expect(
-      epicPausedNotice('Auth rewrite', paused({ reason: 'human' }))
+      milestonePausedNotice('Auth rewrite', paused({ reason: 'human' }))
     ).toEqual({
       title: 'Auth rewrite paused',
       body: 'Paused by you. Resume to keep dispatching.',

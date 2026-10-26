@@ -6,10 +6,10 @@ import { join } from 'node:path';
 
 import { TaskCache } from '../../src/cache.js';
 import { EventBus } from '../../src/events.js';
-import { epicBranchName } from '../../src/orchestrator/epicBranch.js';
 import { FakeExecutor } from '../../src/orchestrator/executors/fake.js';
+import { milestoneBranchName } from '../../src/orchestrator/milestoneBranch.js';
 import { Orchestrator } from '../../src/orchestrator/orchestrator.js';
-import { epicPrsPath } from '../../src/orchestrator/paths.js';
+import { milestonePrsPath } from '../../src/orchestrator/paths.js';
 import type { CommandResult } from '../../src/orchestrator/pr.js';
 import { PrManager } from '../../src/orchestrator/pr.js';
 import { OrchestratorConflictError } from '../../src/orchestrator/types.js';
@@ -23,7 +23,7 @@ const originalDispatchHome = process.env.DISPATCH_HOME;
 beforeEach(() => {
   fakeHome = mkdtempSync(join(tmpdir(), 'dispatch-home-'));
   process.env.DISPATCH_HOME = fakeHome;
-  repo = initGitRepo('dispatch-epic-land-');
+  repo = initGitRepo('dispatch-milestone-land-');
 });
 
 afterEach(() => {
@@ -64,7 +64,7 @@ function makeHarness() {
 type Harness = ReturnType<typeof makeHarness>;
 
 // Dispatches `taskId`, waits for the fake run to finish, and commits one real
-// file on its branch — same helper shape as epic-branch.test.ts.
+// file on its branch — same helper shape as milestone-branch.test.ts.
 async function dispatchWithWork(
   h: Harness,
   taskId: string,
@@ -95,25 +95,31 @@ function branchExists(branch: string): boolean {
   return runGitSync(repo, ['branch', '--list', branch]).trim() !== '';
 }
 
-// An epic with two children whose work has already merged onto the epic
+// A milestone with two children whose work has already merged onto the milestone
 // branch — the "finished, ready to land" starting state most tests want.
-async function makeFinishedEpic(
+async function makeFinishedMilestone(
   h: Harness
-): Promise<{ epicId: string; branch: string }> {
-  const epic = h.store.create({ title: 'The epic', kind: 'epic' });
-  const a = h.store.create({ title: 'Child A', parent: epic.meta.id });
-  const b = h.store.create({ title: 'Child B', parent: epic.meta.id });
+): Promise<{ milestoneId: string; branch: string }> {
+  const milestone = h.store.create({
+    title: 'The milestone',
+    kind: 'milestone',
+  });
+  const a = h.store.create({ title: 'Child A', parent: milestone.meta.id });
+  const b = h.store.create({ title: 'Child B', parent: milestone.meta.id });
   h.cache.rebuild(h.store);
   const runA = await dispatchWithWork(h, a.meta.id, 'a.txt', 'A work');
   h.orchestrator.review(runA, 'merge');
   const runB = await dispatchWithWork(h, b.meta.id, 'b.txt', 'B work');
   h.orchestrator.review(runB, 'merge');
-  return { epicId: epic.meta.id, branch: epicBranchName(epic.meta.id) };
+  return {
+    milestoneId: milestone.meta.id,
+    branch: milestoneBranchName(milestone.meta.id),
+  };
 }
 
 // The PR-path test double for gh/git — the same seam pr.test.ts's StubRunner
-// covers, trimmed to the three commands the epic land path issues.
-class EpicStubRunner {
+// covers, trimmed to the three commands the milestone land path issues.
+class MilestoneStubRunner {
   readonly calls: { cwd: string; cmd: string[] }[] = [];
   pushResult: CommandResult = { ok: true, stdout: '', stderr: '' };
   createResult: CommandResult = {
@@ -142,13 +148,13 @@ class EpicStubRunner {
   };
 }
 
-describe('landing an epic locally', () => {
-  it('lands the finished epic branch on main as one two-parent merge commit and closes the epic out', async () => {
+describe('landing a milestone locally', () => {
+  it('lands the finished milestone branch on main as one two-parent merge commit and closes the milestone out', async () => {
     const h = makeHarness();
-    const { epicId, branch } = await makeFinishedEpic(h);
-    const epicTip = runGitSync(repo, ['rev-parse', branch]).trim();
+    const { milestoneId, branch } = await makeFinishedMilestone(h);
+    const milestoneTip = runGitSync(repo, ['rev-parse', branch]).trim();
 
-    const result = h.orchestrator.landEpicLocally(epicId);
+    const result = h.orchestrator.landMilestoneLocally(milestoneId);
 
     // Both children's files reached main through the one merge commit.
     expect(fileOnBranch('main', 'a.txt')).toBe('A work\n');
@@ -156,8 +162,8 @@ describe('landing an epic locally', () => {
     expect(result.mergeCommit).toBe(
       runGitSync(repo, ['rev-parse', 'main']).trim()
     );
-    // A true merge: main's tip has two parents, the second being the epic tip
-    // — that is what makes the epic revertible as a unit.
+    // A true merge: main's tip has two parents, the second being the milestone tip
+    // — that is what makes the milestone revertible as a unit.
     const parents = runGitSync(repo, [
       'rev-list',
       '--parents',
@@ -167,26 +173,26 @@ describe('landing an epic locally', () => {
       .trim()
       .split(' ');
     expect(parents.length).toBe(3);
-    expect(parents[2]).toBe(epicTip);
-    // Epic closed out like review-merge closes a run.
-    expect(h.store.get(epicId)?.meta.status).toBe('landed');
-    expect(h.store.get(epicId)?.body).toContain('landed on main');
+    expect(parents[2]).toBe(milestoneTip);
+    // Milestone closed out like review-merge closes a run.
+    expect(h.store.get(milestoneId)?.meta.status).toBe('landed');
+    expect(h.store.get(milestoneId)?.body).toContain('landed on main');
     expect(branchExists(branch)).toBe(false);
   });
 
-  it('keeps serving the epic diff from the snapshot after the branch is gone', async () => {
+  it('keeps serving the milestone diff from the snapshot after the branch is gone', async () => {
     const h = makeHarness();
-    const { epicId, branch } = await makeFinishedEpic(h);
-    const liveDiff = h.orchestrator.epicDiff(epicId);
+    const { milestoneId, branch } = await makeFinishedMilestone(h);
+    const liveDiff = h.orchestrator.milestoneDiff(milestoneId);
     expect(liveDiff.files.map((f) => f.path).sort()).toEqual([
       'a.txt',
       'b.txt',
     ]);
 
-    h.orchestrator.landEpicLocally(epicId);
+    h.orchestrator.landMilestoneLocally(milestoneId);
 
     expect(branchExists(branch)).toBe(false);
-    const snapshot = h.orchestrator.epicDiff(epicId);
+    const snapshot = h.orchestrator.milestoneDiff(milestoneId);
     expect(snapshot.files.map((f) => f.path).sort()).toEqual([
       'a.txt',
       'b.txt',
@@ -196,7 +202,7 @@ describe('landing an epic locally', () => {
 
   it('uses the checkout-free plumbing merge when main is not checked out', async () => {
     const h = makeHarness();
-    const { epicId } = await makeFinishedEpic(h);
+    const { milestoneId } = await makeFinishedMilestone(h);
     // A repo with no remote resolves its default base to the CURRENT branch,
     // so checking out `elsewhere` alone would move the target with it. Pin
     // origin/HEAD at main the way a real clone has it — that is the setup
@@ -210,7 +216,7 @@ describe('landing an epic locally', () => {
     runGitSync(repo, ['checkout', '-b', 'elsewhere']);
     const elsewhereTip = runGitSync(repo, ['rev-parse', 'HEAD']).trim();
 
-    const result = h.orchestrator.landEpicLocally(epicId);
+    const result = h.orchestrator.landMilestoneLocally(milestoneId);
 
     // Main moved (and carries the work) without the checkout ever leaving
     // `elsewhere` or its tip moving.
@@ -222,49 +228,58 @@ describe('landing an epic locally', () => {
     expect(result.mergeCommit).toBe(
       runGitSync(repo, ['rev-parse', 'main']).trim()
     );
-    expect(h.store.get(epicId)?.meta.status).toBe('landed');
+    expect(h.store.get(milestoneId)?.meta.status).toBe('landed');
   });
 
-  it('refuses a partially-done epic with a message naming the pending children', async () => {
+  it('refuses a partially-done milestone with a message naming the pending children', async () => {
     const h = makeHarness();
-    const epic = h.store.create({ title: 'The epic', kind: 'epic' });
-    const a = h.store.create({ title: 'Child A', parent: epic.meta.id });
-    const b = h.store.create({ title: 'Child B', parent: epic.meta.id });
+    const milestone = h.store.create({
+      title: 'The milestone',
+      kind: 'milestone',
+    });
+    const a = h.store.create({ title: 'Child A', parent: milestone.meta.id });
+    const b = h.store.create({ title: 'Child B', parent: milestone.meta.id });
     h.cache.rebuild(h.store);
     const runA = await dispatchWithWork(h, a.meta.id, 'a.txt');
     h.orchestrator.review(runA, 'merge');
     // Child B never dispatched — still `todo`.
 
-    const branch = epicBranchName(epic.meta.id);
-    expect(() => h.orchestrator.landEpicLocally(epic.meta.id)).toThrow(
-      /partially done — 1 of 2 child task\(s\) still pending/
-    );
-    expect(() => h.orchestrator.landEpicLocally(epic.meta.id)).toThrow(
-      new RegExp(`${b.meta.id}: ready`)
-    );
-    // Nothing landed, nothing was cleaned up, the epic stays open.
+    const branch = milestoneBranchName(milestone.meta.id);
+    expect(() =>
+      h.orchestrator.landMilestoneLocally(milestone.meta.id)
+    ).toThrow(/partially done — 1 of 2 child task\(s\) still pending/);
+    expect(() =>
+      h.orchestrator.landMilestoneLocally(milestone.meta.id)
+    ).toThrow(new RegExp(`${b.meta.id}: ready`));
+    // Nothing landed, nothing was cleaned up, the milestone stays open.
     expect(branchExists(branch)).toBe(true);
     expect(fileOnBranch('main', 'a.txt')).toBeNull();
-    expect(h.store.get(epic.meta.id)?.meta.status).not.toBe('landed');
+    expect(h.store.get(milestone.meta.id)?.meta.status).not.toBe('landed');
   });
 
-  it('refuses while an in-review child has not merged onto the epic branch yet', async () => {
+  it('refuses while an in-review child has not merged onto the milestone branch yet', async () => {
     const h = makeHarness();
-    const epic = h.store.create({ title: 'The epic', kind: 'epic' });
-    const a = h.store.create({ title: 'Child A', parent: epic.meta.id });
+    const milestone = h.store.create({
+      title: 'The milestone',
+      kind: 'milestone',
+    });
+    const a = h.store.create({ title: 'Child A', parent: milestone.meta.id });
     h.cache.rebuild(h.store);
     // Finished but never reviewed: the task sits at `in-review`.
     await dispatchWithWork(h, a.meta.id, 'a.txt');
 
-    expect(() => h.orchestrator.landEpicLocally(epic.meta.id)).toThrow(
-      /partially done/
-    );
+    expect(() =>
+      h.orchestrator.landMilestoneLocally(milestone.meta.id)
+    ).toThrow(/partially done/);
   });
 
-  it('refuses when a leftover unreviewed run is still based on the epic branch', async () => {
+  it('refuses when a leftover unreviewed run is still based on the milestone branch', async () => {
     const h = makeHarness();
-    const epic = h.store.create({ title: 'The epic', kind: 'epic' });
-    const a = h.store.create({ title: 'Child A', parent: epic.meta.id });
+    const milestone = h.store.create({
+      title: 'The milestone',
+      kind: 'milestone',
+    });
+    const a = h.store.create({ title: 'Child A', parent: milestone.meta.id });
     h.cache.rebuild(h.store);
     const runA = await dispatchWithWork(h, a.meta.id, 'a.txt');
     // The task gets hand-flipped past review while the run still exists —
@@ -272,27 +287,30 @@ describe('landing an epic locally', () => {
     h.store.update(a.meta.id, { status: 'landed' });
     h.cache.rebuild(h.store);
 
-    expect(() => h.orchestrator.landEpicLocally(epic.meta.id)).toThrow(
-      new RegExp(`unreviewed run ${runA}`)
-    );
+    expect(() =>
+      h.orchestrator.landMilestoneLocally(milestone.meta.id)
+    ).toThrow(new RegExp(`unreviewed run ${runA}`));
   });
 
-  it('refuses an epic that never grew an integration branch', () => {
+  it('refuses a milestone that never grew an integration branch', () => {
     const h = makeHarness();
-    const epic = h.store.create({ title: 'The epic', kind: 'epic' });
-    h.store.create({ title: 'Child A', parent: epic.meta.id });
+    const milestone = h.store.create({
+      title: 'The milestone',
+      kind: 'milestone',
+    });
+    h.store.create({ title: 'Child A', parent: milestone.meta.id });
     h.cache.rebuild(h.store);
 
-    expect(() => h.orchestrator.landEpicLocally(epic.meta.id)).toThrow(
-      /no integration branch to land/
-    );
+    expect(() =>
+      h.orchestrator.landMilestoneLocally(milestone.meta.id)
+    ).toThrow(/no integration branch to land/);
   });
 
   it('refuses when the default base has no local branch to land onto', async () => {
     const h = makeHarness();
-    const { epicId, branch } = await makeFinishedEpic(h);
+    const { milestoneId, branch } = await makeFinishedMilestone(h);
     // origin/HEAD names a default branch that was never checked out locally —
-    // landing must refuse rather than close the epic out with nothing landed.
+    // landing must refuse rather than close the milestone out with nothing landed.
     runGitSync(repo, ['update-ref', 'refs/remotes/origin/trunk', 'main']);
     runGitSync(repo, [
       'symbolic-ref',
@@ -300,45 +318,50 @@ describe('landing an epic locally', () => {
       'refs/remotes/origin/trunk',
     ]);
 
-    expect(() => h.orchestrator.landEpicLocally(epicId)).toThrow(
+    expect(() => h.orchestrator.landMilestoneLocally(milestoneId)).toThrow(
       /default base branch trunk does not exist locally/
     );
     expect(branchExists(branch)).toBe(true);
-    expect(h.store.get(epicId)?.meta.status).not.toBe('landed');
+    expect(h.store.get(milestoneId)?.meta.status).not.toBe('landed');
   });
 
-  it('refuses to land the same epic twice', async () => {
+  it('refuses to land the same milestone twice', async () => {
     const h = makeHarness();
-    const { epicId } = await makeFinishedEpic(h);
-    h.orchestrator.landEpicLocally(epicId);
+    const { milestoneId } = await makeFinishedMilestone(h);
+    h.orchestrator.landMilestoneLocally(milestoneId);
 
-    expect(() => h.orchestrator.landEpicLocally(epicId)).toThrow(
+    expect(() => h.orchestrator.landMilestoneLocally(milestoneId)).toThrow(
       /already landed/
     );
   });
 
-  it('closes out an epic whose branch carries no commits without inventing a merge', async () => {
+  it('closes out a milestone whose branch carries no commits without inventing a merge', async () => {
     const h = makeHarness();
-    const epic = h.store.create({ title: 'The epic', kind: 'epic' });
-    const a = h.store.create({ title: 'Child A', parent: epic.meta.id });
+    const milestone = h.store.create({
+      title: 'The milestone',
+      kind: 'milestone',
+    });
+    const a = h.store.create({ title: 'Child A', parent: milestone.meta.id });
     h.cache.rebuild(h.store);
-    // Dispatch and merge with no work committed: the epic branch exists but
+    // Dispatch and merge with no work committed: the milestone branch exists but
     // its tip content equals main's.
     const meta = await h.orchestrator.dispatch(a.meta.id, 'fake');
     await waitFor(
       () => h.orchestrator.getRun(meta.id)?.meta.state === 'finished'
     );
     h.orchestrator.review(meta.id, 'merge');
-    const branch = epicBranchName(epic.meta.id);
+    const branch = milestoneBranchName(milestone.meta.id);
     const mainTip = runGitSync(repo, ['rev-parse', 'main']).trim();
 
-    const result = h.orchestrator.landEpicLocally(epic.meta.id);
+    const result = h.orchestrator.landMilestoneLocally(milestone.meta.id);
 
     expect(result.mergeCommit).toBeUndefined();
-    expect(h.store.get(epic.meta.id)?.meta.status).toBe('landed');
+    expect(h.store.get(milestone.meta.id)?.meta.status).toBe('landed');
     expect(branchExists(branch)).toBe(false);
-    expect(h.store.get(epic.meta.id)?.body).toContain('no commits to merge');
-    // Main gained exactly the epic's own task-file bookkeeping commit —
+    expect(h.store.get(milestone.meta.id)?.body).toContain(
+      'no commits to merge'
+    );
+    // Main gained exactly the milestone's own task-file bookkeeping commit —
     // never a content merge.
     expect(
       runGitSync(repo, ['rev-list', '--count', `${mainTip}..main`]).trim()
@@ -347,14 +370,14 @@ describe('landing an epic locally', () => {
   });
 });
 
-describe('landing an epic via PR', () => {
-  it('pushes the epic branch and opens one PR against main, refusing a second', async () => {
+describe('landing a milestone via PR', () => {
+  it('pushes the milestone branch and opens one PR against main, refusing a second', async () => {
     const h = makeHarness();
-    const { epicId, branch } = await makeFinishedEpic(h);
-    const stub = new EpicStubRunner();
+    const { milestoneId, branch } = await makeFinishedMilestone(h);
+    const stub = new MilestoneStubRunner();
     const pr = new PrManager(h, true, stub.run);
 
-    const url = await pr.openEpicPr(epicId);
+    const url = await pr.openMilestonePr(milestoneId);
 
     expect(url).toBe('https://github.com/example/repo/pull/7');
     const push = stub.calls.find(
@@ -368,42 +391,47 @@ describe('landing an epic via PR', () => {
     expect(create?.cmd).toContain('main');
     expect(create?.cmd).toContain('--head');
     expect(create?.cmd).toContain(branch);
-    // Recorded on the epic's Activity and in the persisted ledger; the epic
+    // Recorded on the milestone's Activity and in the persisted ledger; the milestone
     // itself stays open until the poller sees the merge.
-    expect(h.store.get(epicId)?.body).toContain(`opened landing PR: ${url}`);
-    expect(existsSync(epicPrsPath(repo))).toBe(true);
-    expect(pr.epicPrUrl(epicId)).toBe(url);
-    expect(h.store.get(epicId)?.meta.status).not.toBe('landed');
+    expect(h.store.get(milestoneId)?.body).toContain(
+      `opened landing PR: ${url}`
+    );
+    expect(existsSync(milestonePrsPath(repo))).toBe(true);
+    expect(pr.milestonePrUrl(milestoneId)).toBe(url);
+    expect(h.store.get(milestoneId)?.meta.status).not.toBe('landed');
 
-    await expect(pr.openEpicPr(epicId)).rejects.toThrow(
+    await expect(pr.openMilestonePr(milestoneId)).rejects.toThrow(
       /already has an open landing PR/
     );
   });
 
-  it('refuses the PR path for a partially-done epic too', async () => {
+  it('refuses the PR path for a partially-done milestone too', async () => {
     const h = makeHarness();
-    const epic = h.store.create({ title: 'The epic', kind: 'epic' });
-    const a = h.store.create({ title: 'Child A', parent: epic.meta.id });
-    h.store.create({ title: 'Child B', parent: epic.meta.id });
+    const milestone = h.store.create({
+      title: 'The milestone',
+      kind: 'milestone',
+    });
+    const a = h.store.create({ title: 'Child A', parent: milestone.meta.id });
+    h.store.create({ title: 'Child B', parent: milestone.meta.id });
     h.cache.rebuild(h.store);
     const runA = await dispatchWithWork(h, a.meta.id, 'a.txt');
     h.orchestrator.review(runA, 'merge');
-    const stub = new EpicStubRunner();
+    const stub = new MilestoneStubRunner();
     const pr = new PrManager(h, true, stub.run);
 
-    await expect(pr.openEpicPr(epic.meta.id)).rejects.toThrow(
+    await expect(pr.openMilestonePr(milestone.meta.id)).rejects.toThrow(
       OrchestratorConflictError
     );
     // Validation refused before any git/gh command ran.
     expect(stub.calls.length).toBe(0);
   });
 
-  it('closes the epic out when the poller sees the PR merged — across a manager restart', async () => {
+  it('closes the milestone out when the poller sees the PR merged — across a manager restart', async () => {
     const h = makeHarness();
-    const { epicId, branch } = await makeFinishedEpic(h);
-    const stub = new EpicStubRunner();
+    const { milestoneId, branch } = await makeFinishedMilestone(h);
+    const stub = new MilestoneStubRunner();
     const pr = new PrManager(h, true, stub.run);
-    const url = await pr.openEpicPr(epicId);
+    const url = await pr.openMilestonePr(milestoneId);
 
     // A fresh PrManager (a daemon restart) reads the persisted ledger.
     const restarted = new PrManager(h, true, stub.run);
@@ -414,25 +442,25 @@ describe('landing an epic via PR', () => {
     };
     await restarted.pollOnce();
 
-    expect(h.store.get(epicId)?.meta.status).toBe('landed');
-    expect(h.store.get(epicId)?.body).toContain(`landed via PR (${url})`);
+    expect(h.store.get(milestoneId)?.meta.status).toBe('landed');
+    expect(h.store.get(milestoneId)?.body).toContain(`landed via PR (${url})`);
     expect(branchExists(branch)).toBe(false);
     // The record is gone, so the next pass has nothing left to poll.
-    expect(restarted.epicPrUrl(epicId)).toBeUndefined();
+    expect(restarted.milestonePrUrl(milestoneId)).toBeUndefined();
     // The snapshot survives for the review surface.
-    const snapshot = h.orchestrator.epicDiff(epicId);
+    const snapshot = h.orchestrator.milestoneDiff(milestoneId);
     expect(snapshot.files.map((f) => f.path).sort()).toEqual([
       'a.txt',
       'b.txt',
     ]);
   });
 
-  it('drops the record without closing the epic when the PR is closed unmerged', async () => {
+  it('drops the record without closing the milestone when the PR is closed unmerged', async () => {
     const h = makeHarness();
-    const { epicId, branch } = await makeFinishedEpic(h);
-    const stub = new EpicStubRunner();
+    const { milestoneId, branch } = await makeFinishedMilestone(h);
+    const stub = new MilestoneStubRunner();
     const pr = new PrManager(h, true, stub.run);
-    const url = await pr.openEpicPr(epicId);
+    const url = await pr.openMilestonePr(milestoneId);
 
     stub.viewResult = {
       ok: true,
@@ -441,10 +469,10 @@ describe('landing an epic via PR', () => {
     };
     await pr.pollOnce();
 
-    expect(h.store.get(epicId)?.meta.status).not.toBe('landed');
+    expect(h.store.get(milestoneId)?.meta.status).not.toBe('landed');
     expect(branchExists(branch)).toBe(true);
-    expect(pr.epicPrUrl(epicId)).toBeUndefined();
-    expect(h.store.get(epicId)?.body).toContain(
+    expect(pr.milestonePrUrl(milestoneId)).toBeUndefined();
+    expect(h.store.get(milestoneId)?.body).toContain(
       `landing PR closed without merging (${url})`
     );
   });

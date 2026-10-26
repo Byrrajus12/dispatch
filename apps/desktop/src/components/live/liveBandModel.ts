@@ -1,6 +1,6 @@
 import type { StatusModel, TaskListItem } from '@dispatch-foo/core/browser';
 import { fanoutCoverers } from '@dispatch-foo/core/browser';
-import type { EpicProgress, MergeQueueEntryState } from '@dispatch/client';
+import type { MergeQueueEntryState, MilestoneProgress } from '@dispatch/client';
 
 import { dagTaskFromDoc, dagWaves } from '../../lib/dagLayout';
 import { type FlightNavIndex, flightNavIndex } from '../flightplan/flightKeys';
@@ -37,7 +37,7 @@ export interface LiveShared {
   /** The daemon's own human, whom the legacy bare `human` means. */
   local: string | null;
   /** Active or paused fan-outs by container id. */
-  sessions: ReadonlyMap<string, EpicProgress>;
+  sessions: ReadonlyMap<string, MilestoneProgress>;
   /** Tasks with a run branch a dependent can stack on (`tasksWithRunBranch`). */
   withRunBranch: ReadonlySet<string>;
   /** Tasks whose run sits in the merge queue. */
@@ -97,7 +97,7 @@ export type LiveGeometryCache = Map<string, CachedGeometry>;
 function fanoutOwner(
   task: TaskListItem,
   taskById: ReadonlyMap<string, TaskListItem>,
-  sessions: ReadonlyMap<string, EpicProgress>
+  sessions: ReadonlyMap<string, MilestoneProgress>
 ): string | null {
   if (sessions.size > 0) {
     for (const id of fanoutCoverers(task, (x) => taskById.get(x))) {
@@ -301,7 +301,7 @@ export interface LiveTotals {
 
 export function liveTotals(
   bands: readonly LiveBandModel[],
-  sessions: readonly EpicProgress[]
+  sessions: readonly MilestoneProgress[]
 ): LiveTotals {
   const totals: LiveTotals = {
     slots: { used: 0, total: 0 },

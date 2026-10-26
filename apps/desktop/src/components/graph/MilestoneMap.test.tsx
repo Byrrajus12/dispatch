@@ -23,16 +23,16 @@ function task(id: string, status = 'ready', blockedBy: string[] = []) {
   }) as TaskListItem;
 }
 
-function group(epicId: string, label: string, tasks: TaskListItem[]) {
+function group(milestoneId: string, label: string, tasks: TaskListItem[]) {
   return {
-    key: `milestone:${epicId}`,
-    kind: 'milestone',
+    key: `parent:${milestoneId}`,
+    kind: 'parent',
     label,
     tint: null,
-    icon: { kind: 'epic', epicId },
+    icon: { kind: 'parent', parentId: milestoneId },
     rows: tasks.map((doc) => ({ doc, indent: 0 })),
     preset: {},
-    epicId,
+    milestoneId,
     archived: false,
   } as ListGroup;
 }

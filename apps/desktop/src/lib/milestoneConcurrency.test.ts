@@ -4,7 +4,7 @@ import {
   clampConcurrencyInput,
   concurrencyChoices,
   concurrencyLabel,
-} from './epicConcurrency.js';
+} from './milestoneConcurrency.js';
 
 describe('clampConcurrencyInput', () => {
   it('rounds a fractional value to the nearest integer', () => {

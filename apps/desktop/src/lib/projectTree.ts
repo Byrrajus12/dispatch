@@ -1,6 +1,5 @@
 import type { StatusModel, TaskListItem } from '@dispatch-foo/core/browser';
 import {
-  canonicalKind,
   isCanceledStatus,
   isCompletedStatus,
   isContainerKind,
@@ -62,8 +61,8 @@ function childOrder(
   index: ReadonlyMap<string, number>,
   model: StatusModel
 ): number {
-  const ka = KIND_RANK[canonicalKind(a.meta.kind)] ?? 3;
-  const kb = KIND_RANK[canonicalKind(b.meta.kind)] ?? 3;
+  const ka = KIND_RANK[a.meta.kind] ?? 3;
+  const kb = KIND_RANK[b.meta.kind] ?? 3;
   if (ka !== kb) return ka - kb;
   if (ka === KIND_RANK.milestone) {
     const da = a.meta.dueDate ?? '9999';
@@ -247,6 +246,6 @@ export function flattenProjectTree(
 /** Where a node starts: initiatives and projects open, milestones and parent issues
  * folded, so the first screen is the plan rather than two thousand issues. */
 export function expandedByDefault(doc: TaskListItem): boolean {
-  const kind = canonicalKind(doc.meta.kind);
+  const kind = doc.meta.kind;
   return kind === 'initiative' || kind === 'project';
 }

@@ -14,10 +14,10 @@ import { join } from 'node:path';
 import { TaskCache } from '../src/cache.js';
 import { EventBus } from '../src/events.js';
 import type { ServerEvent } from '../src/events.js';
-import { epicBranchName } from '../src/orchestrator/epicBranch.js';
 import { FakeExecutor } from '../src/orchestrator/executors/fake.js';
 import { JjManager } from '../src/orchestrator/jj.js';
 import { MergeQueue } from '../src/orchestrator/mergeQueue.js';
+import { milestoneBranchName } from '../src/orchestrator/milestoneBranch.js';
 import { Orchestrator } from '../src/orchestrator/orchestrator.js';
 import {
   mergeQueuePath,
@@ -161,7 +161,7 @@ function makeHarness(jj?: JjManager): Harness {
 async function dispatchAndFinish(
   harness: Harness,
   title = 'Ship it',
-  // An epic to file the task under, so the run's base is that epic's
+  // A milestone to file the task under, so the run's base is that milestone's
   // integration branch instead of main.
   parent?: string
 ): Promise<{ runId: string; taskId: string }> {
@@ -715,21 +715,22 @@ describe('MergeQueue refreshRemote', () => {
 //
 // With an origin remote, a run on the default base lands on origin directly
 // and owes no drain-push (see origin-landing.test.ts). The run that still
-// merges locally there is an epic child, whose base is the local-only
-// epic/<id> integration branch, so these tests file their runs under an epic.
+// merges locally there is a milestone child, whose base is the local-only
+// milestone/<id> integration branch, so these tests file their runs under a milestone.
 describe('MergeQueue auto-push on drain', () => {
-  // An epic for the tests' runs to sit under; see the comment above.
-  function makeEpic(harness: Harness): string {
-    return harness.store.create({ title: 'The epic', kind: 'epic' }).meta.id;
+  // A milestone for the tests' runs to sit under; see the comment above.
+  function makeMilestone(harness: Harness): string {
+    return harness.store.create({ title: 'The milestone', kind: 'milestone' })
+      .meta.id;
   }
 
   it('pushes once after draining with >=1 merge and broadcasts queue.drained', async () => {
     const origin = initBareOrigin();
     const harness = makeHarness();
     runGitSync(harness.rootDir, ['remote', 'add', 'origin', origin]);
-    const epicId = makeEpic(harness);
+    const milestoneId = makeMilestone(harness);
     const events = captureEvents(harness.events);
-    const { runId } = await dispatchAndFinish(harness, 'Ship it', epicId);
+    const { runId } = await dispatchAndFinish(harness, 'Ship it', milestoneId);
     const stub = new StubRunner();
     const queue = makeQueue(harness, stub.run);
 
@@ -744,7 +745,7 @@ describe('MergeQueue auto-push on drain', () => {
       'git',
       'push',
       'origin',
-      epicBranchName(epicId),
+      milestoneBranchName(milestoneId),
     ]);
     const drained = events.find((e) => e.type === 'queue.drained') as {
       merged: number;
@@ -757,9 +758,9 @@ describe('MergeQueue auto-push on drain', () => {
     const origin = initBareOrigin();
     const harness = makeHarness();
     runGitSync(harness.rootDir, ['remote', 'add', 'origin', origin]);
-    const epicId = makeEpic(harness);
+    const milestoneId = makeMilestone(harness);
     const events = captureEvents(harness.events);
-    const { runId } = await dispatchAndFinish(harness, 'Ship it', epicId);
+    const { runId } = await dispatchAndFinish(harness, 'Ship it', milestoneId);
     const stub = new StubRunner();
     stub.pushResult = { ok: false, stdout: '', stderr: 'no auth' };
     const queue = makeQueue(harness, stub.run);
@@ -802,9 +803,9 @@ describe('MergeQueue auto-push on drain', () => {
     const origin = initBareOrigin();
     const harness = makeHarness();
     runGitSync(harness.rootDir, ['remote', 'add', 'origin', origin]);
-    const epicId = makeEpic(harness);
+    const milestoneId = makeMilestone(harness);
     const events = captureEvents(harness.events);
-    const { runId } = await dispatchAndFinish(harness, 'Ship it', epicId);
+    const { runId } = await dispatchAndFinish(harness, 'Ship it', milestoneId);
     const stub = new StubRunner();
     stub.pushResult = { ok: false, stdout: '', stderr: 'no auth' };
     const queue = makeQueue(harness, stub.run);
@@ -836,11 +837,11 @@ describe('MergeQueue auto-push on drain', () => {
     const origin = initBareOrigin();
     const harness = makeHarness();
     runGitSync(harness.rootDir, ['remote', 'add', 'origin', origin]);
-    const epicId = makeEpic(harness);
+    const milestoneId = makeMilestone(harness);
     const { runId: firstRunId } = await dispatchAndFinish(
       harness,
       'First',
-      epicId
+      milestoneId
     );
     const stub = new StubRunner();
 
@@ -877,7 +878,7 @@ describe('MergeQueue auto-push on drain', () => {
     const { runId: secondRunId } = await dispatchAndFinish(
       harness,
       'Second',
-      epicId
+      milestoneId
     );
     queue.enqueue(secondRunId);
     expect(

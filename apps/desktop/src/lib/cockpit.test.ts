@@ -1,9 +1,9 @@
 import type { TaskListItem } from '@dispatch-foo/core/browser';
 import { DEFAULT_STATUS_MODEL } from '@dispatch-foo/core/browser';
 import type {
-  EpicProgress,
   MergeQueueEntry,
   MergeQueueEntryState,
+  MilestoneProgress,
   RunMeta,
 } from '@dispatch/client';
 import { describe, expect, test } from 'bun:test';
@@ -95,7 +95,7 @@ function input(
     runs: [],
     latestRunByTaskId: new Map(),
     attentionByTaskId: new Map(),
-    liveEpicSessions: [],
+    liveMilestoneSessions: [],
     readinessById: new Map(),
     me: ME,
     local: ME,
@@ -245,15 +245,15 @@ describe('buildCockpit: Ready for you', () => {
 
 describe('buildCockpit: In flight', () => {
   test('lists live runs newest first, with a fan-out’s runs nested under it', () => {
-    const epic = task('e-1', { kind: 'milestone', status: 'working' });
+    const milestone = task('e-1', { kind: 'milestone', status: 'working' });
     const tasks = [
-      epic,
+      milestone,
       task('t-a', { parent: 'e-1', status: 'working' }),
       task('t-b', { status: 'working' }),
       task('t-c', { status: 'working' }),
     ];
     const progress = {
-      epicId: 'e-1',
+      milestoneId: 'e-1',
       active: true,
       session: null,
       spend: {
@@ -276,7 +276,7 @@ describe('buildCockpit: In flight', () => {
       ],
       waves: [],
       liveRuns: [],
-    } as EpicProgress;
+    } as MilestoneProgress;
     const runs = [
       run('r-a', 't-a'),
       run('r-b', 't-b', { createdAt: '2026-09-20T01:00:00.000Z' }),
@@ -284,7 +284,7 @@ describe('buildCockpit: In flight', () => {
       run('r-old', 't-b', { state: 'finished' }),
     ];
     const lanes = buildCockpit(
-      input({ tasks, runs, liveEpicSessions: [progress] })
+      input({ tasks, runs, liveMilestoneSessions: [progress] })
     );
     expect(keys(lanes.flight)).toEqual([
       'fanout:e-1',
@@ -340,12 +340,15 @@ describe('buildCockpit: whose run it is (XH-R9)', () => {
 describe('buildCockpit: whose run it is', () => {
   const unsigned = (id: string, taskId: string) =>
     run(id, taskId, { dispatchedBy: undefined });
-  function fanout(startedBy: string | null, childIds: string[]): EpicProgress {
+  function fanout(
+    startedBy: string | null,
+    childIds: string[]
+  ): MilestoneProgress {
     return {
-      epicId: 'e-1',
+      milestoneId: 'e-1',
       active: true,
       session: {
-        epicId: 'e-1',
+        milestoneId: 'e-1',
         concurrency: 3,
         executor: 'claude',
         state: 'active',
@@ -377,9 +380,9 @@ describe('buildCockpit: whose run it is', () => {
       liveRuns: [],
     };
   }
-  const epic = task('e-1', { kind: 'milestone', status: 'working' });
+  const milestone = task('e-1', { kind: 'milestone', status: 'working' });
   const tasks = [
-    epic,
+    milestone,
     task('t-a', { parent: 'e-1', status: 'working' }),
     task('t-loose', { status: 'working' }),
   ];
@@ -416,7 +419,7 @@ describe('buildCockpit: whose run it is', () => {
     const base = {
       tasks,
       runs: [unsigned('r-a', 't-a')],
-      liveEpicSessions: [fanout('human:maya', ['t-a'])],
+      liveMilestoneSessions: [fanout('human:maya', ['t-a'])],
     };
     expect(buildCockpit(input(base)).flight).toEqual([]);
     expect(
@@ -434,7 +437,7 @@ describe('buildCockpit: whose run it is', () => {
       input({
         tasks,
         runs: [unsigned('r-a', 't-a')],
-        liveEpicSessions: [fanout(ME, ['t-a'])],
+        liveMilestoneSessions: [fanout(ME, ['t-a'])],
       })
     );
     expect(keys(mine.flight)).toEqual(['fanout:e-1', 'run:r-a']);
@@ -444,7 +447,7 @@ describe('buildCockpit: whose run it is', () => {
         tasks,
         me: 'human:maya',
         runs: [unsigned('r-a', 't-a')],
-        liveEpicSessions: [fanout(null, ['t-a'])],
+        liveMilestoneSessions: [fanout(null, ['t-a'])],
       })
     );
     expect(teammate.flight).toEqual([]);

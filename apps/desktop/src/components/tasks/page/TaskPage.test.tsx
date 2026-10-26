@@ -194,7 +194,7 @@ describe('the mode follows the task', () => {
     const ledger: LedgerEntry[] = [
       {
         id: 'l-000001',
-        epicId: null,
+        milestoneId: null,
         sourceTaskId: 't-1',
         kind: 'decision',
         title: 'Scope extended for run r-x',
@@ -229,7 +229,7 @@ describe('the mode follows the task', () => {
     ).not.toBeNull();
     expect(screen.getByText('Receipts')).not.toBeNull();
     expect(screen.queryByText('Ledger')).toBeNull();
-    expect(reads.ledger).toEqual([{ epicId: null, class: 'audit' }]);
+    expect(reads.ledger).toEqual([{ milestoneId: null, class: 'audit' }]);
     expect(reads.memory).toEqual([{ taskId: 't-1', limit: 200 }]);
   });
 

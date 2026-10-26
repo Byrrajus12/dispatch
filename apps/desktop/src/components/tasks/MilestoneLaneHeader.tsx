@@ -1,6 +1,6 @@
 import type { StatusModel, TaskListItem } from '@dispatch-foo/core/browser';
 import { isCompletedStatus, isDoneStatus } from '@dispatch-foo/core/browser';
-import type { EpicProgress } from '@dispatch/client';
+import type { MilestoneProgress } from '@dispatch/client';
 import { Milestone, Waypoints } from 'lucide-react';
 import { useState } from 'react';
 
@@ -8,9 +8,9 @@ import {
   clampConcurrencyInput,
   concurrencyChoices,
   concurrencyLabel,
-} from '../../lib/epicConcurrency';
-import type { WorkEpicOptions } from '../../lib/epicSession';
+} from '../../lib/milestoneConcurrency';
 import { rollupMilestoneStatus } from '../../lib/milestoneRollup';
+import type { WorkMilestoneOptions } from '../../lib/milestoneSession';
 import { FanoutControls, sessionIdle } from '../milestones/FanoutControls';
 import { useShellActions } from '../shell/ShellActionsContext';
 import { statusColor, StatusIcon } from './StatusIcon';
@@ -26,59 +26,59 @@ import {
 } from '@/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/ui/tooltip';
 
-interface EpicLaneHeaderProps {
-  /** The epic this lane belongs to, or `null` for the catch-all "No epic" lane — which still
+interface MilestoneLaneHeaderProps {
+  /** The milestone this lane belongs to, or `null` for the catch-all "No milestone" lane — which still
    * collapses and still shows its count, it just has nothing to dispatch or graph. */
-  epic: TaskListItem | null;
-  /** Lane title: the epic's own, `No epic`, or a bare parent id that resolves to no known epic. */
+  milestone: TaskListItem | null;
+  /** Lane title: the milestone's own, `No milestone`, or a bare parent id that resolves to no known milestone. */
   title: string;
   /** How many cards the lane holds, collapsed or not — the one count that never moves, so
    * folding a lane away can't look like its work disappeared. */
   total: number;
   expanded: boolean;
   onToggle: () => void;
-  /** `undefined` until this epic's progress fetch resolves — the controls still render, just
+  /** `undefined` until this milestone's progress fetch resolves — the controls still render, just
    * without the `◔ n/m` glyph. */
-  progress: EpicProgress | undefined;
-  /** `orchestrator.epicConcurrency` from the project config, the picker's starting value. */
+  progress: MilestoneProgress | undefined;
+  /** `orchestrator.milestoneConcurrency` from the project config, the picker's starting value. */
   concurrencyDefault: number;
-  /** This epic's children — the rolled-up status. */
+  /** This milestone's children — the rolled-up status. */
   childTasks: TaskListItem[];
-  /** The project's statuses, which roll the children up and say the epic is landable. */
+  /** The project's statuses, which roll the children up and say the milestone is landable. */
   model: StatusModel;
-  /** Opens the epic itself (its id chip) in the peek/detail dialog. */
+  /** Opens the milestone itself (its id chip) in the peek/detail dialog. */
   onOpenTask: (taskId: string) => void;
   /** The direct path: starts a session at the picker's concurrency with no ceilings. */
-  onWork: (epicId: string, opts: WorkEpicOptions) => Promise<void>;
+  onWork: (milestoneId: string, opts: WorkMilestoneOptions) => Promise<void>;
   /** When given, Send agents… opens the fan-out dialog instead of dispatching straight away. */
-  onRequestWork?: (epicId: string) => void;
-  onPause?: (epicId: string) => Promise<void>;
-  onResume?: (epicId: string) => Promise<void>;
+  onRequestWork?: (milestoneId: string) => void;
+  onPause?: (milestoneId: string) => Promise<void>;
+  onResume?: (milestoneId: string) => Promise<void>;
   /** Reopens the dialog pre-filled from the paused session. */
-  onRaiseCeiling?: (epicId: string) => void;
-  onStop: (epicId: string) => Promise<void>;
-  /** Lands the finished epic branch on the default base (one PR or one local merge, decided
+  onRaiseCeiling?: (milestoneId: string) => void;
+  onStop: (milestoneId: string) => Promise<void>;
+  /** Lands the finished milestone branch on the default base (one PR or one local merge, decided
    * server-side). Optional so a header rendered without land wiring stays valid; the Land
    * button only renders once every child is done/cancelled, replacing the then-useless
    * Send agents… button. */
-  onLand?: (epicId: string) => Promise<void>;
-  /** A `+` on the right that presets the epic in the task creator. */
+  onLand?: (milestoneId: string) => Promise<void>;
+  /** A `+` on the right that presets the milestone in the task creator. */
   onAdd?: () => void;
 }
 
 /**
- * One epic's lane header on the board: a 36px `GroupHeader` tinted by the epic's rolled-up
+ * One milestone's lane header on the board: a 36px `GroupHeader` tinted by the milestone's rolled-up
  * status (the same glyph vocabulary its cards use), the title as the collapse target, the
  * card count, then `FanoutControls` — the same `◔ done/total`, phase chips, spend pill and
  * verbs the milestones page shows — with the id chip, the flight-plan button and the
  * concurrency picker slotted in.
  *
- * Epics are containers here, not objects on the board: they are never dragged and never
+ * Milestones are containers here, not objects on the board: they are never dragged and never
  * occupy a status column. Only the chevron and the title toggle the lane; the controls in
  * the actions slot never do.
  */
-export function EpicLaneHeader({
-  epic,
+export function MilestoneLaneHeader({
+  milestone,
   title,
   total,
   expanded,
@@ -96,7 +96,7 @@ export function EpicLaneHeader({
   onStop,
   onLand,
   onAdd,
-}: EpicLaneHeaderProps) {
+}: MilestoneLaneHeaderProps) {
   const shell = useShellActions();
   const [concurrency, setConcurrency] = useState(concurrencyDefault);
   const session = progress?.session ?? null;
@@ -112,14 +112,14 @@ export function EpicLaneHeader({
   // with its reason into the error pill.
   const landable =
     onLand !== undefined &&
-    epic !== null &&
+    milestone !== null &&
     !active &&
     !paused &&
     totalCount > 0 &&
     doneCount === totalCount &&
-    !isCompletedStatus(epic.meta.status, model);
+    !isCompletedStatus(milestone.meta.status, model);
   const rollup =
-    epic !== null ? rollupMilestoneStatus(childTasks, model) : null;
+    milestone !== null ? rollupMilestoneStatus(childTasks, model) : null;
 
   return (
     <>
@@ -149,9 +149,9 @@ export function EpicLaneHeader({
         addLabel={`New task in ${title}`}
         className="mb-2"
         actions={
-          epic !== null && (
+          milestone !== null && (
             <FanoutControls
-              epic={epic}
+              milestone={milestone}
               model={model}
               progress={progress}
               count={
@@ -165,7 +165,7 @@ export function EpicLaneHeader({
                   <DropdownMenuTrigger
                     render={
                       <SelectPill
-                        aria-label={`Epic dispatch concurrency for ${epic.meta.id}`}
+                        aria-label={`Milestone dispatch concurrency for ${milestone.meta.id}`}
                       />
                     }
                   >
@@ -190,17 +190,17 @@ export function EpicLaneHeader({
                   </DropdownMenuContent>
                 </DropdownMenu>
               }
-              onSendAgents={(epicId) =>
+              onSendAgents={(milestoneId) =>
                 onRequestWork !== undefined
-                  ? onRequestWork(epicId)
-                  : onWork(epicId, { concurrency })
+                  ? onRequestWork(milestoneId)
+                  : onWork(milestoneId, { concurrency })
               }
               onPause={onPause}
               onResume={onResume}
               onRaiseCeiling={onRaiseCeiling}
               onStop={onStop}
               onLand={onLand}
-              onOpenEpic={onOpenTask}
+              onOpenMilestone={onOpenTask}
               showOpen={false}
             >
               {/* Outside a session the live count is the only thing to say; inside one the
@@ -213,25 +213,25 @@ export function EpicLaneHeader({
               <Tooltip>
                 <TooltipTrigger
                   render={
-                    // The epic id as a 24px pill that opens the epic — a `Pill`'s look on a
+                    // The milestone id as a 24px pill that opens the milestone — a `Pill`'s look on a
                     // real button.
                     <PillButton
-                      aria-label={`Open ${epic.meta.id}`}
-                      onClick={() => onOpenTask(epic.meta.id)}
+                      aria-label={`Open ${milestone.meta.id}`}
+                      onClick={() => onOpenTask(milestone.meta.id)}
                       className="bg-surface-quaternary h-6 px-2"
                     />
                   }
                 >
-                  {epic.meta.id}
+                  {milestone.meta.id}
                 </TooltipTrigger>
-                <TooltipContent>Open epic</TooltipContent>
+                <TooltipContent>Open milestone</TooltipContent>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger
                   render={
                     <IconButton
-                      label={`Open the flight plan for ${epic.meta.id}`}
-                      onClick={() => shell.openTask(epic.meta.id, 'plan')}
+                      label={`Open the flight plan for ${milestone.meta.id}`}
+                      onClick={() => shell.openTask(milestone.meta.id, 'plan')}
                     />
                   }
                 >

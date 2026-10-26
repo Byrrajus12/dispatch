@@ -263,7 +263,7 @@ export function SpecMode({ page }: { page: TaskPageModel }) {
             tasks={page.children}
             latestRunByTaskId={project.latestRunByTaskId}
             onOpenTask={page.openTask}
-            createPreset={{ epic: meta.id }}
+            createPreset={{ milestone: meta.id }}
             model={page.statusModel}
           />
         </div>
