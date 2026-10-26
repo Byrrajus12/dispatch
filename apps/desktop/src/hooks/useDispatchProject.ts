@@ -31,6 +31,11 @@ import type {
   FixLoopState,
   HealthPayload,
   LandingSnapshot,
+  LinearBulkStart,
+  LinearCapacity,
+  LinearCoverage,
+  LinearExportPreview,
+  LinearExportScope,
   LinearIssueLink,
   LinearStatus,
   LinearSyncSummary,
@@ -589,6 +594,7 @@ export interface DispatchProjectData {
       intervalSec?: number;
       direction?: 'both' | 'pull' | 'push';
       includeAcceptanceCriteria?: boolean;
+      archiveFinished?: boolean;
     };
     statusRoles?: StatusRoles | null;
     maxTurns?: number | null;
@@ -628,6 +634,29 @@ export interface DispatchProjectData {
   /** Brings down every Linear issue in the configured team that has no local task yet — the
    * explicit opt-in a fresh clone or new machine needs, since sync never bulk-imports on its own. */
   handleImportLinear: () => Promise<LinearSyncSummary>;
+  /** Which tasks have a Linear record and why the rest do not. Null until fetched, and
+   *  fetched only while something holds `watchLinearDetails`. */
+  linearCoverage: LinearCoverage | null;
+  /** Active issues against the plan's cap, measured in Linear. Null until fetched. */
+  linearCapacity: LinearCapacity | null;
+  linearCapacityError: unknown;
+  /** How many tasks each export scope would send. Null until fetched. */
+  linearExportPreview: LinearExportPreview | null;
+  /** Fetches coverage, capacity and the export preview until the returned release
+   *  is called: capacity walks Linear, so only a view showing them pays for it. */
+  watchLinearDetails: () => () => void;
+  /** Measures capacity again, past the daemon's one-minute cache. */
+  refreshLinearCapacity: () => Promise<void>;
+  /** Starts an export of the unlinked tasks `scope` covers; status reports it. */
+  handleExportLinear: (scope: LinearExportScope) => Promise<LinearBulkStart>;
+  /** Sends the named queued creates now, or every queued one. */
+  handleRetryLinear: (taskIds?: string[]) => Promise<LinearBulkStart>;
+  /** Stops retrying these tasks' creates. */
+  handleForgetLinear: (taskIds: string[]) => Promise<{ forgotten: number }>;
+  /** Starts archiving the linked teams' closed issues in Linear (decide tier). */
+  handleArchiveClosedLinear: (opts: {
+    includeCanceled: boolean;
+  }) => Promise<LinearBulkStart>;
   /** Returns the per-item outcome so a partial failure can be surfaced, not swallowed. */
   handleConvertInbox: (
     ids: string[]
@@ -946,6 +975,12 @@ export function useDispatchProject(
     () => ['dispatch-linear-links', port],
     [port]
   );
+  // Coverage, capacity and the export preview share this prefix, so one
+  // invalidation refreshes all three.
+  const linearDetailsQueryKey = useMemo(
+    () => ['dispatch-linear-details', port],
+    [port]
+  );
   const syncStatusQueryKey = useMemo(() => syncStatusKey(port), [port]);
 
   // One archived-inclusive, body-less list; `tasks` (active only) and
@@ -1055,6 +1090,54 @@ export function useDispatchProject(
     () => void refetchTeamsQuery(),
     [refetchTeamsQuery]
   );
+  // How many views are showing Linear coverage and capacity. Capacity walks
+  // the workspace's issues in Linear, so it is fetched only while one is.
+  const [linearDetailWatchers, setLinearDetailWatchers] = useState(0);
+  const watchLinearDetails = useCallback(() => {
+    setLinearDetailWatchers((n) => n + 1);
+    return () => setLinearDetailWatchers((n) => n - 1);
+  }, []);
+  const linearDetailsOn =
+    client !== null &&
+    linearDetailWatchers > 0 &&
+    linearStatus?.connected === true;
+  const { data: linearCoverage } = useQuery({
+    queryKey: [...linearDetailsQueryKey, 'coverage'],
+    queryFn: () => {
+      if (client === null) throw new Error('dispatchd client not ready');
+      return client.fetchLinearCoverage();
+    },
+    enabled: linearDetailsOn,
+  });
+  const { data: linearExportPreview } = useQuery({
+    queryKey: [...linearDetailsQueryKey, 'export'],
+    queryFn: () => {
+      if (client === null) throw new Error('dispatchd client not ready');
+      return client.previewLinearExport();
+    },
+    enabled: linearDetailsOn,
+  });
+  const linearCapacityQueryKey = useMemo(
+    () => [...linearDetailsQueryKey, 'capacity'],
+    [linearDetailsQueryKey]
+  );
+  const { data: linearCapacity, error: linearCapacityError } = useQuery({
+    queryKey: linearCapacityQueryKey,
+    queryFn: () => {
+      if (client === null) throw new Error('dispatchd client not ready');
+      return client.fetchLinearCapacity();
+    },
+    enabled: linearDetailsOn && (linearStatus?.teamId ?? '').trim() !== '',
+    // The daemon caches a measurement for a minute; asking sooner is wasted.
+    staleTime: 60_000,
+    // A refused key or a throttle is a settled answer the row explains.
+    retry: false,
+  });
+  const refreshLinearCapacity = useCallback(async (): Promise<void> => {
+    if (client === null) return;
+    const fresh = await client.fetchLinearCapacity(true);
+    queryClient.setQueryData(linearCapacityQueryKey, fresh);
+  }, [client, queryClient, linearCapacityQueryKey]);
   // Who this window is, as the daemon sees its credential. Fetched once per
   // connection — a credential does not change identity mid-session — and read
   // wherever the app has to tell "mine" from "a teammate's".
@@ -1916,6 +1999,11 @@ export function useDispatchProject(
           void queryClient.invalidateQueries({
             queryKey: linearLinksQueryKey,
           });
+          // Coverage, capacity and the preview move with every pass; only
+          // the queries a watching view enabled refetch.
+          void queryClient.invalidateQueries({
+            queryKey: linearDetailsQueryKey,
+          });
         } else if (event.type === 'queue.drained') {
           // The drain reviewed runs (tasks/runs move to done) and may have
           // pushed origin (branches' pushedToOrigin flips) — refetch all
@@ -2008,6 +2096,7 @@ export function useDispatchProject(
     decisionsQueryKey,
     linearStatusQueryKey,
     linearLinksQueryKey,
+    linearDetailsQueryKey,
     syncStatusQueryKey,
     port,
     onRecordInbox,
@@ -2768,6 +2857,7 @@ export function useDispatchProject(
         intervalSec?: number;
         direction?: 'both' | 'pull' | 'push';
         includeAcceptanceCriteria?: boolean;
+        archiveFinished?: boolean;
       };
       statusRoles?: StatusRoles | null;
       maxTurns?: number | null;
@@ -2846,6 +2936,53 @@ export function useDispatchProject(
       linearLinksQueryKey,
       tasksQueryKey,
     ]);
+
+  // The bulk actions answer at once and run in the background; `running`,
+  // `progress` and the outcome arrive on status, so refetch it and the details.
+  const afterLinearBulk = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: linearStatusQueryKey });
+    void queryClient.invalidateQueries({ queryKey: linearDetailsQueryKey });
+  }, [queryClient, linearStatusQueryKey, linearDetailsQueryKey]);
+
+  const handleExportLinear = useCallback(
+    async (scope: LinearExportScope): Promise<LinearBulkStart> => {
+      if (client === null) throw new Error('dispatchd client not ready');
+      const result = await client.exportToLinear(scope);
+      afterLinearBulk();
+      return result;
+    },
+    [client, afterLinearBulk]
+  );
+
+  const handleRetryLinear = useCallback(
+    async (taskIds?: string[]): Promise<LinearBulkStart> => {
+      if (client === null) throw new Error('dispatchd client not ready');
+      const result = await client.retryLinear(taskIds);
+      afterLinearBulk();
+      return result;
+    },
+    [client, afterLinearBulk]
+  );
+
+  const handleForgetLinear = useCallback(
+    async (taskIds: string[]): Promise<{ forgotten: number }> => {
+      if (client === null) throw new Error('dispatchd client not ready');
+      const result = await client.forgetLinear(taskIds);
+      afterLinearBulk();
+      return result;
+    },
+    [client, afterLinearBulk]
+  );
+
+  const handleArchiveClosedLinear = useCallback(
+    async (opts: { includeCanceled: boolean }): Promise<LinearBulkStart> => {
+      if (client === null) throw new Error('dispatchd client not ready');
+      const result = await client.archiveClosedLinearIssues(opts);
+      afterLinearBulk();
+      return result;
+    },
+    [client, afterLinearBulk]
+  );
 
   // Retries every entry the queue is holding on a `blocked-environment` (a dirty checkout, a
   // staged index, the wrong branch). Deliberately queue-wide rather than per-entry, because the
@@ -3018,6 +3155,16 @@ export function useDispatchProject(
       handleDisconnectLinear,
       handleSyncLinear,
       handleImportLinear,
+      linearCoverage: linearCoverage ?? null,
+      linearCapacity: linearCapacity ?? null,
+      linearCapacityError,
+      linearExportPreview: linearExportPreview ?? null,
+      watchLinearDetails,
+      refreshLinearCapacity,
+      handleExportLinear,
+      handleRetryLinear,
+      handleForgetLinear,
+      handleArchiveClosedLinear,
     }),
     [
       client,
@@ -3138,6 +3285,16 @@ export function useDispatchProject(
       handleDisconnectLinear,
       handleSyncLinear,
       handleImportLinear,
+      linearCoverage,
+      linearCapacity,
+      linearCapacityError,
+      linearExportPreview,
+      watchLinearDetails,
+      refreshLinearCapacity,
+      handleExportLinear,
+      handleRetryLinear,
+      handleForgetLinear,
+      handleArchiveClosedLinear,
     ]
   );
 }

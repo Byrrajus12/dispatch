@@ -116,6 +116,11 @@ const taskUpdates: [string, object][] = [];
 let createRunResult: () => Promise<RunMeta> = () =>
   Promise.reject(new Error('no runs in this test'));
 
+// The Linear status the daemon reports (null rejects the read), and how often
+// each Linear detail was fetched.
+let linearStatusFixture: object | null = null;
+const linearFetches = { coverage: 0, capacity: 0, preview: 0 };
+
 // Only `createApiClient` is replaced — the rest of the module (ApiError, which
 // useOverseerSession's 404 veto instanceof-checks) has to stay real.
 // Lets a test hold the first presence fetch open, so a `hello` can land while
@@ -252,6 +257,22 @@ void mock.module('@dispatch/client', () => ({
     confirmPlan: () => Promise.resolve({ epicId: 'e-1', taskIds: ['t-1'] }),
     fetchLiveWork: () =>
       Promise.resolve({ busy: ['1 terminal'], parked: 1, waiting: 2 }),
+    fetchLinearStatus: () =>
+      linearStatusFixture === null
+        ? Promise.reject(new Error('no Linear status in this test'))
+        : Promise.resolve(linearStatusFixture),
+    fetchLinearCoverage: () => {
+      linearFetches.coverage += 1;
+      return Promise.resolve({ total: 1, linked: 0, unlinked: [] });
+    },
+    fetchLinearCapacity: () => {
+      linearFetches.capacity += 1;
+      return Promise.resolve({ teams: [], active: 3, limit: 250 });
+    },
+    previewLinearExport: () => {
+      linearFetches.preview += 1;
+      return Promise.resolve({ open: 1, all: 1, allArchiveFinished: 1 });
+    },
     fetchWhoami: () =>
       whoamiFixture === null
         ? Promise.reject(new Error('dispatchd is still starting'))
@@ -1973,4 +1994,65 @@ test('handleWorkEpic forwards a bare concurrency and a full options body', async
     ['e-1', { concurrency: 3, maxSpendUsd: 60, maxRuns: undefined }],
   ]);
   epicProgressFixture = [];
+});
+
+// Capacity walks the workspace's issues in Linear, so nothing fetches it, or
+// coverage and the export preview, until a view asks; a pass refreshes them
+// only while one still does.
+test('Linear coverage and capacity are fetched only while a view watches them', async () => {
+  linearStatusFixture = { connected: true, teamId: 'team-1' };
+  taskListFixture = [
+    { meta: taskDoc('t-1', 'Before', '2026-01-01T00:00:00.000Z').meta },
+  ];
+  linearFetches.coverage = 0;
+  linearFetches.capacity = 0;
+  linearFetches.preview = 0;
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const { result } = renderHook(
+    () => useDispatchProject('/repo', { selectedRunId: null }),
+    { wrapper: wrapper(queryClient) }
+  );
+  await waitFor(() => {
+    expect(result.current.linearStatus).not.toBeNull();
+  });
+  expect(linearFetches).toEqual({ coverage: 0, capacity: 0, preview: 0 });
+
+  let release = () => {};
+  act(() => {
+    release = result.current.watchLinearDetails();
+  });
+  await waitFor(() => {
+    expect(result.current.linearCapacity).not.toBeNull();
+    expect(result.current.linearCoverage).not.toBeNull();
+    expect(result.current.linearExportPreview).not.toBeNull();
+  });
+  expect(linearFetches).toEqual({ coverage: 1, capacity: 1, preview: 1 });
+
+  const summary = {
+    at: '2026-01-01T00:00:00.000Z',
+    pulled: 1,
+    pushed: 0,
+    created: 0,
+    createdIssues: 0,
+    conflicts: 0,
+    errors: [],
+    rateLimited: false,
+  };
+  act(() => {
+    sink?.onEvent({ type: 'linear.changed', summary });
+  });
+  await waitFor(() => {
+    expect(linearFetches).toEqual({ coverage: 2, capacity: 2, preview: 2 });
+  });
+
+  act(() => release());
+  act(() => {
+    sink?.onEvent({ type: 'linear.changed', summary });
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(linearFetches).toEqual({ coverage: 2, capacity: 2, preview: 2 });
+  linearStatusFixture = null;
+  taskListFixture = null;
 });
