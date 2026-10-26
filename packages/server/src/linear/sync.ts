@@ -144,6 +144,9 @@ export interface LinearStatus {
   lastError: string | null;
   lastSummary: LinearSyncSummary | null;
   syncing: boolean;
+  /** Asked for by request id: the summary that request was answered with,
+   *  null until its pass ends. */
+  answered?: LinearSyncSummary | null;
   /** Field conflicts resolved since the link, and the latest few. */
   conflicts: { total: number; recent: ConflictRecord[] };
   /** Set while an import or other long pass is running. */
@@ -334,6 +337,8 @@ const APPLY_SLICE_MS = 10;
 const CAPACITY_CACHE_MS = 60_000;
 // How long a paid plan's closed counts are reused between measurements.
 const CLOSED_COUNTS_MS = 15 * 60_000;
+// Tagged requests whose summaries status keeps (see LinearSync.answer).
+const ANSWERED_KEPT = 20;
 // Archive failures in a row that end an archive pass: a key that cannot
 // archive fails every issue alike.
 const ARCHIVE_FAILURE_RUN = 5;
@@ -546,6 +551,32 @@ function measuredRoom(
   return active < before;
 }
 
+// The stored capacity a measurement begun at `startedAt` leaves, ending the
+// pause when it shows room (see measuredRoom).
+function nextCapacity(
+  prior: LinearCapacityState | null,
+  m: LinearCapacity,
+  startedAt: number
+): LinearCapacityState {
+  const limitedAt = prior?.limitedAt ?? null;
+  // Linear refused a create while the plan could not be read: the only
+  // issue limit it has is the Free plan's.
+  const observed =
+    m.limit === null && m.plan === 'unknown' && limitedAt !== null;
+  const limit = observed ? FREE_PLAN_ISSUE_LIMIT : m.limit;
+  const room = measuredRoom(prior, m.active, limit, startedAt);
+  return {
+    limitedAt,
+    retryAt: room ? null : (prior?.retryAt ?? null),
+    message: room ? null : (prior?.message ?? null),
+    active: m.active,
+    limit,
+    limitSource: observed ? 'observed' : m.limitSource,
+    plan: m.plan,
+    checkedAt: m.checkedAt,
+  };
+}
+
 function retryReady(entry: PushAttempt, now: number): boolean {
   return entry.retryAt === null || Date.parse(entry.retryAt) <= now;
 }
@@ -642,6 +673,9 @@ export class LinearSync {
   private debounce: ReturnType<typeof setTimeout> | null = null;
   private inFlight: Promise<LinearSyncSummary> | null = null;
   private lastSummary: LinearSyncSummary | null = null;
+  // The summaries the last few tagged requests were answered with, newest
+  // last, for a caller whose request was cut before its pass ended.
+  private readonly answered = new Map<string, LinearSyncSummary>();
   private progress: LinearProgress | null = null;
   // Set after a rate-limit failure; the timer and the debounced push both stand
   // down until it passes rather than spending the remaining hourly budget.
@@ -717,7 +751,7 @@ export class LinearSync {
     }
   }
 
-  status(): LinearStatus {
+  status(request?: string): LinearStatus {
     const config = this.safeConfig();
     const linear = config?.linear ?? DEFAULT_LINEAR;
     const state = readLinearState(this.deps.rootDir);
@@ -743,6 +777,9 @@ export class LinearSync {
       lastError: this.configError ?? pausedBy ?? state.lastError,
       lastSummary: this.lastSummary,
       syncing: this.inFlight !== null,
+      ...(request === undefined
+        ? {}
+        : { answered: this.answered.get(request) ?? null }),
       conflicts: { total: state.conflictTotal, recent: state.conflicts },
       progress: this.progress,
       webhook: this.webhookStatus(linear, state),
@@ -996,12 +1033,39 @@ export class LinearSync {
     }, delay);
   }
 
-  /** Pull then push, per the configured direction. Concurrent callers share one pass. */
-  async syncOnce(taskIds?: string[]): Promise<LinearSyncSummary> {
+  /**
+   * Pull then push, per the configured direction. Concurrent callers share
+   * one pass. A `request` id keeps the answer for status to hand back.
+   */
+  async syncOnce(
+    taskIds?: string[],
+    request?: string
+  ): Promise<LinearSyncSummary> {
     // An explicit push carries tasks the in-flight pass never considered, so it
     // queues behind that pass instead of being answered by it.
-    if (taskIds === undefined && this.inFlight !== null) return this.inFlight;
-    return this.enqueue({ mode: 'both', taskIds });
+    const pass =
+      taskIds === undefined && this.inFlight !== null
+        ? this.inFlight
+        : this.enqueue({ mode: 'both', taskIds });
+    return this.answer(pass, request);
+  }
+
+  // Keeps the summary a tagged request is answered with, the last
+  // ANSWERED_KEPT of them, so status can say which pass it got.
+  private answer(
+    pass: Promise<LinearSyncSummary>,
+    request: string | undefined
+  ): Promise<LinearSyncSummary> {
+    if (request === undefined) return pass;
+    return pass.then((summary) => {
+      this.answered.delete(request);
+      this.answered.set(request, summary);
+      for (const old of this.answered.keys()) {
+        if (this.answered.size <= ANSWERED_KEPT) break;
+        this.answered.delete(old);
+      }
+      return summary;
+    });
   }
 
   /**
@@ -1038,8 +1102,8 @@ export class LinearSync {
   }
 
   /** Brings the team's whole backlog down: containers, issues, comments, links. */
-  async importIssues(): Promise<LinearSyncSummary> {
-    return this.enqueue({ mode: 'import' });
+  async importIssues(request?: string): Promise<LinearSyncSummary> {
+    return this.answer(this.enqueue({ mode: 'import' }), request);
   }
 
   /** How many tasks each export scope would send. Reads only the task cache. */
@@ -1238,35 +1302,30 @@ export class LinearSync {
       this.note(measured);
       return measured;
     }
-    const counted = this.editState((state) => {
-      const m = measured.data;
-      const prior = state.capacity;
-      const limitedAt = prior?.limitedAt ?? null;
-      // Linear refused a create while the plan could not be read: the only
-      // issue limit it has is the Free plan's.
-      const observed =
-        m.limit === null && m.plan === 'unknown' && limitedAt !== null;
-      const limit = observed ? FREE_PLAN_ISSUE_LIMIT : m.limit;
-      const room = measuredRoom(prior, m.active, limit, startedAt);
-      state.capacity = {
-        limitedAt,
-        retryAt: room ? null : (prior?.retryAt ?? null),
-        message: room ? null : (prior?.message ?? null),
-        active: m.active,
-        limit,
-        limitSource: observed ? 'observed' : m.limitSource,
-        plan: m.plan,
-        checkedAt: m.checkedAt,
-      };
-      return state.capacity;
-    });
+    // One a newer measurement or a reset superseded answers its caller, but
+    // leaves the stored counts and the pause to the newer one.
+    const current = epoch === this.capacityEpoch;
+    const counted = current
+      ? this.editState(
+          (state) =>
+            (state.capacity = nextCapacity(
+              state.capacity,
+              measured.data,
+              startedAt
+            ))
+        )
+      : nextCapacity(
+          readLinearState(this.deps.rootDir).capacity,
+          measured.data,
+          startedAt
+        );
     const data: LinearCapacity = {
       ...measured.data,
       limit: counted.limit,
       limitSource: counted.limitSource,
       limitHitAt: counted.limitedAt,
     };
-    if (epoch === this.capacityEpoch) {
+    if (current) {
       this.capacityCache = {
         at: Date.now(),
         closedAt: reuse?.closedAt ?? Date.now(),
@@ -2693,14 +2752,20 @@ export class LinearSync {
         recordAttempt(state, id, result, pass.lastFailureKind, now);
         continue;
       }
-      // A task that just got its issue takes its comments along.
+      // A task that just got its issue takes its comments along, queued
+      // first so a throttle or a failed send leaves them for a later pass.
       const linkedNow = docs.get(id);
       if (
         run.comments !== null &&
         parseLinearExternal(linkedNow?.meta.external)?.entity === 'issue'
       ) {
-        await run.comments.pushAll(id);
-        delete state.pendingComments[id];
+        run.comments.queueAll(id);
+        const retry = await run.comments.push(
+          id,
+          state.pendingComments[id] ?? []
+        );
+        if (retry.length > 0) state.pendingComments[id] = retry;
+        else delete state.pendingComments[id];
       }
     }
 

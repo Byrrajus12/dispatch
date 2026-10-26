@@ -66,9 +66,13 @@ function fitLine(
   const adds = exportActiveCount(preview, scope);
   // An issue archived on arrival needs one free slot to land, then frees it.
   const arriving = exportScopeCount(preview, scope) - adds;
-  return adds < free || (adds === free && arriving === 0)
-    ? `${base} This export fits.`
-    : `${base} This export adds ${n(adds)} and ${n(free)} are free; the rest wait in the retry queue until there is room.`;
+  if (adds < free || (adds === free && arriving === 0)) {
+    return `${base} This export fits.`;
+  }
+  if (adds === free) {
+    return `${base} Its ${n(adds)} open issues fill the ${n(free)} free slots, so the ${n(arriving)} archived on arrival wait in the retry queue until there is room.`;
+  }
+  return `${base} This export adds ${n(adds)} and ${n(free)} are free; the rest wait in the retry queue until there is room.`;
 }
 
 /** Export to Linear: pick which unlinked tasks get a Linear issue, with each

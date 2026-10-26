@@ -1,4 +1,5 @@
 import type { Command } from 'commander';
+import { randomUUID } from 'node:crypto';
 
 import type {
   LinearApiClient,
@@ -635,11 +636,12 @@ async function pollStatus<T>(
   opts: FollowOptions,
   began: number,
   report: ProgressReport,
-  settled: (status: LinearStatus) => T | undefined
+  settled: (status: LinearStatus) => T | undefined,
+  request?: string
 ): Promise<T> {
   const { intervalMs = 1000, timeoutMs = 30 * 60_000, now = Date.now } = opts;
   for (;;) {
-    const status = await api.linearStatus();
+    const status = await api.linearStatus(request);
     const result = settled(status);
     if (result !== undefined) return result;
     report(status.progress);
@@ -648,28 +650,54 @@ async function pollStatus<T>(
   }
 }
 
+const PASS_UNANSWERED =
+  'the Linear pass ended without a summary; check it with: dispatch linear status';
+
 /**
  * Runs an awaited pass (sync, import) and answers its summary. The daemon
  * cuts a request at 65s and the CLI gives up at 60s, so when the request
  * outlives that this follows the pass through status until it goes idle.
- * `joins` says the request joins a pass already running (a sync naming no
- * tasks), which may have started before it.
+ * The request carries an id status answers with the summary it got; an
+ * older dispatchd without that falls back to timing. `joins` says the
+ * request joins a pass already running (a sync naming no tasks), which may
+ * have started before it.
  */
 export async function followLinearPass(
   api: StatusReader,
-  start: () => Promise<LinearSyncSummary>,
-  opts: FollowOptions & { joins?: boolean } = {}
+  start: (request: string) => Promise<LinearSyncSummary>,
+  opts: FollowOptions & { joins?: boolean; request?: string } = {}
 ): Promise<LinearSyncSummary> {
   const began = (opts.now ?? Date.now)();
   const report = progressReporter(opts.onProgress);
+  const request = opts.request ?? randomUUID();
   try {
-    const work = start();
+    const work = start(request);
     return await (opts.onProgress === undefined
       ? work
       : withProgress(api, work, report, opts.intervalMs ?? 1000));
   } catch (err) {
     if (!(err instanceof DaemonUnreachableError)) throw err;
   }
+  let found: string | null | undefined;
+  let ours: LinearSyncSummary | null = null;
+  let joined: LinearSyncSummary | null = null;
+  return pollStatus(
+    api,
+    opts,
+    began,
+    report,
+    (status) => {
+      if (status.answered !== undefined) {
+        if (status.answered !== null) return status.answered;
+        if (status.syncing) return undefined;
+        throw new CliError(PASS_UNANSWERED);
+      }
+      return byTiming(status);
+    },
+    request
+  );
+
+  // An older dispatchd, which cannot say what the request got, by timing.
   // The first summary to land after the request is this pass's: a pass
   // queued behind it (a push a task edit scheduled) replaces it before the
   // daemon goes idle. summary.at is when a pass started, with a second of
@@ -677,10 +705,7 @@ export async function followLinearPass(
   // request too; one already running started before it, so with none after
   // it is the last summary to replace the one the first poll found, or that
   // one when the first poll found the daemon idle.
-  let found: string | null | undefined;
-  let ours: LinearSyncSummary | null = null;
-  let joined: LinearSyncSummary | null = null;
-  return pollStatus(api, opts, began, report, (status) => {
+  function byTiming(status: LinearStatus): LinearSyncSummary | undefined {
     const last = status.lastSummary;
     const first = found === undefined;
     if (first) found = last?.at ?? null;
@@ -695,10 +720,8 @@ export async function followLinearPass(
     if (status.syncing) return undefined;
     const result = ours ?? joined;
     if (result !== null) return result;
-    throw new CliError(
-      'the Linear pass ended without a summary; check it with: dispatch linear status'
-    );
-  });
+    throw new CliError(PASS_UNANSWERED);
+  }
 }
 
 /**
@@ -856,10 +879,14 @@ export function registerLinearCommands(
     .action(async (opts: CommonOptions) => {
       const api = await client(opts.token, 'sync');
       requireLinked(await api.linearStatus(), { enabled: true });
-      const summary = await followLinearPass(api, () => api.linearSync(), {
-        ...follow(opts),
-        joins: true,
-      });
+      const summary = await followLinearPass(
+        api,
+        (r) => api.linearSync(undefined, r),
+        {
+          ...follow(opts),
+          joins: true,
+        }
+      );
       fail(printSummary(summary, opts));
     });
 
@@ -917,7 +944,7 @@ export function registerLinearCommands(
       if (plan.kind === 'ids') {
         const summary = await followLinearPass(
           api,
-          () => api.linearSync(plan.ids),
+          (r) => api.linearSync(plan.ids, r),
           follow(opts)
         );
         failure = printSummary(summary, opts);
@@ -967,7 +994,7 @@ export function registerLinearCommands(
       requireLinked(await api.linearStatus());
       const summary = await followLinearPass(
         api,
-        () => api.linearImport(),
+        (r) => api.linearImport(r),
         follow(opts)
       );
       fail(printSummary(summary, opts));

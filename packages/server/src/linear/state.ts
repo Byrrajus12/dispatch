@@ -163,6 +163,8 @@ export interface LinearSyncState {
   /** The roles in force after the last generation, so a review role split
    *  off the dispatched one in Settings is noticed on the next pass. */
   appliedRoles?: StatusRoles;
+  /** When a pass last found appliedRoles in force. */
+  appliedAt?: string;
   webhook: WebhookRecord | null;
   webhookError: string | null;
   /** When a failed registration may be tried again. */

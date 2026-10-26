@@ -1853,6 +1853,12 @@ function isTaskIdList(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === 'string');
 }
 
+// The caller's `?request=` id for a Linear pass, if it sent one.
+function linearRequestId(url: URL): string | undefined {
+  const id = url.searchParams.get('request');
+  return id === null || id === '' ? undefined : id;
+}
+
 // A bulk start as HTTP: 202 once a background pass is begun (the 65s request
 // timeout would cut an awaited one), 200 when there was nothing to send.
 function linearBulkResponse(
@@ -5300,8 +5306,10 @@ export async function handleApi(
     }
 
     if (segments[0] === 'linear' && segments.length === 2) {
+      // `?request=` on status, sync and import: a caller's own id for its
+      // pass, so one whose sync or import was cut can find what it got.
       if (segments[1] === 'status' && method === 'GET') {
-        return jsonResponse(ctx.linearSync.status());
+        return jsonResponse(ctx.linearSync.status(linearRequestId(url)));
       }
       if (segments[1] === 'connect' && method === 'POST') {
         return await connectLinear(req, ctx);
@@ -5320,7 +5328,9 @@ export async function handleApi(
       // POST /api/linear/import — bring down Linear issues that have no local
       // task. Deliberately explicit: an ordinary sync never imports a backlog.
       if (segments[1] === 'import' && method === 'POST') {
-        return jsonResponse(await ctx.linearSync.importIssues());
+        return jsonResponse(
+          await ctx.linearSync.importIssues(linearRequestId(url))
+        );
       }
       if (segments[1] === 'states' && method === 'GET') {
         return await linearStates(ctx, url.searchParams.get('teamId'));
@@ -5334,7 +5344,9 @@ export async function handleApi(
         if (raw !== undefined && !isTaskIdList(raw)) {
           return errorResponse(400, 'taskIds must be a list of strings');
         }
-        return jsonResponse(await ctx.linearSync.syncOnce(raw));
+        return jsonResponse(
+          await ctx.linearSync.syncOnce(raw, linearRequestId(url))
+        );
       }
       // GET /api/linear/export — how many tasks each export scope would send.
       // Reads the task cache only; Linear is not called.

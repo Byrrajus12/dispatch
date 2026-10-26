@@ -1288,6 +1288,22 @@ describe('LinearSync reporting', () => {
     expect(status.lastSummary?.created).toBe(1);
     expect(JSON.stringify(status)).not.toContain('lin_api_do_not_leak');
   });
+
+  it('answers a tagged request with the summary its pass gave it', async () => {
+    seedState({ bootstrappedAt: '2020-01-01T00:00:00.000Z' });
+    const sync = makeSync();
+    expect(sync.status('req-1').answered).toBeNull();
+    expect(sync.status().answered).toBeUndefined();
+
+    const joined = sync.syncOnce(undefined, 'req-1');
+    // A second sync naming no tasks joins the pass already running.
+    const again = sync.syncOnce(undefined, 'req-2');
+    const summary = await joined;
+    expect(await again).toBe(summary);
+    expect(sync.status('req-1').answered).toEqual(summary);
+    expect(sync.status('req-2').answered).toEqual(summary);
+    expect(sync.status('unknown').answered).toBeNull();
+  });
 });
 
 describe('LinearSync credential scope', () => {
@@ -2210,6 +2226,45 @@ describe('LinearSync creates a throttle cuts short', () => {
     expect(fake.commentList.map((c) => c.body)).toEqual(['Context']);
   });
 
+  it.each([
+    ['a throttle', 'rate-limit'],
+    ['a failure', 'network'],
+  ] as const)(
+    'sends the comments of a new issue %s stopped them on',
+    async (_, kind) => {
+      seedState({ bootstrappedAt: '2030-01-01T00:00:00.000Z' });
+      const comments = new FileCommentStore(root);
+      const doc = store.create({ title: 'Talked about' });
+      comments.add({ taskId: doc.meta.id, author: 'human:me', body: 'One' });
+      comments.add({ taskId: doc.meta.id, author: 'human:me', body: 'Two' });
+      cache.rebuild(store);
+      fake.failures.createComment = {
+        ok: false,
+        kind,
+        error: 'comment refused',
+        retryAfterMs: 1,
+      };
+      const sync = new LinearSync({
+        rootDir: root,
+        store,
+        cache,
+        events,
+        client: fake,
+        comments,
+      });
+
+      sync.startExport('open');
+      await sync.idle();
+      expect(store.get(doc.meta.id)?.meta.external).toBe('linear:issue-1');
+
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      delete fake.failures.createComment;
+      await sync.syncOnce();
+
+      expect(fake.commentList.map((c) => c.body)).toEqual(['One', 'Two']);
+    }
+  );
+
   it('drops an arrival archive once the task is reopened', async () => {
     seedState({ bootstrappedAt: '2030-01-01T00:00:00.000Z' });
     const doc = store.create({ title: 'Finished', status: 'done' });
@@ -2430,6 +2485,46 @@ describe('LinearSync capacity and the pause', () => {
     } finally {
       Date.now = realNow;
     }
+  });
+
+  it('leaves the stored counts and the pause to a newer measurement', async () => {
+    const paused = {
+      limitedAt: '2026-07-01T00:00:00.000Z',
+      retryAt: '2099-01-01T00:00:00.000Z',
+      message: LINEAR_USAGE_LIMIT_MESSAGE,
+    };
+    seedState({
+      bootstrappedAt: '2020-01-01T00:00:00.000Z',
+      capacity: {
+        ...paused,
+        active: 250,
+        limit: 250,
+        limitSource: 'plan',
+        plan: 'free',
+        checkedAt: '2026-07-01T00:00:00.000Z',
+      },
+    });
+    fake.issues = Array.from({ length: 240 }, () => fake.issue());
+    const sync = makeSync();
+
+    // A plain read counts 240, then answers only after a refresh counts 250.
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const measure = fake.capacity.bind(fake);
+    fake.capacity = (teamIds, reuse) => {
+      const counted = measure(teamIds, reuse);
+      fake.capacity = measure;
+      return gate.then(() => counted);
+    };
+    const held = sync.capacity();
+    fake.issues.push(...Array.from({ length: 10 }, () => fake.issue()));
+    await sync.capacity(true);
+    release();
+    await held;
+
+    expect(sync.status().capacity).toMatchObject({ ...paused, active: 250 });
   });
 
   it('never caches a measurement begun before an archive pass ended', async () => {

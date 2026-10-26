@@ -36,6 +36,7 @@ import type {
 } from '@dispatch-foo/core';
 
 import { rosterMembers } from '../api/people.js';
+import { readBase } from './state.js';
 import type { LinearSyncState } from './state.js';
 
 /** A mapping context whose indexes the pass keeps current as it writes. */
@@ -104,26 +105,34 @@ export function linkedIssueTeam(
 
 // A review role split off the shared dispatched one (a workflow change, or
 // a role picked in Settings): tasks whose run had finished were waiting for
-// review there, so they move to it as a finish would have moved them. Each
-// keeps `updated`; a linked one is left outstanding so its issue follows,
-// unless a newer edit in Linear wins the merge.
+// review there, so they move to it as a finish would have moved them. One
+// edited since a pass last found the shared roles (`at`) may have been
+// handled under the split, so it stays. Each keeps `updated`; a linked one is
+// left outstanding so its issue follows unless a newer edit in Linear wins,
+// and is stamped now when its state has no merge base, where Linear's would.
 function moveFinishedToReview(
   store: TaskStorePort,
   docs: Map<string, TaskDoc>,
   state: LinearSyncState,
-  prior: StatusRoles,
+  prior: { roles: StatusRoles; at: string | null },
   roles: StatusRoles,
   finishedRuns: ReadonlySet<string>,
   migrated: string[]
 ): void {
-  if (prior.review !== prior.dispatched || roles.review === roles.dispatched) {
-    return;
-  }
+  const shared = prior.roles.review === prior.roles.dispatched;
+  if (!shared || roles.review === roles.dispatched) return;
+  const since = prior.at === null ? Infinity : Date.parse(prior.at);
   for (const doc of docs.values()) {
     const { id, status, external, updated } = doc.meta;
     if (!finishedRuns.has(id) || status !== roles.dispatched) continue;
-    docs.set(id, store.update(id, { status: roles.review }, updated));
-    if (parseLinearExternal(external) !== null) delete state.pushed[id];
+    if (Date.parse(updated) > since) continue;
+    const linked = parseLinearExternal(external) !== null;
+    const base = readBase(state, id, 'issue');
+    const based =
+      base?.local.state !== undefined && base.remote.state !== undefined;
+    const stamp = linked && !based ? new Date().toISOString() : updated;
+    docs.set(id, store.update(id, { status: roles.review }, stamp));
+    if (linked) delete state.pushed[id];
     if (!migrated.includes(id)) migrated.push(id);
   }
 }
@@ -182,10 +191,14 @@ export function regenerateStatuses(
     names,
     renames.shared
   );
-  const prior = state.appliedRoles ?? statusModelOf(config).roles;
+  const prior = {
+    roles: state.appliedRoles ?? statusModelOf(config).roles,
+    at: state.appliedAt ?? null,
+  };
   state.stateNames = generated.names;
   state.generatedRoles = fresh;
   state.appliedRoles = roles;
+  state.appliedAt = new Date().toISOString();
   const after = { definitions: generated.definitions, roles };
   if (
     sameDefinitions(config.statusDefinitions, generated.definitions) &&

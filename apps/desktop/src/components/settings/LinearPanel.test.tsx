@@ -555,7 +555,9 @@ test('the export dialog counts the slot an archived arrival needs', async () => 
     })
   );
   expect(dialog.textContent).not.toContain('This export fits.');
-  expect(dialog.textContent).toContain('This export adds 10 and 10 are free');
+  expect(dialog.textContent).toContain(
+    'Its 10 open issues fill the 10 free slots, so the 310 archived on arrival wait in the retry queue'
+  );
 });
 
 test('export progress shows under Export, not under Import', () => {

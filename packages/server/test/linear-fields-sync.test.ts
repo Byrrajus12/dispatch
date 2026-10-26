@@ -185,6 +185,20 @@ describe('workflow states and people', () => {
     expect(fake.updated.map((u) => u.input.stateId)).toEqual(['s-review']);
   });
 
+  it('sends that move for a pair with no merge base for its state', async () => {
+    fake.states = STATES.filter((s) => s.name !== 'In Review');
+    const { id } = await linkedPair();
+    const state = readLinearState(root);
+    delete state.bases[id];
+    writeLinearState(root, state);
+    fake.states = STATES;
+
+    await withFinished(id).syncOnce();
+
+    expect(store.get(id)?.meta.status).toBe('In Review');
+    expect(fake.updated.map((u) => u.input.stateId)).toEqual(['s-review']);
+  });
+
   it('lets a newer state edit in Linear win over that move', async () => {
     fake.states = STATES.filter((s) => s.name !== 'In Review');
     const { issue, id } = await linkedPair();
@@ -215,6 +229,26 @@ describe('workflow states and people', () => {
     await withFinished(finished.meta.id).syncOnce();
 
     expect(store.get(finished.meta.id)?.meta.status).toBe('QA');
+  });
+
+  it('leaves a task moved since a pass last found review shared', async () => {
+    fake.states = STATES.map((s) =>
+      s.id === 's-review' ? { ...s, name: 'QA' } : s
+    );
+    const finished = store.create({ title: 'Run finished', status: 'working' });
+    const id = finished.meta.id;
+    await withFinished(id).syncOnce();
+
+    // With no pass between: review split off in Settings, the finish moved
+    // the task to QA, and a person moved it back to rework it.
+    updateConfig(root, {
+      statusRoles: { ...loadConfig(root).statusRoles!, review: 'QA' },
+    });
+    edit(id, { status: 'QA' });
+    edit(id, { status: 'In Progress' });
+    await withFinished(id).syncOnce();
+
+    expect(store.get(id)?.meta.status).toBe('In Progress');
   });
 
   it('keeps a role the user overrode, and follows a renamed state', async () => {

@@ -244,9 +244,15 @@ function run(...args: string[]): Promise<unknown> {
   return makeProgram(ctx).parseAsync(['linear', ...args], { from: 'user' });
 }
 
-// Requests other than the status reads every command starts with.
+// The random id sync and import tag a request with, for status to answer.
+const REQUEST_TAG = /\?request=[0-9a-f-]{36}$/;
+
+// Requests other than the status reads every command starts with, their
+// request tags dropped.
 function writes() {
-  return seen.filter((s) => s.method === 'POST');
+  return seen
+    .filter((s) => s.method === 'POST')
+    .map((s) => ({ ...s, path: s.path.replace(REQUEST_TAG, '') }));
 }
 
 describe('dispatch linear status', () => {
@@ -302,6 +308,12 @@ describe('dispatch linear sync', () => {
       '/api/linear/sync {}',
     ]);
     expect(lines).toContain('2 created in Linear');
+  });
+
+  it('tags the request so a cut one can find what it got', async () => {
+    await run('sync');
+    const sync = seen.find((s) => s.method === 'POST');
+    expect(sync?.path).toMatch(REQUEST_TAG);
   });
 
   it('refuses while sync is off', async () => {

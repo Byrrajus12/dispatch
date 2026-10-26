@@ -215,16 +215,8 @@ export class CommentSync {
     return retry;
   }
 
-  /** Every comment on a task, for one that just got its Linear issue. */
-  async pushAll(taskId: string): Promise<void> {
-    await this.push(
-      taskId,
-      this.d.comments.list(taskId).map((c) => c.id)
-    );
-  }
-
-  /** Queues every comment on a task for a later pass to send, for one that
-   *  got its issue on a pass a throttle stopped. */
+  /** Queues every comment on a task that just got its Linear issue, so one
+   *  a throttle or a failure leaves unsent goes on a later pass. */
   queueAll(taskId: string): void {
     const ids = this.d.comments.list(taskId).map((c) => c.id);
     if (ids.length === 0) return;

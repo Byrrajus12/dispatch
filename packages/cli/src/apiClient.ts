@@ -1781,6 +1781,9 @@ export interface LinearStatus {
   lastSummary: LinearSyncSummary | null;
   /** True while any pass is queued or running. */
   syncing: boolean;
+  /** Asked for by request id: the summary that sync or import answered
+   *  with, null until its pass ends; absent from an older dispatchd. */
+  answered?: LinearSyncSummary | null;
   progress?: LinearProgress | null;
   webhook?: {
     state: 'active' | 'polling' | 'error' | 'off';
@@ -1880,10 +1883,15 @@ export class LinearRouteMissingError extends CliError {}
 
 // Separate from ApiClient so its two full test fakes need not grow the Linear routes.
 export interface LinearApiClient {
-  linearStatus(): Promise<LinearStatus>;
-  /** Awaits the pass; named tasks are pushed even if they predate the link. */
-  linearSync(taskIds?: readonly string[]): Promise<LinearSyncSummary>;
-  linearImport(): Promise<LinearSyncSummary>;
+  /** With `request`, also answers what that sync or import got. */
+  linearStatus(request?: string): Promise<LinearStatus>;
+  /** Awaits the pass; named tasks are pushed even if they predate the link.
+   *  `request` tags it, for status to answer if this request is cut. */
+  linearSync(
+    taskIds?: readonly string[],
+    request?: string
+  ): Promise<LinearSyncSummary>;
+  linearImport(request?: string): Promise<LinearSyncSummary>;
   linearExportPreview(): Promise<LinearExportPreview>;
   linearExport(scope: LinearExportScope): Promise<LinearBulkStart>;
   linearCoverage(): Promise<LinearCoverage>;
@@ -1921,6 +1929,11 @@ async function linearRequest<T>(
   }
 }
 
+// The query naming a request id, for status to answer what it got.
+function tagged(request: string | undefined): string {
+  return request === undefined ? '' : `?request=${encodeURIComponent(request)}`;
+}
+
 /** A Linear client for `command`, which an older daemon's missing route is
  *  named for; without one, each request names the command it serves. */
 export function createLinearApiClient(
@@ -1931,19 +1944,28 @@ export function createLinearApiClient(
   const target: ApiTarget = { baseUrl, token };
   const as = (own: string): string => command ?? own;
   return {
-    linearStatus: () =>
-      linearRequest(target, as('status'), '/api/linear/status'),
-    linearSync: (taskIds) =>
+    linearStatus: (request) =>
+      linearRequest(
+        target,
+        as('status'),
+        `/api/linear/status${tagged(request)}`
+      ),
+    linearSync: (taskIds, request) =>
       linearRequest(
         target,
         as('sync'),
-        '/api/linear/sync',
+        `/api/linear/sync${tagged(request)}`,
         jsonBody(taskIds === undefined ? {} : { taskIds })
       ),
-    linearImport: () =>
-      linearRequest(target, as('import'), '/api/linear/import', {
-        method: 'POST',
-      }),
+    linearImport: (request) =>
+      linearRequest(
+        target,
+        as('import'),
+        `/api/linear/import${tagged(request)}`,
+        {
+          method: 'POST',
+        }
+      ),
     linearExportPreview: () =>
       linearRequest(target, as('push --dry-run'), '/api/linear/export'),
     linearExport: (scope) =>

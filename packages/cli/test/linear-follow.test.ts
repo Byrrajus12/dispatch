@@ -218,6 +218,74 @@ describe('followLinearPass', () => {
     expect(result).toEqual(joined);
   });
 
+  test('tags the request and asks status for that tag', async () => {
+    const asked: (string | undefined)[] = [];
+    const answered = summary(T0 + 200);
+    const api = {
+      linearStatus: (request?: string) => {
+        asked.push(request);
+        return Promise.resolve(status({ syncing: false, answered }));
+      },
+    };
+    let sent: string | undefined;
+    const result = await followLinearPass(
+      api,
+      (request) => {
+        sent = request;
+        return Promise.reject(new DaemonUnreachableError('timed out'));
+      },
+      { ...fast, request: 'req-1' }
+    );
+    expect(sent).toBe('req-1');
+    expect(asked).toEqual(['req-1']);
+    expect(result).toBe(answered);
+  });
+
+  test('a joined pass’s answer wins over a later pass queued behind it', async () => {
+    const exported = summary(T0 - 120_000, { errors: ['issue limit'] });
+    const push = summary(T0 + 90_000, { pushed: 1 });
+    const api = statuses(
+      status({ syncing: true, answered: null }),
+      // The export it joined ended; a push queued after the request runs.
+      status({ syncing: true, lastSummary: exported, answered: exported }),
+      status({ syncing: false, lastSummary: push, answered: exported })
+    );
+    const result = await followLinearPass(
+      api,
+      () => Promise.reject(new DaemonUnreachableError('timed out')),
+      { ...fast, joins: true }
+    );
+    expect(result).toEqual(exported);
+  });
+
+  test('with passes queued ahead, the answer is the tail it joined', async () => {
+    const p1 = summary(T0 + 10_000, { pushed: 1 });
+    const p2 = summary(T0 + 20_000, { pushed: 2 });
+    const api = statuses(
+      status({ syncing: true, lastSummary: p1, answered: null }),
+      status({ syncing: false, lastSummary: p2, answered: p2 })
+    );
+    const result = await followLinearPass(
+      api,
+      () => Promise.reject(new DaemonUnreachableError('timed out')),
+      { ...fast, joins: true }
+    );
+    expect(result).toEqual(p2);
+  });
+
+  test('a tagged pass that ended unanswered is an error', async () => {
+    const api = statuses(
+      status({ syncing: false, lastSummary: summary(T0 + 500), answered: null })
+    );
+    const err = await followLinearPass(
+      api,
+      () => Promise.reject(new DaemonUnreachableError('timed out')),
+      fast
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CliError);
+    expect((err as Error).message).toContain('dispatch linear status');
+  });
+
   test('at the deadline it points at dispatch linear status', async () => {
     let clock = T0;
     const api = statuses(status({ syncing: true }));
