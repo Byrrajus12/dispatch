@@ -112,9 +112,10 @@ export function DraftsSection({
 /**
  * The notification history in Coming in: every run and merge transition the
  * app recorded, newest first, unread ones marked. A row opens what it is
- * about and its cross dismisses it; "Mark all read" clears the unread count
- * and "Clear all" empties the list. Renders nothing while the history is
- * empty.
+ * about and its cross dismisses it; "Mark all read" clears the unread count,
+ * "Clear all" empties the list and "Hide" takes it out of the side panel
+ * (Settings → Notifications brings it back). Renders nothing while the
+ * history is empty.
  */
 export function NotificationsSection({
   entries,
@@ -123,6 +124,7 @@ export function NotificationsSection({
   onOpen,
   onDismiss,
   onClearAll,
+  onHide,
 }: {
   entries: readonly InboxEntry[];
   unreadCount: number;
@@ -130,6 +132,7 @@ export function NotificationsSection({
   onOpen: (entry: InboxEntry) => void;
   onDismiss: (id: string) => void;
   onClearAll: () => void;
+  onHide?: () => void;
 }) {
   const [all, setAll] = useState(false);
   if (entries.length === 0) return null;
@@ -145,7 +148,7 @@ export function NotificationsSection({
         count={unreadCount > 0 ? unreadCount : undefined}
         className="h-6 px-2 pb-0.5"
         trailing={
-          <span className="ml-auto flex items-center">
+          <div className="ml-auto flex items-center">
             {unreadCount > 0 && (
               <Button
                 variant="ghost"
@@ -164,7 +167,18 @@ export function NotificationsSection({
             >
               Clear all
             </Button>
-          </span>
+            {onHide !== undefined && (
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={onHide}
+                title="Hide notifications from the side panel. Settings → Notifications shows them again."
+                data-testid="overseer-notifications-hide"
+              >
+                Hide
+              </Button>
+            )}
+          </div>
         }
       >
         Notifications

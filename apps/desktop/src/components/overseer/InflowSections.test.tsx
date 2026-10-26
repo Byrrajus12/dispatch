@@ -172,3 +172,31 @@ test('Notifications shows only the first line of a multi-line body', () => {
   ).toBeDefined();
   expect(screen.queryByText(/could not apply/)).toBeNull();
 });
+
+test('Notifications offers Hide only when the caller can hide it', () => {
+  let hidden = 0;
+  const { rerender } = render(
+    <NotificationsSection
+      entries={[entry('a', true)]}
+      unreadCount={0}
+      onMarkAllRead={() => {}}
+      onOpen={() => {}}
+      onDismiss={() => {}}
+      onClearAll={() => {}}
+    />
+  );
+  expect(screen.queryByTestId('overseer-notifications-hide')).toBeNull();
+  rerender(
+    <NotificationsSection
+      entries={[entry('a', true)]}
+      unreadCount={0}
+      onMarkAllRead={() => {}}
+      onOpen={() => {}}
+      onDismiss={() => {}}
+      onClearAll={() => {}}
+      onHide={() => hidden++}
+    />
+  );
+  fireEvent.click(screen.getByTestId('overseer-notifications-hide'));
+  expect(hidden).toBe(1);
+});

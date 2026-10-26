@@ -93,6 +93,7 @@ import {
 import { useGlobalKeyboard } from './hooks/useGlobalKeyboard';
 import { useOverseerSession } from './hooks/useOverseerSession';
 import { useSavedViews } from './hooks/useSavedViews';
+import { useSidePanelNotifications } from './hooks/useSidePanelNotifications';
 import { tasksKey } from './hooks/useTaskDoc';
 import {
   threadListsKey,
@@ -1000,6 +1001,8 @@ function App() {
     dismissNotification,
     clearNotifications,
   } = data;
+  const [sidePanelNotifications, setSidePanelNotifications] =
+    useSidePanelNotifications();
 
   // Every label in use across the project — the create dialog's Labels picker candidates.
   const labelCatalogue = useMemo(() => {
@@ -2121,14 +2124,17 @@ function App() {
             }
             draftsCount={draftTrayViewModel(data.drafts).badgeCount}
             notifications={
-              <NotificationsSection
-                entries={notificationInbox.entries}
-                unreadCount={unreadCount(notificationInbox)}
-                onMarkAllRead={markNotificationInboxRead}
-                onOpen={openNotification}
-                onDismiss={dismissNotification}
-                onClearAll={clearNotifications}
-              />
+              sidePanelNotifications && (
+                <NotificationsSection
+                  entries={notificationInbox.entries}
+                  unreadCount={unreadCount(notificationInbox)}
+                  onMarkAllRead={markNotificationInboxRead}
+                  onOpen={openNotification}
+                  onDismiss={dismissNotification}
+                  onClearAll={clearNotifications}
+                  onHide={() => setSidePanelNotifications(false)}
+                />
+              )
             }
             outflow={{
               sessions: data.liveMilestoneSessions,
