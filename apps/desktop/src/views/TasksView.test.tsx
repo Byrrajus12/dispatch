@@ -52,9 +52,9 @@ function task(
   } as unknown as TaskDoc;
 }
 
-const EPICS = [task('e-1', 'Payments', 'todo', null, 'epic')];
+const MILESTONES = [task('e-1', 'Payments', 'todo', null, 'milestone')];
 const TASKS = [
-  ...EPICS,
+  ...MILESTONES,
   task('t-1', 'Card one', 'todo', 'e-1', 'task', ME),
   task('t-2', 'Card two', 'done', 'e-1'),
   task('t-3', 'Loose card', 'todo'),
@@ -75,8 +75,8 @@ const data = {
   archivedTasks: [],
   showArchived: false,
   setShowArchived: () => {},
-  epics: EPICS,
-  epicProgressById: new Map(),
+  milestones: MILESTONES,
+  milestoneProgressById: new Map(),
   readyIds: new Set<string>(),
   blockedIds: new Set<string>(),
   runs: [],

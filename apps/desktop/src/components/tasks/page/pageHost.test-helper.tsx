@@ -144,7 +144,7 @@ export function fakeHost(
     linearStatus: null,
     presence: [],
     mergeQueue: null,
-    epicProgressById: new Map(),
+    milestoneProgressById: new Map(),
     pendingApprovals: new Map(),
     openQuestions: new Map(),
     pendingScopeRequests: new Map(),

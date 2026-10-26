@@ -1,6 +1,6 @@
 /**
- * Which groups are folded up — swim lanes on the board (epic, assignee or priority lanes,
- * whichever the display's sub-grouping picks), status/epic/milestone groups in the list,
+ * Which groups are folded up — swim lanes on the board (milestone, assignee or priority lanes,
+ * whichever the display's sub-grouping picks), status/milestone/milestone groups in the list,
  * milestones on the Milestones page.
  *
  * Session-scoped on purpose: collapsing a group is a "get this out of my way while I look at
@@ -13,11 +13,12 @@
  * user collapsed something starts expanded — the default is "show me the work".
  */
 /** The board's lanes, whatever kind they are. Keys are namespaced by lane kind (`e-…` /
- * `__no-epic__` for epic lanes, `assignee:…`, `priority:…`) so a fold on one sub-grouping
+ * `__no-milestone__` for milestone lanes, `assignee:…`, `priority:…`) so a fold on one sub-grouping
  * never hides a lane of another. The storage key predates the generalized lanes, so sessions
  * folded before it survive. */
-export const COLLAPSED_LANES_STORAGE_KEY = 'dispatch:board-collapsed-epics';
-/** The list's groups, keyed by `ListGroup.key` (`status:ready`, `epic:e-1`, …). */
+export const COLLAPSED_LANES_STORAGE_KEY =
+  'dispatch:board-collapsed-milestones';
+/** The list's groups, keyed by `ListGroup.key` (`status:ready`, `milestone:e-1`, …). */
 export const COLLAPSED_GROUPS_STORAGE_KEY = 'dispatch:list-collapsed-groups';
 /** The Milestones page's folds. Its own key because a stored milestone there means "flipped
  * from its default" (finished ones start folded), not "collapsed" as the list's key does. */

@@ -43,7 +43,7 @@ function task(
 }
 
 function group(
-  epicId: string | null,
+  milestoneId: string | null,
   label: string,
   tasks: TaskListItem[],
   archived = false
@@ -51,16 +51,16 @@ function group(
   return {
     key: archived
       ? 'archived'
-      : epicId === null
-        ? 'epic:none'
-        : `milestone:${epicId}`,
-    kind: archived ? 'archived' : 'milestone',
+      : milestoneId === null
+        ? 'parent:none'
+        : `parent:${milestoneId}`,
+    kind: archived ? 'archived' : 'parent',
     label,
     tint: null,
-    icon: { kind: 'epic', epicId },
+    icon: { kind: 'parent', parentId: milestoneId },
     rows: tasks.map((doc) => ({ doc, indent: 0 })),
     preset: {},
-    epicId,
+    milestoneId,
     archived,
   } as ListGroup;
 }

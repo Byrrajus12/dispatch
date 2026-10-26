@@ -26,16 +26,20 @@ import type { TaskCache } from '../cache.js';
 import type { EventBus } from '../events.js';
 import type { FindingStorePort } from '../findings.js';
 import { statusModelFor } from '../statuses.js';
+import type { FixLoopState } from './fixLoop.js';
 import {
   deriveChildPhase,
   deriveSpend,
   deriveWaves,
   summarizeWaves,
-} from './epicPhase.js';
-import type { EpicProgressChild, EpicSpend, EpicWave } from './epicPhase.js';
-import type { FixLoopState } from './fixLoop.js';
+} from './milestonePhase.js';
+import type {
+  MilestoneProgressChild,
+  MilestoneSpend,
+  MilestoneWave,
+} from './milestonePhase.js';
 import type { Orchestrator } from './orchestrator.js';
-import { epicSessionsPath, runsDir } from './paths.js';
+import { milestoneSessionsPath, runsDir } from './paths.js';
 import type { TaskAuthorship } from './taskAuthorship.js';
 import type { RunMeta } from './types.js';
 import {
@@ -45,25 +49,25 @@ import {
   TERMINAL_RUN_STATES,
 } from './types.js';
 
-type EpicSessionState = 'active' | 'paused' | 'stopped' | 'complete';
-export type EpicPauseReason = 'human' | 'budget' | 'runs' | 'fill-failed';
+type MilestoneSessionState = 'active' | 'paused' | 'stopped' | 'complete';
+export type MilestonePauseReason = 'human' | 'budget' | 'runs' | 'fill-failed';
 /** What a session covers: its container's whole fan-out scope (core's
  *  fanoutScope), or only its direct children — the rule a session persisted
  *  before plan-wide fan-outs was started under, and keeps. */
-type EpicSessionScope = 'plan' | 'direct';
+type MilestoneSessionScope = 'plan' | 'direct';
 
-// One epic's dispatch session. Persisted write-through to
-// `epicSessionsPath` (see persist()/hydrate()) so a dispatchd restart re-arms
+// One milestone's dispatch session. Persisted write-through to
+// `milestoneSessionsPath` (see persist()/hydrate()) so a dispatchd restart re-arms
 // an active session instead of forgetting it; the fill chain, retry counter
 // and boot arm flag are memory-only and reset on boot. Spend and run counts
 // are never stored — they are derived from the run registry on every read.
-interface EpicSessionRecord {
+interface MilestoneSessionRecord {
   /** Execute + review + verify slots — liveCount is kind-agnostic by design. */
   concurrency: number;
   executor: string;
-  state: EpicSessionState;
+  state: MilestoneSessionState;
   /** Set while paused, cleared on resume. */
-  pausedReason?: EpicPauseReason;
+  pausedReason?: MilestonePauseReason;
   /** The message behind a `fill-failed` pause. */
   pausedDetail?: string;
   /** `null` = no spend ceiling. */
@@ -77,33 +81,33 @@ interface EpicSessionRecord {
    *  which works for the daemon's local human. */
   startedBy: string | null;
   /** `direct` on a session persisted without it. */
-  scope: EpicSessionScope;
+  scope: MilestoneSessionScope;
   updatedAt: string;
   completedAt?: string;
   /** The human its auto-fill runs act for; absent when the shared agentToken
    *  started it. */
   operator?: string;
-  /** Critical-risk children already noted as held on the epic's Activity,
+  /** Critical-risk children already noted as held on the milestone's Activity,
    *  so each is announced once per session rather than on every fill. */
   heldCritical: Set<string>;
 }
 
 // The on-disk shape of one record: the Set becomes an array.
-type PersistedSessionRecord = Omit<EpicSessionRecord, 'heldCritical'> & {
+type PersistedSessionRecord = Omit<MilestoneSessionRecord, 'heldCritical'> & {
   heldCritical: string[];
 };
 
-interface EpicSessionsSnapshot {
+interface MilestoneSessionsSnapshot {
   version: 1;
   sessions: Record<string, PersistedSessionRecord>;
 }
 
-export interface EpicSession {
-  epicId: string;
+export interface MilestoneSession {
+  milestoneId: string;
   concurrency: number;
   executor: string;
-  state: EpicSessionState;
-  pausedReason?: EpicPauseReason;
+  state: MilestoneSessionState;
+  pausedReason?: MilestonePauseReason;
   pausedDetail?: string;
   maxSpendUsd: number | null;
   maxRuns: number | null;
@@ -112,30 +116,30 @@ export interface EpicSession {
   startedBy: string | null;
   /** The whole plan, or (a session from before plan-wide fan-outs) its
    *  container's direct children only. */
-  scope: EpicSessionScope;
+  scope: MilestoneSessionScope;
   updatedAt: string;
   completedAt?: string;
   /** The human its auto-fill runs act for; absent when the shared agentToken
    *  started it. */
   operator?: string;
-  /** `state === 'active'` — kept for `formatEpicProgress` and `--watch`. */
+  /** `state === 'active'` — kept for `formatMilestoneProgress` and `--watch`. */
   active: boolean;
 }
 
-export interface EpicProgress {
-  epicId: string;
+export interface MilestoneProgress {
+  milestoneId: string;
   active: boolean;
   concurrency?: number;
-  session: EpicSession | null;
+  session: MilestoneSession | null;
   /** For the session's runs, or for every child run when there is none. */
-  spend: EpicSpend;
-  children: EpicProgressChild[];
-  waves: EpicWave[];
+  spend: MilestoneSpend;
+  children: MilestoneProgressChild[];
+  waves: MilestoneWave[];
   liveRuns: RunMeta[];
 }
 
 /** The ceilings and concurrency a session may be started or resumed with. */
-export interface EpicSessionOptions {
+export interface MilestoneSessionOptions {
   concurrency?: number;
   maxSpendUsd?: number | null;
   maxRuns?: number | null;
@@ -143,12 +147,12 @@ export interface EpicSessionOptions {
 
 /** The narrow view of FixLoop the engine reads phases from — bound late
  *  because FixLoop is constructed after the engine (see bindFixLoop). */
-export interface EpicFixLoopPort {
+export interface MilestoneFixLoopPort {
   get(taskId: string): FixLoopState | null;
   list(): FixLoopState[];
 }
 
-export interface EpicEngineContext {
+export interface MilestoneEngineContext {
   rootDir: string;
   store: TaskStorePort;
   cache: TaskCache;
@@ -162,11 +166,11 @@ export interface EpicEngineContext {
   // How long a hydrated session waits after boot before it fills again
   // (see resumeOnBoot). Tests shrink it.
   resumeDelayMs?: number;
-  // The `epic.changed` debounce window; `0` broadcasts synchronously so a
+  // The `milestone.changed` debounce window; `0` broadcasts synchronously so a
   // test can assert right after the call.
   eventDebounceMs?: number;
   // Optional, same "tests may omit it" contract as OrchestratorContext's own
-  // field — appendEpicActivity() below falls back to an unattributed
+  // field — appendMilestoneActivity() below falls back to an unattributed
   // Activity line when it's absent.
   actorContext?: ActorContext;
   // Who wrote each task; absent, every auto-fill run acts for no one.
@@ -174,7 +178,7 @@ export interface EpicEngineContext {
 }
 
 // How long a fill that failed outright waits before retrying itself, and how
-// many consecutive retries one epic gets before it pauses on its own.
+// many consecutive retries one milestone gets before it pauses on its own.
 const DEFAULT_FILL_RETRY_DELAY_MS = 15_000;
 const MAX_FILL_RETRIES = 3;
 // How long a session hydrated at boot stays unarmed. Longer than the
@@ -195,7 +199,7 @@ function formatUsd(value: number): string {
 
 // `(concurrency 8, ceiling $60.00, max 20 runs)` — the parenthetical the
 // start/resume Activity lines share.
-function describeSession(session: EpicSessionRecord): string {
+function describeSession(session: MilestoneSessionRecord): string {
   const parts = [`concurrency ${session.concurrency}`];
   if (session.maxSpendUsd !== null) {
     parts.push(`ceiling ${formatUsd(session.maxSpendUsd)}`);
@@ -242,7 +246,7 @@ function blockerView(
   });
 }
 
-// What a session's last fill left waiting (see EpicEngine.onTasksChanged).
+// What a session's last fill left waiting (see MilestoneEngine.onTasksChanged).
 interface Watched {
   /** Blockers its own unstarted work waits on. */
   waiting: Set<string>;
@@ -251,15 +255,15 @@ interface Watched {
 }
 
 // Active or paused: a session that still claims its scope.
-function isLive(session: EpicSessionRecord): boolean {
+function isLive(session: MilestoneSessionRecord): boolean {
   return session.state === 'active' || session.state === 'paused';
 }
 
 // One child's reading, shared by every container whose scope holds it (a
 // milestone's and its project's): only the wave differs between them.
-type ChildReading = Omit<EpicProgressChild, 'wave'>;
+type ChildReading = Omit<MilestoneProgressChild, 'wave'>;
 
-// The board as progress() reads it, shared by every epic in one request.
+// The board as progress() reads it, shared by every milestone in one request.
 interface ProgressBoard {
   statuses: StatusModel;
   byId: Map<string, TaskListItem>;
@@ -277,8 +281,8 @@ interface ProgressBoard {
 }
 
 /**
- * The epic-level parallel dispatch engine (spec §5 Dispatch step 6): starting
- * an epic dispatches its ready children up to a concurrency cap, and every
+ * The milestone-level parallel dispatch engine (spec §5 Dispatch step 6): starting
+ * a milestone dispatches its ready children up to a concurrency cap, and every
  * time a child run reaches a terminal state, newly-unblocked siblings
  * auto-dispatch to fill any freed slot — all driven by Orchestrator's
  * `onRunTerminal` push hook (plus `task.changed` for a blocker satisfied
@@ -289,20 +293,20 @@ interface ProgressBoard {
  * failing) and waits for `resume()`; `stop()` and a pause only halt *new*
  * dispatches — runs already live keep running to their own completion.
  *
- * The session record is persisted to `epicSessionsPath` (write-through, like
+ * The session record is persisted to `milestoneSessionsPath` (write-through, like
  * MergeQueue) so a restart re-arms it through resumeOnBoot(); the durable
- * trail a human reads is still the epic Activity lines this class appends
+ * trail a human reads is still the milestone Activity lines this class appends
  * via TaskStore, same as every other orchestrator lifecycle event.
  */
-export class EpicEngine {
-  private readonly sessions = new Map<string, EpicSessionRecord>();
+export class MilestoneEngine {
+  private readonly sessions = new Map<string, MilestoneSessionRecord>();
   // Sessions allowed to fill. A hydrated `active` session stays out of this
   // set until resumeOnBoot()'s timer adds it; start()/resume() add it directly.
   private readonly armed = new Set<string>();
-  // One serialization chain per epic — see scheduleFill() for why fillQueue
+  // One serialization chain per milestone — see scheduleFill() for why fillQueue
   // can no longer simply be called from the run-lifecycle hooks.
   private readonly fillChains = new Map<string, Promise<void>>();
-  // Self-retry state per epic: the pending timer and how many consecutive
+  // Self-retry state per milestone: the pending timer and how many consecutive
   // retries it has already spent (see armFillRetry).
   private readonly fillRetryTimers = new Map<
     string,
@@ -312,7 +316,7 @@ export class EpicEngine {
   private readonly fillRetryDelayMs: number;
   private readonly resumeDelayMs: number;
   private readonly eventDebounceMs: number;
-  // Pending trailing `epic.changed` broadcast per epic (see emitChanged).
+  // Pending trailing `milestone.changed` broadcast per milestone (see emitChanged).
   private readonly changedTimers = new Map<
     string,
     ReturnType<typeof setTimeout>
@@ -321,18 +325,18 @@ export class EpicEngine {
   private readonly resumeTimers = new Set<ReturnType<typeof setTimeout>>();
   // Set by shutdown(): no fill starts and nothing persists after it.
   private closed = false;
-  private fixLoop: EpicFixLoopPort | null = null;
+  private fixLoop: MilestoneFixLoopPort | null = null;
   // Per active session, what its unstarted work waited on at the last fill:
   // blockers, and its own tasks a teammate held (see onTasksChanged). Memory
   // only; the next fill rebuilds it.
   private readonly watching = new Map<string, Watched>();
 
-  constructor(private readonly ctx: EpicEngineContext) {
+  constructor(private readonly ctx: MilestoneEngineContext) {
     this.fillRetryDelayMs = ctx.fillRetryDelayMs ?? DEFAULT_FILL_RETRY_DELAY_MS;
     this.resumeDelayMs = ctx.resumeDelayMs ?? BOOT_RESUME_DELAY_MS;
     this.eventDebounceMs = ctx.eventDebounceMs ?? DEFAULT_EVENT_DEBOUNCE_MS;
     this.hydrate();
-    // Two distinct triggers can make an epic's next dispatch decision stale:
+    // Two distinct triggers can make a milestone's next dispatch decision stale:
     // a run reaching a terminal state (frees a concurrency slot, and — since
     // Orchestrator.handleFinish moves the task to `in-review` before firing
     // terminal hooks — is also the exact moment a blocker becomes
@@ -349,8 +353,8 @@ export class EpicEngine {
     });
   }
 
-  // Whether any epic is still dispatching work. A paused, stopped or complete
-  // epic waits on a human and can wait just as well in a restarted daemon.
+  // Whether any milestone is still dispatching work. A paused, stopped or complete
+  // milestone waits on a human and can wait just as well in a restarted daemon.
   hasActiveSession(): boolean {
     for (const record of this.sessions.values()) {
       if (record.state === 'active') return true;
@@ -361,35 +365,35 @@ export class EpicEngine {
   // FixLoop is constructed after this engine (its terminal hook must run
   // after the review runner's), so the phase reads bind to it late. Until
   // bound, no child ever reads as fixing/reviewing-by-loop/capped.
-  bindFixLoop(port: EpicFixLoopPort): void {
+  bindFixLoop(port: MilestoneFixLoopPort): void {
     this.fixLoop = port;
   }
 
-  // POST /api/epics/:id/dispatch. `concurrency` defaults to the project's
-  // `orchestrator.epicConcurrency` config; `executor` defaults to the project's
+  // POST /api/milestones/:id/dispatch. `concurrency` defaults to the project's
+  // `orchestrator.milestoneConcurrency` config; `executor` defaults to the project's
   // but tests override it (see the Global Constraints note on honoring a
   // body override) to dispatch through FakeExecutor instead.
   // Async only because the initial fillQueue is awaited: start() must still
   // be able to tear its own session down when that very first dispatch
   // throws (see the catch below), which a fire-and-forget `void` could not.
   async start(
-    epicId: string,
-    opts: EpicSessionOptions & {
+    milestoneId: string,
+    opts: MilestoneSessionOptions & {
       executor?: string;
       startedBy?: string;
       operator?: string;
     } = {}
-  ): Promise<EpicSession> {
-    const epic = this.requireEpic(epicId);
-    const existing = this.sessions.get(epicId);
+  ): Promise<MilestoneSession> {
+    const milestone = this.requireMilestone(milestoneId);
+    const existing = this.sessions.get(milestoneId);
     if (existing?.state === 'active') {
       throw new OrchestratorConflictError(
-        `epic already has an active dispatch session: ${epicId}`
+        `milestone already has an active dispatch session: ${milestoneId}`
       );
     }
     if (existing?.state === 'paused') {
       throw new OrchestratorConflictError(
-        `epic already has a dispatch session (paused) — resume or stop it first: ${epicId}`
+        `milestone already has a dispatch session (paused) — resume or stop it first: ${milestoneId}`
       );
     }
     // C2(a): validate everything BEFORE creating any session state — a
@@ -405,14 +409,14 @@ export class EpicEngine {
     }
     const orchestratorConfig = loadConfig(this.ctx.rootDir).orchestrator;
     const concurrency = this.validateConcurrency(
-      opts.concurrency ?? orchestratorConfig.epicConcurrency,
+      opts.concurrency ?? orchestratorConfig.milestoneConcurrency,
       orchestratorConfig.maxConcurrency
     );
     const maxSpendUsd = validateMaxSpend(opts.maxSpendUsd ?? null);
     const maxRuns = validateMaxRuns(opts.maxRuns ?? null);
-    this.refuseOverlap(epicId);
+    this.refuseOverlap(milestoneId);
     const now = new Date().toISOString();
-    const session: EpicSessionRecord = {
+    const session: MilestoneSessionRecord = {
       concurrency,
       executor,
       state: 'active',
@@ -425,13 +429,13 @@ export class EpicEngine {
       ...(opts.operator === undefined ? {} : { operator: opts.operator }),
       heldCritical: new Set(),
     };
-    this.sessions.set(epicId, session);
-    this.armed.add(epicId);
+    this.sessions.set(milestoneId, session);
+    this.armed.add(milestoneId);
     this.persist();
     try {
-      this.appendEpicActivity(
-        epicId,
-        `epic dispatch started ${describeSession(session)}`,
+      this.appendMilestoneActivity(
+        milestoneId,
+        `milestone dispatch started ${describeSession(session)}`,
         session.startedBy ?? undefined
       );
       // Chained like every other fill (see enqueueFill) — a run reaching a
@@ -439,58 +443,58 @@ export class EpicEngine {
       // synchronously, so a hook-driven fill can otherwise interleave with
       // this one. Rejections still propagate here, which is what keeps the
       // session rollback below working.
-      await this.enqueueFill(epicId);
+      await this.enqueueFill(milestoneId);
     } catch (err) {
       // C2(a): never leave a wedged session behind a failed initial
       // dispatch — a retry (even with identical args) must start clean,
       // not 409 on "already has an active session" for a session that
       // never actually got off the ground.
-      this.sessions.delete(epicId);
-      this.armed.delete(epicId);
+      this.sessions.delete(milestoneId);
+      this.armed.delete(milestoneId);
       this.persist();
       throw err;
     }
-    this.emitChanged(epicId);
-    return this.publicSession(epic.meta.id, session);
+    this.emitChanged(milestoneId);
+    return this.publicSession(milestone.meta.id, session);
   }
 
-  // POST /api/epics/:id/pause. Halts new dispatches until resume(); anything
+  // POST /api/milestones/:id/pause. Halts new dispatches until resume(); anything
   // already live keeps running.
-  pause(epicId: string): EpicSession {
-    this.requireEpic(epicId);
-    const session = this.sessions.get(epicId);
+  pause(milestoneId: string): MilestoneSession {
+    this.requireMilestone(milestoneId);
+    const session = this.sessions.get(milestoneId);
     if (session?.state !== 'active') {
       throw new OrchestratorConflictError(
-        `epic has no active dispatch session: ${epicId}`
+        `milestone has no active dispatch session: ${milestoneId}`
       );
     }
     session.state = 'paused';
     session.pausedReason = 'human';
     delete session.pausedDetail;
     session.updatedAt = new Date().toISOString();
-    this.clearFillRetry(epicId);
-    this.appendEpicActivity(
-      epicId,
-      'epic dispatch paused by you (live runs continue)'
+    this.clearFillRetry(milestoneId);
+    this.appendMilestoneActivity(
+      milestoneId,
+      'milestone dispatch paused by you (live runs continue)'
     );
     this.persist();
-    this.emitChanged(epicId);
-    return this.publicSession(epicId, session);
+    this.emitChanged(milestoneId);
+    return this.publicSession(milestoneId, session);
   }
 
-  // POST /api/epics/:id/resume. The mid-session throttle and "raise the
+  // POST /api/milestones/:id/resume. The mid-session throttle and "raise the
   // ceiling" verb: overrides are validated like start()'s, then the session
   // fills again. `startedAt` is untouched, so spend keeps counting the runs
   // already made. A given `operator` re-keys who the fills act for (null: no one).
   async resume(
-    epicId: string,
-    opts: EpicSessionOptions & { operator?: string | null } = {}
-  ): Promise<EpicSession> {
-    this.requireEpic(epicId);
-    const session = this.sessions.get(epicId);
+    milestoneId: string,
+    opts: MilestoneSessionOptions & { operator?: string | null } = {}
+  ): Promise<MilestoneSession> {
+    this.requireMilestone(milestoneId);
+    const session = this.sessions.get(milestoneId);
     if (session?.state !== 'paused') {
       throw new OrchestratorConflictError(
-        `epic has no paused dispatch session: ${epicId}`
+        `milestone has no paused dispatch session: ${milestoneId}`
       );
     }
     const concurrency =
@@ -517,14 +521,14 @@ export class EpicEngine {
     delete session.pausedReason;
     delete session.pausedDetail;
     session.updatedAt = new Date().toISOString();
-    this.armed.add(epicId);
-    this.appendEpicActivity(
-      epicId,
-      `epic dispatch resumed ${describeSession(session)}`
+    this.armed.add(milestoneId);
+    this.appendMilestoneActivity(
+      milestoneId,
+      `milestone dispatch resumed ${describeSession(session)}`
     );
     this.persist();
     try {
-      await this.enqueueFill(epicId);
+      await this.enqueueFill(milestoneId);
     } catch (err) {
       // Back to paused with the reason on the record, so the card shows why
       // and a second resume can try again; the caller still sees the error.
@@ -533,48 +537,48 @@ export class EpicEngine {
       session.pausedDetail = (err as Error).message;
       session.updatedAt = new Date().toISOString();
       this.persist();
-      this.emitChanged(epicId);
+      this.emitChanged(milestoneId);
       throw err;
     }
-    this.emitChanged(epicId);
-    return this.publicSession(epicId, session);
+    this.emitChanged(milestoneId);
+    return this.publicSession(milestoneId, session);
   }
 
-  // POST /api/epics/:id/stop. Halts new dispatches only — anything already
+  // POST /api/milestones/:id/stop. Halts new dispatches only — anything already
   // live keeps running to its own natural finish/fail/cancel.
-  stop(epicId: string): EpicSession {
-    this.requireEpic(epicId);
-    const session = this.sessions.get(epicId);
+  stop(milestoneId: string): MilestoneSession {
+    this.requireMilestone(milestoneId);
+    const session = this.sessions.get(milestoneId);
     if (session?.state !== 'active' && session?.state !== 'paused') {
       throw new OrchestratorConflictError(
-        `epic has no active dispatch session: ${epicId}`
+        `milestone has no active dispatch session: ${milestoneId}`
       );
     }
     session.state = 'stopped';
     delete session.pausedReason;
     delete session.pausedDetail;
     session.updatedAt = new Date().toISOString();
-    this.armed.delete(epicId);
-    this.watching.delete(epicId);
-    this.clearFillRetry(epicId);
-    this.appendEpicActivity(
-      epicId,
-      'epic dispatch stopped (new dispatches halted; live runs continue)'
+    this.armed.delete(milestoneId);
+    this.watching.delete(milestoneId);
+    this.clearFillRetry(milestoneId);
+    this.appendMilestoneActivity(
+      milestoneId,
+      'milestone dispatch stopped (new dispatches halted; live runs continue)'
     );
     this.persist();
-    this.emitChanged(epicId);
-    return this.publicSession(epicId, session);
+    this.emitChanged(milestoneId);
+    return this.publicSession(milestoneId, session);
   }
 
-  // GET /api/epics/:id/progress: every child with its server-derived phase
+  // GET /api/milestones/:id/progress: every child with its server-derived phase
   // and wave, the session, its spend, and the live runs dispatched against
   // any child.
-  progress(epicId: string): EpicProgress {
-    this.requireEpic(epicId);
-    return this.progressOf(epicId, this.progressBoard());
+  progress(milestoneId: string): MilestoneProgress {
+    this.requireMilestone(milestoneId);
+    return this.progressOf(milestoneId, this.progressBoard());
   }
 
-  // What every epic's progress reads alike, read once per request: on a
+  // What every milestone's progress reads alike, read once per request: on a
   // 2000-task board the dispatchable set alone is a pass over every task,
   // which progressAll() used to repeat per milestone.
   private progressBoard(): ProgressBoard {
@@ -606,17 +610,23 @@ export class EpicEngine {
     };
   }
 
-  private progressOf(epicId: string, board: ProgressBoard): EpicProgress {
+  private progressOf(
+    milestoneId: string,
+    board: ProgressBoard
+  ): MilestoneProgress {
     const { statuses, dispatchable } = board;
-    const children = this.scopeOf(epicId, (id) => board.children.get(id) ?? []);
+    const children = this.scopeOf(
+      milestoneId,
+      (id) => board.children.get(id) ?? []
+    );
     const childIds = new Set(children.map((c) => c.meta.id));
     const childRuns = board.runs.filter((r) => childIds.has(r.taskId));
     const liveRuns = childRuns.filter((r) => !TERMINAL_RUN_STATES.has(r.state));
     const waves = deriveWaves(children);
-    const session = this.sessions.get(epicId);
+    const session = this.sessions.get(milestoneId);
     const { dispatcher, holder } = this.holderFor(session);
     const blocker = blockerView(holder, board.withRunBranch);
-    const progressChildren: EpicProgressChild[] = children.map((task) => {
+    const progressChildren: MilestoneProgressChild[] = children.map((task) => {
       const id = task.meta.id;
       const key = `${dispatcher} ${id}`;
       let reading = board.readings.get(key);
@@ -655,11 +665,11 @@ export class EpicEngine {
       return { ...reading, wave: waves.get(id) ?? 1 };
     });
     return {
-      epicId,
+      milestoneId,
       active: session?.state === 'active',
       concurrency: session?.concurrency,
       session:
-        session === undefined ? null : this.publicSession(epicId, session),
+        session === undefined ? null : this.publicSession(milestoneId, session),
       spend: deriveSpend(
         childRuns,
         session?.startedAt ?? null,
@@ -675,16 +685,16 @@ export class EpicEngine {
     };
   }
 
-  // GET /api/epics/progress: progress() for every non-archived epic (the
-  // desktop's `data.epics` set), in id order — one request for every surface
+  // GET /api/milestones/progress: progress() for every non-archived milestone (the
+  // desktop's `data.milestones` set), in id order — one request for every surface
   // that shows a milestone.
-  progressAll(): EpicProgress[] {
+  progressAll(): MilestoneProgress[] {
     const board = this.progressBoard();
     return this.ctx.cache
       .query({ containers: true })
-      .map((epic) => epic.meta.id)
+      .map((milestone) => milestone.meta.id)
       .sort()
-      .map((epicId) => this.progressOf(epicId, board));
+      .map((milestoneId) => this.progressOf(milestoneId, board));
   }
 
   // Re-arms every session hydrated as `active`, each after `resumeDelayMs`
@@ -694,15 +704,15 @@ export class EpicEngine {
   // decision. Returns how many were scheduled, for the boot log.
   resumeOnBoot(): number {
     let count = 0;
-    for (const [epicId, session] of this.sessions) {
-      if (session.state !== 'active' || this.armed.has(epicId)) continue;
+    for (const [milestoneId, session] of this.sessions) {
+      if (session.state !== 'active' || this.armed.has(milestoneId)) continue;
       count++;
       const timer = setTimeout(() => {
         this.resumeTimers.delete(timer);
-        const current = this.sessions.get(epicId);
+        const current = this.sessions.get(milestoneId);
         if (current === undefined || current.state !== 'active') return;
-        this.armed.add(epicId);
-        this.scheduleFill(epicId);
+        this.armed.add(milestoneId);
+        this.scheduleFill(milestoneId);
       }, this.resumeDelayMs);
       timer.unref?.();
       this.resumeTimers.add(timer);
@@ -725,10 +735,10 @@ export class EpicEngine {
   }
 
   // Orchestrator.onRunTerminal's subscriber: a run reaching a terminal state
-  // frees a concurrency slot (or, for a single-child epic, can complete it
+  // frees a concurrency slot (or, for a single-child milestone, can complete it
   // outright). C1: this reacts across EVERY active session, not just the
   // one owning the terminated run's own task — a run's terminal state can
-  // be exactly what unblocks a *different* epic's child (a cross-epic
+  // be exactly what unblocks a *different* milestone's child (a cross-milestone
   // blocker; see the readiness fix in fillQueue's own doc comment), and the
   // cheapest correct way to notice that is to just re-check every active
   // session on every event rather than trying to compute which sessions
@@ -757,18 +767,18 @@ export class EpicEngine {
   // Only `active` sessions react: a paused one must not flip to complete
   // underneath the human who paused it, and stopped/complete are final.
   private reactAcrossSessions(): void {
-    for (const [epicId, session] of [...this.sessions]) {
+    for (const [milestoneId, session] of [...this.sessions]) {
       if (session.state !== 'active') continue;
-      if (this.isEpicComplete(epicId)) {
-        this.completeEpic(epicId);
+      if (this.isMilestoneComplete(milestoneId)) {
+        this.completeMilestone(milestoneId);
       } else {
-        this.scheduleFill(epicId);
+        this.scheduleFill(milestoneId);
       }
     }
   }
 
   /**
-   * Appends a fillQueue pass for `epicId` to that epic's serialization chain
+   * Appends a fillQueue pass for `milestoneId` to that milestone's serialization chain
    * and returns a promise for THIS pass.
    *
    * Serializing matters now that fillQueue is async — Orchestrator.dispatch
@@ -786,11 +796,11 @@ export class EpicEngine {
    * cannot poison every later one; the returned promise does reject, so
    * start() can still roll its session back.
    */
-  private enqueueFill(epicId: string): Promise<void> {
-    const previous = this.fillChains.get(epicId) ?? Promise.resolve();
-    const pass = previous.then(() => this.fillQueue(epicId));
+  private enqueueFill(milestoneId: string): Promise<void> {
+    const previous = this.fillChains.get(milestoneId) ?? Promise.resolve();
+    const pass = previous.then(() => this.fillQueue(milestoneId));
     this.fillChains.set(
-      epicId,
+      milestoneId,
       pass.catch(() => {})
     );
     return pass;
@@ -800,16 +810,16 @@ export class EpicEngine {
   // left to receive a rejection — an unhandled one would take the daemon
   // down. Failures are recorded rather than propagated, matching
   // invokeHooksSafely's rule for a throwing subscriber.
-  private scheduleFill(epicId: string): void {
+  private scheduleFill(milestoneId: string): void {
     if (this.closed) return;
-    void this.enqueueFill(epicId).then(
-      () => this.fillRetryAttempts.delete(epicId),
+    void this.enqueueFill(milestoneId).then(
+      () => this.fillRetryAttempts.delete(milestoneId),
       (err: unknown) => {
         // A fill already in flight at shutdown must not arm a new retry.
         if (this.closed) return;
         const message = (err as Error).message;
-        this.recordFillFailure(epicId, message);
-        this.armFillRetry(epicId, message);
+        this.recordFillFailure(milestoneId, message);
+        this.armFillRetry(milestoneId, message);
       }
     );
   }
@@ -818,29 +828,29 @@ export class EpicEngine {
   // would ever retry it. Bounded: a failure that repeats is not transient,
   // so past the budget the session pauses with the message instead of going
   // silently idle.
-  private armFillRetry(epicId: string, message: string): void {
-    const attempts = (this.fillRetryAttempts.get(epicId) ?? 0) + 1;
+  private armFillRetry(milestoneId: string, message: string): void {
+    const attempts = (this.fillRetryAttempts.get(milestoneId) ?? 0) + 1;
     if (attempts > MAX_FILL_RETRIES) {
-      this.pauseFor(epicId, 'fill-failed', message);
+      this.pauseFor(milestoneId, 'fill-failed', message);
       return;
     }
-    this.fillRetryAttempts.set(epicId, attempts);
-    clearTimeout(this.fillRetryTimers.get(epicId));
+    this.fillRetryAttempts.set(milestoneId, attempts);
+    clearTimeout(this.fillRetryTimers.get(milestoneId));
     const timer = setTimeout(() => {
-      this.fillRetryTimers.delete(epicId);
-      const session = this.sessions.get(epicId);
+      this.fillRetryTimers.delete(milestoneId);
+      const session = this.sessions.get(milestoneId);
       if (session?.state !== 'active') return;
-      this.scheduleFill(epicId);
+      this.scheduleFill(milestoneId);
     }, this.fillRetryDelayMs);
     // Never a reason to keep the daemon (or a test process) alive.
     timer.unref?.();
-    this.fillRetryTimers.set(epicId, timer);
+    this.fillRetryTimers.set(milestoneId, timer);
   }
 
-  private clearFillRetry(epicId: string): void {
-    clearTimeout(this.fillRetryTimers.get(epicId));
-    this.fillRetryTimers.delete(epicId);
-    this.fillRetryAttempts.delete(epicId);
+  private clearFillRetry(milestoneId: string): void {
+    clearTimeout(this.fillRetryTimers.get(milestoneId));
+    this.fillRetryTimers.delete(milestoneId);
+    this.fillRetryAttempts.delete(milestoneId);
   }
 
   // The durable half of that rule: invokeHooksSafely doesn't just log a
@@ -848,13 +858,13 @@ export class EpicEngine {
   // broadcasts, so the failure is visible in the UI rather than only in the
   // daemon's stderr. An auto-dispatch that silently stops filling is exactly
   // the kind of thing a user needs told about, so this mirrors both halves.
-  private recordFillFailure(epicId: string, message: string): void {
+  private recordFillFailure(milestoneId: string, message: string): void {
     console.error(
-      `dispatchd: epic dispatch fill failed for ${epicId}: ${message}`
+      `dispatchd: milestone dispatch fill failed for ${milestoneId}: ${message}`
     );
     try {
-      this.appendEpicActivity(
-        epicId,
+      this.appendMilestoneActivity(
+        milestoneId,
         `[hook error] auto-dispatch failed: ${message}`,
         'none'
       );
@@ -865,23 +875,23 @@ export class EpicEngine {
   }
 
   // An automatic pause: a ceiling reached, or a fill that kept failing. The
-  // Activity line carries the numbers, and `epic.paused` carries them to
+  // Activity line carries the numbers, and `milestone.paused` carries them to
   // every client so the toast needs no fetch. Never used for a human's
   // pause — that one has no event.
   private pauseFor(
-    epicId: string,
-    reason: Exclude<EpicPauseReason, 'human'>,
+    milestoneId: string,
+    reason: Exclude<MilestonePauseReason, 'human'>,
     detail?: string
   ): void {
-    const session = this.sessions.get(epicId);
+    const session = this.sessions.get(milestoneId);
     if (session?.state !== 'active') return;
     session.state = 'paused';
     session.pausedReason = reason;
     if (detail !== undefined) session.pausedDetail = detail;
     else delete session.pausedDetail;
     session.updatedAt = new Date().toISOString();
-    this.clearFillRetry(epicId);
-    const spend = this.sessionSpend(epicId, session);
+    this.clearFillRetry(milestoneId);
+    const spend = this.sessionSpend(milestoneId, session);
     const why =
       reason === 'budget'
         ? `spend ceiling reached (${formatUsd(spend.settledUsd)} settled + ~${formatUsd(spend.estimatedLiveUsd)} in flight of ${formatUsd(spend.maxSpendUsd ?? 0)})`
@@ -889,16 +899,20 @@ export class EpicEngine {
           ? `run ceiling reached (${spend.runsStarted}/${spend.maxRuns ?? 0} runs)`
           : `auto-dispatch kept failing: ${detail ?? ''}`;
     try {
-      this.appendEpicActivity(epicId, `epic dispatch paused — ${why}`, 'none');
+      this.appendMilestoneActivity(
+        milestoneId,
+        `milestone dispatch paused — ${why}`,
+        'none'
+      );
     } catch {
       // A pause reached from a failing fill may fail to append for the same
       // reason the fill did; the record and the event still carry it.
     }
     this.persist();
-    this.emitChanged(epicId);
+    this.emitChanged(milestoneId);
     this.ctx.events.broadcast({
-      type: 'epic.paused',
-      epicId,
+      type: 'milestone.paused',
+      milestoneId,
       reason,
       settledUsd: spend.settledUsd,
       estimatedLiveUsd: spend.estimatedLiveUsd,
@@ -912,13 +926,13 @@ export class EpicEngine {
   // The session's spend: every run on a task in its scope created since
   // `startedAt`, charged at the current config estimate while live.
   private sessionSpend(
-    epicId: string,
-    session: EpicSessionRecord,
+    milestoneId: string,
+    session: MilestoneSessionRecord,
     estimate = loadConfig(this.ctx.rootDir).orchestrator.runCostEstimateUsd,
     childIds: ReadonlySet<string> = new Set(
-      this.scopeOf(epicId).map((c) => c.meta.id)
+      this.scopeOf(milestoneId).map((c) => c.meta.id)
     )
-  ): EpicSpend {
+  ): MilestoneSpend {
     return deriveSpend(
       this.ctx.orchestrator.list().filter((r) => childIds.has(r.taskId)),
       session.startedAt,
@@ -933,15 +947,15 @@ export class EpicEngine {
   // A teammate's task is never a candidate, and holds its dependents until it
   // is done (core's releasesFanoutDependents). Readiness runs over the FULL
   // task set first, since dispatchableTasks treats a blocker it wasn't given
-  // as satisfied — a blocker in another epic, or in none, must still count.
+  // as satisfied — a blocker in another milestone, or in none, must still count.
   // The ceilings are only consulted once there is something to gate, so a
   // session never pauses with nothing to dispatch.
-  private async fillQueue(epicId: string): Promise<void> {
-    const session = this.sessions.get(epicId);
-    if (session?.state !== 'active' || !this.armed.has(epicId)) return;
+  private async fillQueue(milestoneId: string): Promise<void> {
+    const session = this.sessions.get(milestoneId);
+    if (session?.state !== 'active' || !this.armed.has(milestoneId)) return;
 
-    const scope = this.scopeOf(epicId);
-    const work = this.ownWork(epicId, scope, this.cacheLookup());
+    const scope = this.scopeOf(milestoneId);
+    const work = this.ownWork(milestoneId, scope, this.cacheLookup());
     const workIds = new Set(work.map((c) => c.meta.id));
     const runs = this.ctx.orchestrator.list();
     const liveCount = runs.filter(
@@ -961,7 +975,7 @@ export class EpicEngine {
     const blocker = blockerView(holder, tasksWithRunBranch(runs));
     const waitingOn = (t: TaskDoc) =>
       fanoutWaitingOn(t, (id) => byId.get(id), statuses, blocker);
-    this.noteWatched(epicId, work, mine, statuses, waitingOn);
+    this.noteWatched(milestoneId, work, mine, statuses, waitingOn);
     // The scope includes archived children (see scopeOf); dispatchability
     // must exclude them explicitly. dispatchableTasks releases a dependent at
     // a blocker's review role; a fan-out also wants a branch to stack on.
@@ -970,7 +984,7 @@ export class EpicEngine {
         mine.has(t.meta.id) &&
         t.meta.archivedAt === undefined &&
         waitingOn(t).length === 0 &&
-        !this.holdCritical(session, epicId, t)
+        !this.holdCritical(session, milestoneId, t)
     );
     // A live run's footprint can have grown past its task's declared writes
     // (see Orchestrator.liveClaims) — a newly-ready task must avoid that too.
@@ -991,7 +1005,7 @@ export class EpicEngine {
       const estimate = loadConfig(this.ctx.rootDir).orchestrator
         .runCostEstimateUsd;
       const spend = this.sessionSpend(
-        epicId,
+        milestoneId,
         session,
         estimate,
         new Set(scope.map((c) => c.meta.id))
@@ -1001,7 +1015,7 @@ export class EpicEngine {
         // No future terminal can free a run, so this pause is final until
         // the human raises the ceiling.
         if (slots <= 0) {
-          this.pauseFor(epicId, 'runs');
+          this.pauseFor(milestoneId, 'runs');
           return;
         }
       }
@@ -1014,7 +1028,7 @@ export class EpicEngine {
         if (slots <= 0) {
           // A live run's settle can raise the allowance (its real cost is
           // usually below the estimate), so only pause once nothing is live.
-          if (liveCount === 0) this.pauseFor(epicId, 'budget');
+          if (liveCount === 0) this.pauseFor(milestoneId, 'budget');
           return;
         }
       }
@@ -1042,7 +1056,7 @@ export class EpicEngine {
           ? null
           : this.ctx.authorship.actsFor(task, session.operator ?? null);
       try {
-        // The epic scheduler's own auto-fill decided this task was next —
+        // The milestone scheduler's own auto-fill decided this task was next —
         // no human pressed dispatch for it specifically, but the run is the
         // starter's work (a legacy session's, the local human's). Through
         // dispatchOrResume, not dispatch: a task whose last run a restart left
@@ -1063,26 +1077,26 @@ export class EpicEngine {
         throw err;
       }
     }
-    if (batch.length > 0) this.emitChanged(epicId);
+    if (batch.length > 0) this.emitChanged(milestoneId);
   }
 
   // A critical-risk child (a publish, a release, a repo-settings change) is
   // never auto-dispatched: the autonomy ladder caps such a task at rung 1
-  // (core/policy.ts RISK_RUNG_CAPS), and the epic scheduler's own fill is an
+  // (core/policy.ts RISK_RUNG_CAPS), and the milestone scheduler's own fill is an
   // auto-decision. It waits for a human to dispatch it by hand, and the hold
-  // is written to the epic's Activity once so it reads as a decision rather
+  // is written to the milestone's Activity once so it reads as a decision rather
   // than a child that silently never starts. Returns true when held.
   private holdCritical(
-    session: EpicSessionRecord,
-    epicId: string,
+    session: MilestoneSessionRecord,
+    milestoneId: string,
     task: TaskDoc
   ): boolean {
     if (task.meta.risk !== 'critical') return false;
     if (!session.heldCritical.has(task.meta.id)) {
       session.heldCritical.add(task.meta.id);
       this.persist();
-      this.appendEpicActivity(
-        epicId,
+      this.appendMilestoneActivity(
+        milestoneId,
         `holding ${task.meta.id} for explicit human dispatch — critical-risk work is never auto-dispatched`,
         'none'
       );
@@ -1090,24 +1104,24 @@ export class EpicEngine {
     return true;
   }
 
-  // True once none of an epic's children is still pending work: nothing sits
+  // True once none of a milestone's children is still pending work: nothing sits
   // at `ready` (unstarted, whether or not it's currently dispatchable) or
   // `working`, no child has a run still live (a review or verify run on a
   // child parked at `review` is still this session's work), and no child's
   // fix loop is mid-round. This deliberately does NOT wait for a human review
   // action (merge/discard/PR) to flip a task all the way to `landed`; the
-  // epic's own dispatch work is done once nothing is left running or
+  // milestone's own dispatch work is done once nothing is left running or
   // runnable. A session with only capped loops left stays active — those
-  // wait on a ruling, which is the human's queue. An epic with zero children
+  // wait on a ruling, which is the human's queue. A milestone with zero children
   // never "completes" on its own (there is nothing to wait on, but also
   // nothing accomplished). A teammate's task is theirs to finish: only the
   // session's own work waiting on it keeps the session open.
-  private isEpicComplete(epicId: string): boolean {
-    const scope = this.scopeOf(epicId);
+  private isMilestoneComplete(milestoneId: string): boolean {
+    const scope = this.scopeOf(milestoneId);
     if (scope.length === 0) return false;
-    const children = this.ownWork(epicId, scope, this.cacheLookup());
+    const children = this.ownWork(milestoneId, scope, this.cacheLookup());
     const statuses = statusModelFor(this.ctx.rootDir);
-    const { holder } = this.holderFor(this.sessions.get(epicId));
+    const { holder } = this.holderFor(this.sessions.get(milestoneId));
     if (
       children.some(
         (c) =>
@@ -1134,56 +1148,56 @@ export class EpicEngine {
     return !loopInFlight;
   }
 
-  private completeEpic(epicId: string): void {
-    const session = this.sessions.get(epicId);
+  private completeMilestone(milestoneId: string): void {
+    const session = this.sessions.get(milestoneId);
     if (session?.state !== 'active') return;
     const now = new Date().toISOString();
     session.state = 'complete';
     session.completedAt = now;
     session.updatedAt = now;
-    this.armed.delete(epicId);
-    this.watching.delete(epicId);
-    this.clearFillRetry(epicId);
-    this.appendEpicActivity(
-      epicId,
-      'epic dispatch session ended — no children left to dispatch',
+    this.armed.delete(milestoneId);
+    this.watching.delete(milestoneId);
+    this.clearFillRetry(milestoneId);
+    this.appendMilestoneActivity(
+      milestoneId,
+      'milestone dispatch session ended — no children left to dispatch',
       'none'
     );
     this.persist();
-    this.emitChanged(epicId);
+    this.emitChanged(milestoneId);
   }
 
-  // The tasks `epicId`'s fan-out covers (core's fanoutScope): exactly what
+  // The tasks `milestoneId`'s fan-out covers (core's fanoutScope): exactly what
   // its Flight Plan draws, a project's milestone issues included — unless a
   // live session keeps the direct-children rule it was started under.
   // Includes archived ones: progress/completeness are historical facts about
-  // the epic, and an archived child is done+pushed, not missing.
+  // the milestone, and an archived child is done+pushed, not missing.
   // Walks the cache unless given a board's `childrenOf` (progress reads
   // body-less items).
   private scopeOf(
-    epicId: string,
+    milestoneId: string,
     childrenOf?: undefined,
-    rule?: EpicSessionScope
+    rule?: MilestoneSessionScope
   ): TaskDoc[];
   private scopeOf<T extends TaskListItem>(
-    epicId: string,
+    milestoneId: string,
     childrenOf: (id: string) => readonly T[],
-    rule?: EpicSessionScope
+    rule?: MilestoneSessionScope
   ): T[];
   private scopeOf(
-    epicId: string,
+    milestoneId: string,
     childrenOf: (id: string) => readonly TaskListItem[] = (id) =>
       this.ctx.cache.query({ parent: id, includeArchived: true }),
-    rule: EpicSessionScope = this.scopeRuleOf(epicId)
+    rule: MilestoneSessionScope = this.scopeRuleOf(milestoneId)
   ): TaskListItem[] {
     return rule === 'direct'
-      ? childrenOf(epicId).filter((t) => !isContainerKind(t.meta.kind))
-      : fanoutScope(epicId, childrenOf);
+      ? childrenOf(milestoneId).filter((t) => !isContainerKind(t.meta.kind))
+      : fanoutScope(milestoneId, childrenOf);
   }
 
   // A live session's scope rule; `plan` for any fan-out yet to start.
-  private scopeRuleOf(epicId: string): EpicSessionScope {
-    const session = this.sessions.get(epicId);
+  private scopeRuleOf(milestoneId: string): MilestoneSessionScope {
+    const session = this.sessions.get(milestoneId);
     return session !== undefined && isLive(session) ? session.scope : 'plan';
   }
 
@@ -1200,7 +1214,7 @@ export class EpicEngine {
   // session covers. start() refuses overlapping sessions, so this only bites
   // on sessions persisted before a scope reached past direct children.
   private ownWork(
-    epicId: string,
+    milestoneId: string,
     scope: TaskDoc[],
     lookup: (id: string) => TaskDoc | null | undefined
   ): TaskDoc[] {
@@ -1209,24 +1223,26 @@ export class EpicEngine {
       return session !== undefined && isLive(session);
     };
     if (
-      ![...this.sessions.keys()].some((id) => id !== epicId && liveSession(id))
+      ![...this.sessions.keys()].some(
+        (id) => id !== milestoneId && liveSession(id)
+      )
     ) {
       return scope;
     }
     return scope.filter(
-      (task) => fanoutCoverers(task, lookup).find(liveSession) === epicId
+      (task) => fanoutCoverers(task, lookup).find(liveSession) === milestoneId
     );
   }
 
   // One fan-out per task: refuses a start whose scope shares a task with
   // another active or paused session, such as a project's and one of its
   // milestones'.
-  private refuseOverlap(epicId: string): void {
+  private refuseOverlap(milestoneId: string): void {
     let mine: ReadonlySet<string> | null = null;
     for (const [otherId, other] of this.sessions) {
-      if (otherId === epicId || !isLive(other)) continue;
+      if (otherId === milestoneId || !isLive(other)) continue;
       mine ??= new Set(
-        this.scopeOf(epicId, undefined, 'plan').map((t) => t.meta.id)
+        this.scopeOf(milestoneId, undefined, 'plan').map((t) => t.meta.id)
       );
       const scope = mine;
       const shared = this.scopeOf(otherId).filter((t) =>
@@ -1234,7 +1250,7 @@ export class EpicEngine {
       ).length;
       if (shared > 0) {
         throw new OrchestratorConflictError(
-          `fan-out would overlap ${otherId}'s ${other.state} session on ${shared} task(s) — stop that one first: ${epicId}`
+          `fan-out would overlap ${otherId}'s ${other.state} session on ${shared} task(s) — stop that one first: ${milestoneId}`
         );
       }
     }
@@ -1243,7 +1259,7 @@ export class EpicEngine {
   // Who holds a task against `session` (core's fanoutHolder): the teammate
   // it belongs to, or null when the session may start it. Without a session,
   // the local human's view.
-  private holderFor(session: EpicSessionRecord | undefined): {
+  private holderFor(session: MilestoneSessionRecord | undefined): {
     dispatcher: string;
     holder: (task: TaskListItem) => string | null;
   } {
@@ -1259,7 +1275,7 @@ export class EpicEngine {
   // Records, for onTasksChanged, the blockers the session's own unstarted
   // work (`mine`) still waits on and the unstarted tasks a teammate holds.
   private noteWatched(
-    epicId: string,
+    milestoneId: string,
     work: readonly TaskDoc[],
     mine: ReadonlySet<string>,
     statuses: StatusModel,
@@ -1275,7 +1291,7 @@ export class EpicEngine {
       }
       for (const id of waitingOn(task)) watched.waiting.add(id);
     }
-    this.watching.set(epicId, watched);
+    this.watching.set(milestoneId, watched);
   }
 
   // Work can free up outside any run: a teammate's issue landing through
@@ -1285,9 +1301,9 @@ export class EpicEngine {
   private onTasksChanged(ids: readonly string[] | undefined): void {
     let statuses: StatusModel | null = null;
     let withRunBranch: Set<string> | null = null;
-    for (const [epicId, { waiting, held }] of this.watching) {
-      if (!this.armed.has(epicId)) continue;
-      const session = this.sessions.get(epicId);
+    for (const [milestoneId, { waiting, held }] of this.watching) {
+      if (!this.armed.has(milestoneId)) continue;
+      const session = this.sessions.get(milestoneId);
       if (session?.state !== 'active') continue;
       const touched = (set: ReadonlySet<string>) =>
         ids === undefined ? [...set] : ids.filter((id) => set.has(id));
@@ -1314,22 +1330,24 @@ export class EpicEngine {
           isUnstartedStatus(task.meta.status, model)
         );
       });
-      if (released || handedBack) this.scheduleFill(epicId);
+      if (released || handedBack) this.scheduleFill(milestoneId);
     }
   }
 
-  private requireEpic(epicId: string): TaskDoc {
-    const epic = this.ctx.store.get(epicId);
-    if (epic === null) {
-      throw new OrchestratorNotFoundError(`epic not found: ${epicId}`);
+  private requireMilestone(milestoneId: string): TaskDoc {
+    const milestone = this.ctx.store.get(milestoneId);
+    if (milestone === null) {
+      throw new OrchestratorNotFoundError(
+        `milestone not found: ${milestoneId}`
+      );
     }
     if (
-      !isContainerKind(epic.meta.kind) &&
-      !this.ctx.cache.isContainer(epicId)
+      !isContainerKind(milestone.meta.kind) &&
+      !this.ctx.cache.isContainer(milestoneId)
     ) {
-      throw new OrchestratorClientError(`not a container: ${epicId}`);
+      throw new OrchestratorClientError(`not a container: ${milestoneId}`);
     }
-    return epic;
+    return milestone;
   }
 
   private validateConcurrency(value: number, maxConcurrency: number): number {
@@ -1341,44 +1359,44 @@ export class EpicEngine {
     return value;
   }
 
-  // `actor` credits who caused this epic-level Activity line: omitted
+  // `actor` credits who caused this milestone-level Activity line: omitted
   // defaults to the daemon's human (start()/pause()/resume()/stop() are all
   // only ever reached through the API), while a mechanical line (an
   // auto-fill completing, a ceiling pause, a hook error) passes 'none'
   // explicitly at its own call site.
-  private appendEpicActivity(
-    epicId: string,
+  private appendMilestoneActivity(
+    milestoneId: string,
     text: string,
     actor?: string
   ): void {
     const now = new Date().toISOString();
     this.ctx.store.update(
-      epicId,
+      milestoneId,
       {
-        appendActivity: `${now} [epic] ${text}`,
+        appendActivity: `${now} [milestone] ${text}`,
         activityActor: actor ?? this.ctx.actorContext?.humanRef,
       },
       now
     );
-    this.ctx.cache.refresh(this.ctx.store, [epicId]);
-    this.ctx.events.broadcast({ type: 'task.changed', ids: [epicId] });
+    this.ctx.cache.refresh(this.ctx.store, [milestoneId]);
+    this.ctx.events.broadcast({ type: 'task.changed', ids: [milestoneId] });
   }
 
-  // The `epic.changed` refetch signal, debounced per epic on a trailing
+  // The `milestone.changed` refetch signal, debounced per milestone on a trailing
   // timer so a wave's terminal storm is one refetch. A window of 0 (the test
   // seam) broadcasts synchronously.
-  private emitChanged(epicId: string): void {
+  private emitChanged(milestoneId: string): void {
     if (this.eventDebounceMs === 0) {
-      this.ctx.events.broadcast({ type: 'epic.changed', epicId });
+      this.ctx.events.broadcast({ type: 'milestone.changed', milestoneId });
       return;
     }
-    clearTimeout(this.changedTimers.get(epicId));
+    clearTimeout(this.changedTimers.get(milestoneId));
     const timer = setTimeout(() => {
-      this.changedTimers.delete(epicId);
-      this.ctx.events.broadcast({ type: 'epic.changed', epicId });
+      this.changedTimers.delete(milestoneId);
+      this.ctx.events.broadcast({ type: 'milestone.changed', milestoneId });
     }, this.eventDebounceMs);
     timer.unref?.();
-    this.changedTimers.set(epicId, timer);
+    this.changedTimers.set(milestoneId, timer);
   }
 
   // Write-through persistence, called on every session transition and held
@@ -1391,20 +1409,20 @@ export class EpicEngine {
     try {
       mkdirSync(runsDir(this.ctx.rootDir), { recursive: true });
       const sessions: Record<string, PersistedSessionRecord> = {};
-      for (const [epicId, session] of this.sessions) {
-        sessions[epicId] = {
+      for (const [milestoneId, session] of this.sessions) {
+        sessions[milestoneId] = {
           ...session,
           heldCritical: [...session.heldCritical],
         };
       }
-      const snapshot: EpicSessionsSnapshot = { version: 1, sessions };
+      const snapshot: MilestoneSessionsSnapshot = { version: 1, sessions };
       writeFileSync(
-        epicSessionsPath(this.ctx.rootDir),
+        milestoneSessionsPath(this.ctx.rootDir),
         `${JSON.stringify(snapshot)}\n`
       );
     } catch (err) {
       console.error(
-        `dispatchd: failed to persist epic sessions: ${(err as Error).message}`
+        `dispatchd: failed to persist milestone sessions: ${(err as Error).message}`
       );
     }
   }
@@ -1414,16 +1432,16 @@ export class EpicEngine {
   // is missing the fields a fill needs) is dropped rather than trusted. Every
   // hydrated `active` session starts unarmed — resumeOnBoot() arms it.
   private hydrate(): void {
-    const path = epicSessionsPath(this.ctx.rootDir);
+    const path = milestoneSessionsPath(this.ctx.rootDir);
     if (!existsSync(path)) return;
-    let parsed: Partial<EpicSessionsSnapshot>;
+    let parsed: Partial<MilestoneSessionsSnapshot>;
     try {
       parsed = JSON.parse(
         readFileSync(path, 'utf8')
-      ) as Partial<EpicSessionsSnapshot>;
+      ) as Partial<MilestoneSessionsSnapshot>;
     } catch (err) {
       console.error(
-        `dispatchd: failed to read epic sessions, starting empty: ${(err as Error).message}`
+        `dispatchd: failed to read milestone sessions, starting empty: ${(err as Error).message}`
       );
       return;
     }
@@ -1434,7 +1452,7 @@ export class EpicEngine {
       typeof parsed.sessions === 'object'
         ? parsed.sessions
         : {};
-    for (const [epicId, raw] of Object.entries(sessions)) {
+    for (const [milestoneId, raw] of Object.entries(sessions)) {
       const record = raw as Partial<PersistedSessionRecord> | null;
       if (
         record === null ||
@@ -1448,7 +1466,7 @@ export class EpicEngine {
       ) {
         continue;
       }
-      this.sessions.set(epicId, {
+      this.sessions.set(milestoneId, {
         concurrency: record.concurrency as number,
         executor: record.executor,
         state: record.state,
@@ -1485,11 +1503,11 @@ export class EpicEngine {
   }
 
   private publicSession(
-    epicId: string,
-    session: EpicSessionRecord
-  ): EpicSession {
+    milestoneId: string,
+    session: MilestoneSessionRecord
+  ): MilestoneSession {
     return {
-      epicId,
+      milestoneId,
       concurrency: session.concurrency,
       executor: session.executor,
       state: session.state,

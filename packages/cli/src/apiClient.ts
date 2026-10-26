@@ -149,7 +149,7 @@ interface PlannedTask {
 }
 
 export interface PlanProposal {
-  epic?: { title: string; description: string };
+  milestone?: { title: string; description: string };
   tasks: PlannedTask[];
 }
 
@@ -181,24 +181,24 @@ export interface PlanRecord {
 }
 
 interface ConfirmResult {
-  epicId?: string;
+  milestoneId?: string;
   taskIds: string[];
 }
 
-// Mirrors EpicSessionState / EpicPauseReason in
-// packages/server/src/orchestrator/epic.ts.
-type EpicSessionState = 'active' | 'paused' | 'stopped' | 'complete';
-type EpicPauseReason = 'human' | 'budget' | 'runs' | 'fill-failed';
+// Mirrors MilestoneSessionState / MilestonePauseReason in
+// packages/server/src/orchestrator/milestone.ts.
+type MilestoneSessionState = 'active' | 'paused' | 'stopped' | 'complete';
+type MilestonePauseReason = 'human' | 'budget' | 'runs' | 'fill-failed';
 
-// Mirrors EpicSession in packages/server/src/orchestrator/epic.ts — the body
-// of `POST /api/epics/:id/dispatch`, `/pause`, `/resume` and `/stop`.
-export interface EpicSession {
-  epicId: string;
+// Mirrors MilestoneSession in packages/server/src/orchestrator/milestone.ts — the body
+// of `POST /api/milestones/:id/dispatch`, `/pause`, `/resume` and `/stop`.
+export interface MilestoneSession {
+  milestoneId: string;
   concurrency: number;
   executor: string;
-  state: EpicSessionState;
+  state: MilestoneSessionState;
   // Set while paused, cleared on resume.
-  pausedReason?: EpicPauseReason;
+  pausedReason?: MilestonePauseReason;
   // The message behind a `fill-failed` pause.
   pausedDetail?: string;
   // `null` = no ceiling.
@@ -207,13 +207,13 @@ export interface EpicSession {
   startedAt: string;
   updatedAt: string;
   completedAt?: string;
-  // `state === 'active'` — what `formatEpicProgress` and `--watch` key on.
+  // `state === 'active'` — what `formatMilestoneProgress` and `--watch` key on.
   active: boolean;
 }
 
-// Mirrors EpicSpend in packages/server/src/orchestrator/epicPhase.ts: what
+// Mirrors MilestoneSpend in packages/server/src/orchestrator/milestonePhase.ts: what
 // one session has spent and started, against its ceilings.
-export interface EpicSpend {
+export interface MilestoneSpend {
   // Σ `RunMeta.costUsd` over the session's runs (stamped at finish).
   settledUsd: number;
   // Non-terminal session runs, any kind.
@@ -226,10 +226,10 @@ export interface EpicSpend {
   maxRuns: number | null;
 }
 
-// Mirrors EpicChildPhase in packages/server/src/orchestrator/epicPhase.ts:
-// where a child stands inside its epic's fan-out, derived server-side so the
+// Mirrors MilestoneChildPhase in packages/server/src/orchestrator/milestonePhase.ts:
+// where a child stands inside its milestone's fan-out, derived server-side so the
 // CLI and desktop agree.
-type EpicChildPhase =
+type MilestoneChildPhase =
   | 'draft'
   | 'waiting'
   | 'queued'
@@ -245,13 +245,13 @@ type EpicChildPhase =
   | 'landed'
   | 'dropped';
 
-// Mirrors EpicProgressChild in packages/server/src/orchestrator/epicPhase.ts.
-export interface EpicProgressChild {
+// Mirrors MilestoneProgressChild in packages/server/src/orchestrator/milestonePhase.ts.
+export interface MilestoneProgressChild {
   id: string;
   title: string;
   status: string;
-  phase: EpicChildPhase;
-  // Depth along `blockedBy` edges inside the epic, 1-based.
+  phase: MilestoneChildPhase;
+  // Depth along `blockedBy` edges inside the milestone, 1-based.
   wave: number;
   reason?: string;
   // The live run, else the latest one.
@@ -261,31 +261,31 @@ export interface EpicProgressChild {
   openFindings: number;
 }
 
-// Mirrors EpicWave in packages/server/src/orchestrator/epicPhase.ts.
-interface EpicWave {
+// Mirrors MilestoneWave in packages/server/src/orchestrator/milestonePhase.ts.
+interface MilestoneWave {
   index: number;
   total: number;
-  byPhase: Partial<Record<EpicChildPhase, number>>;
+  byPhase: Partial<Record<MilestoneChildPhase, number>>;
 }
 
-// Mirrors EpicProgress in packages/server/src/orchestrator/epic.ts — the
-// body of `GET /api/epics/:id/progress`.
-export interface EpicProgress {
-  epicId: string;
+// Mirrors MilestoneProgress in packages/server/src/orchestrator/milestone.ts — the
+// body of `GET /api/milestones/:id/progress`.
+export interface MilestoneProgress {
+  milestoneId: string;
   active: boolean;
   concurrency?: number;
-  // `null` until the epic's first `startEpic`.
-  session: EpicSession | null;
+  // `null` until the milestone's first `startMilestone`.
+  session: MilestoneSession | null;
   // For the session's runs, or for every child run when there is none.
-  spend: EpicSpend;
-  children: EpicProgressChild[];
-  waves: EpicWave[];
+  spend: MilestoneSpend;
+  children: MilestoneProgressChild[];
+  waves: MilestoneWave[];
   liveRuns: RunMeta[];
 }
 
-// The optional body `startEpic` and `resumeEpic` take. `null` lifts a
+// The optional body `startMilestone` and `resumeMilestone` take. `null` lifts a
 // ceiling; the server ranges every value and 400s out of range.
-interface EpicSessionOptions {
+interface MilestoneSessionOptions {
   concurrency?: number;
   executor?: string;
   maxSpendUsd?: number | null;
@@ -302,8 +302,12 @@ export type ServerEvent =
   | { type: 'run.log'; runId: string; entry: NormalizedEntry }
   | { type: 'message.new'; message: Message }
   | { type: 'plan.changed'; planId: string }
-  | { type: 'epic.changed'; epicId: string }
-  | { type: 'epic.paused'; epicId: string; reason: EpicPauseReason };
+  | { type: 'milestone.changed'; milestoneId: string }
+  | {
+      type: 'milestone.paused';
+      milestoneId: string;
+      reason: MilestonePauseReason;
+    };
 
 // Mirrors Message in packages/protocol/src/envelope.ts. A gate is a blocking
 // question whose `data.type` names what answering it decides.
@@ -461,7 +465,7 @@ interface TaskListQuery {
  * dispatchd is a project's single writer, so when one is running the CLI asks
  * it for task CRUD instead of opening the store itself (see commands/task.ts
  * for what happens when none is). That is a different concern from the run /
- * plan / epic surface `ApiClient` covers, and separating them means a caller
+ * plan / milestone surface `ApiClient` covers, and separating them means a caller
  * — or a test double — only has to satisfy the half it actually uses.
  */
 export interface TaskApiClient {
@@ -720,19 +724,22 @@ export interface ApiClient {
   getPlan(planId: string): Promise<PlanRecord>;
   sendPlanMessage(planId: string, text: string): Promise<PlanRecord>;
   confirmPlan(planId: string, proposal: PlanProposal): Promise<ConfirmResult>;
-  startEpic(epicId: string, opts?: EpicSessionOptions): Promise<EpicSession>;
+  startMilestone(
+    milestoneId: string,
+    opts?: MilestoneSessionOptions
+  ): Promise<MilestoneSession>;
   // Holds new dispatches; live runs finish on their own.
-  pauseEpic(epicId: string): Promise<EpicSession>;
+  pauseMilestone(milestoneId: string): Promise<MilestoneSession>;
   // Lifts a pause, optionally setting new ceilings on the way back.
   // `executor` is fixed for a session's life, so resume never takes one.
-  resumeEpic(
-    epicId: string,
-    opts?: Omit<EpicSessionOptions, 'executor'>
-  ): Promise<EpicSession>;
+  resumeMilestone(
+    milestoneId: string,
+    opts?: Omit<MilestoneSessionOptions, 'executor'>
+  ): Promise<MilestoneSession>;
   /** `GET /api/executors`: what the daemon can dispatch on and its default. */
   fetchExecutors(): Promise<ExecutorsResponse>;
-  stopEpic(epicId: string): Promise<EpicSession>;
-  getEpicProgress(epicId: string): Promise<EpicProgress>;
+  stopMilestone(milestoneId: string): Promise<MilestoneSession>;
+  getMilestoneProgress(milestoneId: string): Promise<MilestoneProgress>;
   // The messaging routes refuse the daemon file's agent token: build the
   // client on a human's token (the app token) to call these.
   /** Open blocking questions and gates addressed to a human. */
@@ -1182,15 +1189,23 @@ export function createApiClient(baseUrl: string, token: string): ApiClient {
       request(target, `/api/plan/${planId}/confirm`, {
         ...jsonBody({ proposal }),
       }),
-    startEpic: (epicId, opts = {}) =>
-      request(target, `/api/epics/${epicId}/dispatch`, { ...jsonBody(opts) }),
-    pauseEpic: (epicId) =>
-      request(target, `/api/epics/${epicId}/pause`, { method: 'POST' }),
-    resumeEpic: (epicId, opts = {}) =>
-      request(target, `/api/epics/${epicId}/resume`, { ...jsonBody(opts) }),
+    startMilestone: (milestoneId, opts = {}) =>
+      request(target, `/api/milestones/${milestoneId}/dispatch`, {
+        ...jsonBody(opts),
+      }),
+    pauseMilestone: (milestoneId) =>
+      request(target, `/api/milestones/${milestoneId}/pause`, {
+        method: 'POST',
+      }),
+    resumeMilestone: (milestoneId, opts = {}) =>
+      request(target, `/api/milestones/${milestoneId}/resume`, {
+        ...jsonBody(opts),
+      }),
     fetchExecutors: () => request(target, '/api/executors'),
-    stopEpic: (epicId) =>
-      request(target, `/api/epics/${epicId}/stop`, { ...jsonBody({}) }),
+    stopMilestone: (milestoneId) =>
+      request(target, `/api/milestones/${milestoneId}/stop`, {
+        ...jsonBody({}),
+      }),
     fanoutTask: (taskId, variants) =>
       request(
         target,
@@ -1246,8 +1261,8 @@ export function createApiClient(baseUrl: string, token: string): ApiClient {
       ),
     browserPickResult: (id) =>
       request(target, `/api/browser/${encodeURIComponent(id)}/pick`),
-    getEpicProgress: (epicId) =>
-      request(target, `/api/epics/${epicId}/progress`),
+    getMilestoneProgress: (milestoneId) =>
+      request(target, `/api/milestones/${milestoneId}/progress`),
     openDecisions: () => request(target, '/api/decisions/open'),
     listAgentRoster: () => request(target, '/api/agents/roster'),
     getMessage: (id) =>

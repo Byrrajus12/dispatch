@@ -32,7 +32,7 @@ async function waitFor(
 }
 
 function initDispatchGitRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'dispatch-plan-epic-api-'));
+  const dir = mkdtempSync(join(tmpdir(), 'dispatch-plan-milestone-api-'));
   runGitSync(dir, ['init', '-b', 'main']);
   runGitSync(dir, ['config', 'user.email', 'test@example.com']);
   runGitSync(dir, ['config', 'user.name', 'Test']);
@@ -50,7 +50,10 @@ function fakeApprovalExecutor(): FakeExecutor {
 }
 
 const SAMPLE_PROPOSAL: PlanProposal = {
-  epic: { title: 'Ship the widget', description: 'Build the whole widget.' },
+  milestone: {
+    title: 'Ship the widget',
+    description: 'Build the whole widget.',
+  },
   tasks: [
     {
       title: 'Design',
@@ -592,7 +595,7 @@ describe('POST /api/plan/:id/confirm', () => {
     return (await json(res)).planId as string;
   }
 
-  it('writes the epic + tasks and returns their ids', async () => {
+  it('writes the milestone + tasks and returns their ids', async () => {
     await startWithPlanner(
       new FakePlanner({ ok: true, proposal: SAMPLE_PROPOSAL })
     );
@@ -605,21 +608,21 @@ describe('POST /api/plan/:id/confirm', () => {
     });
     expect(res.status).toBe(200);
     const result = await json(res);
-    expect(result.epicId).toBeDefined();
+    expect(result.milestoneId).toBeDefined();
     expect(result.taskIds).toHaveLength(2);
 
-    const epic = await json(
-      await fetch(`${baseUrl}/api/tasks/${result.epicId}`)
+    const milestone = await json(
+      await fetch(`${baseUrl}/api/tasks/${result.milestoneId}`)
     );
-    expect(epic.meta.kind).toBe('milestone');
-    expect(epic.meta.status).toBe('ready');
+    expect(milestone.meta.kind).toBe('milestone');
+    expect(milestone.meta.status).toBe('ready');
 
-    // The record remembers its epic so a list row can link to the milestone.
+    // The record remembers its milestone so a list row can link to the milestone.
     const plan = await json(await fetch(`${baseUrl}/api/plan/${planId}`));
-    expect(plan.epicId).toBe(result.epicId);
+    expect(plan.milestoneId).toBe(result.milestoneId);
     const rows = await json(await fetch(`${baseUrl}/api/plans`));
-    expect(rows.find((r: { id: string }) => r.id === planId).epicId).toBe(
-      result.epicId
+    expect(rows.find((r: { id: string }) => r.id === planId).milestoneId).toBe(
+      result.milestoneId
     );
   });
 
@@ -784,16 +787,16 @@ describe('POST /api/plan/:id/message', () => {
   });
 });
 
-describe('POST /api/epics/:id/dispatch, /stop, GET /progress', () => {
-  async function createEpicWithChildren(count: number): Promise<{
-    epicId: string;
+describe('POST /api/milestones/:id/dispatch, /stop, GET /progress', () => {
+  async function createMilestoneWithChildren(count: number): Promise<{
+    milestoneId: string;
     childIds: string[];
   }> {
-    const epicRes = await json(
+    const milestoneRes = await json(
       await fetch(`${baseUrl}/api/tasks`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title: 'Test epic', kind: 'epic' }),
+        body: JSON.stringify({ title: 'Test milestone', kind: 'milestone' }),
       })
     );
     const childIds: string[] = [];
@@ -805,27 +808,30 @@ describe('POST /api/epics/:id/dispatch, /stop, GET /progress', () => {
           body: JSON.stringify({
             title: `Child ${i}`,
             kind: 'task',
-            parent: epicRes.meta.id,
+            parent: milestoneRes.meta.id,
             writes: [`child-${i}.ts`],
           }),
         })
       );
       childIds.push(child.meta.id);
     }
-    return { epicId: epicRes.meta.id, childIds };
+    return { milestoneId: milestoneRes.meta.id, childIds };
   }
 
   it('dispatches ready children up to the concurrency cap using the executor override', async () => {
     await startWithPlanner(
       new FakePlanner({ ok: true, proposal: SAMPLE_PROPOSAL })
     );
-    const { epicId } = await createEpicWithChildren(3);
+    const { milestoneId } = await createMilestoneWithChildren(3);
 
-    const res = await fetch(`${baseUrl}/api/epics/${epicId}/dispatch`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ concurrency: 2, executor: 'fake' }),
-    });
+    const res = await fetch(
+      `${baseUrl}/api/milestones/${milestoneId}/dispatch`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ concurrency: 2, executor: 'fake' }),
+      }
+    );
     expect(res.status).toBe(201);
     const session = await json(res);
     expect(session.concurrency).toBe(2);
@@ -833,17 +839,17 @@ describe('POST /api/epics/:id/dispatch, /stop, GET /progress', () => {
 
     await waitFor(async () => {
       const progress = await json(
-        await fetch(`${baseUrl}/api/epics/${epicId}/progress`)
+        await fetch(`${baseUrl}/api/milestones/${milestoneId}/progress`)
       );
       return progress.liveRuns.length === 2;
     });
   });
 
-  it('404s dispatching an unknown epic', async () => {
+  it('404s dispatching an unknown milestone', async () => {
     await startWithPlanner(
       new FakePlanner({ ok: true, proposal: SAMPLE_PROPOSAL })
     );
-    const res = await fetch(`${baseUrl}/api/epics/e-000000/dispatch`, {
+    const res = await fetch(`${baseUrl}/api/milestones/e-000000/dispatch`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
     });
@@ -854,33 +860,36 @@ describe('POST /api/epics/:id/dispatch, /stop, GET /progress', () => {
     await startWithPlanner(
       new FakePlanner({ ok: true, proposal: SAMPLE_PROPOSAL })
     );
-    const { epicId } = await createEpicWithChildren(2);
+    const { milestoneId } = await createMilestoneWithChildren(2);
 
-    await fetch(`${baseUrl}/api/epics/${epicId}/dispatch`, {
+    await fetch(`${baseUrl}/api/milestones/${milestoneId}/dispatch`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ concurrency: 1, executor: 'fake' }),
     });
     await waitFor(async () => {
       const progress = await json(
-        await fetch(`${baseUrl}/api/epics/${epicId}/progress`)
+        await fetch(`${baseUrl}/api/milestones/${milestoneId}/progress`)
       );
       return progress.liveRuns.length === 1;
     });
 
-    const stopRes = await fetch(`${baseUrl}/api/epics/${epicId}/stop`, {
-      method: 'POST',
-    });
+    const stopRes = await fetch(
+      `${baseUrl}/api/milestones/${milestoneId}/stop`,
+      {
+        method: 'POST',
+      }
+    );
     expect(stopRes.status).toBe(200);
     expect((await json(stopRes)).active).toBe(false);
   });
 
-  it('409s stopping an epic with no active session', async () => {
+  it('409s stopping a milestone with no active session', async () => {
     await startWithPlanner(
       new FakePlanner({ ok: true, proposal: SAMPLE_PROPOSAL })
     );
-    const { epicId } = await createEpicWithChildren(1);
-    const res = await fetch(`${baseUrl}/api/epics/${epicId}/stop`, {
+    const { milestoneId } = await createMilestoneWithChildren(1);
+    const res = await fetch(`${baseUrl}/api/milestones/${milestoneId}/stop`, {
       method: 'POST',
     });
     expect(res.status).toBe(409);
@@ -890,22 +899,25 @@ describe('POST /api/epics/:id/dispatch, /stop, GET /progress', () => {
     await startWithPlanner(
       new FakePlanner({ ok: true, proposal: SAMPLE_PROPOSAL })
     );
-    const { epicId } = await createEpicWithChildren(3);
+    const { milestoneId } = await createMilestoneWithChildren(3);
 
-    const res = await fetch(`${baseUrl}/api/epics/${epicId}/dispatch`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        concurrency: 2,
-        executor: 'fake',
-        maxRuns: 3,
-        maxSpendUsd: null,
-      }),
-    });
+    const res = await fetch(
+      `${baseUrl}/api/milestones/${milestoneId}/dispatch`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          concurrency: 2,
+          executor: 'fake',
+          maxRuns: 3,
+          maxSpendUsd: null,
+        }),
+      }
+    );
     expect(res.status).toBe(201);
     const session = await json(res);
     expect(session).toMatchObject({
-      epicId,
+      milestoneId,
       concurrency: 2,
       executor: 'fake',
       state: 'active',
@@ -921,23 +933,29 @@ describe('POST /api/epics/:id/dispatch, /stop, GET /progress', () => {
     await startWithPlanner(
       new FakePlanner({ ok: true, proposal: SAMPLE_PROPOSAL })
     );
-    const { epicId } = await createEpicWithChildren(1);
+    const { milestoneId } = await createMilestoneWithChildren(1);
 
     for (const body of [{ maxRuns: '3' }, { maxSpendUsd: 'lots' }]) {
-      const res = await fetch(`${baseUrl}/api/epics/${epicId}/dispatch`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ executor: 'fake', ...body }),
-      });
+      const res = await fetch(
+        `${baseUrl}/api/milestones/${milestoneId}/dispatch`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ executor: 'fake', ...body }),
+        }
+      );
       expect(res.status).toBe(400);
       expect((await json(res)).error).toContain('expected a number or null');
     }
     // Nothing was left behind: a clean dispatch still 201s.
-    const ok = await fetch(`${baseUrl}/api/epics/${epicId}/dispatch`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ executor: 'fake' }),
-    });
+    const ok = await fetch(
+      `${baseUrl}/api/milestones/${milestoneId}/dispatch`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ executor: 'fake' }),
+      }
+    );
     expect(ok.status).toBe(201);
   });
 
@@ -945,41 +963,53 @@ describe('POST /api/epics/:id/dispatch, /stop, GET /progress', () => {
     await startWithPlanner(
       new FakePlanner({ ok: true, proposal: SAMPLE_PROPOSAL })
     );
-    const { epicId } = await createEpicWithChildren(2);
-    await fetch(`${baseUrl}/api/epics/${epicId}/dispatch`, {
+    const { milestoneId } = await createMilestoneWithChildren(2);
+    await fetch(`${baseUrl}/api/milestones/${milestoneId}/dispatch`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ concurrency: 1, executor: 'fake' }),
     });
 
-    const pauseRes = await fetch(`${baseUrl}/api/epics/${epicId}/pause`, {
-      method: 'POST',
-    });
+    const pauseRes = await fetch(
+      `${baseUrl}/api/milestones/${milestoneId}/pause`,
+      {
+        method: 'POST',
+      }
+    );
     expect(pauseRes.status).toBe(200);
     const paused = await json(pauseRes);
     expect(paused.state).toBe('paused');
     expect(paused.pausedReason).toBe('human');
     expect(paused.active).toBe(false);
 
-    const again = await fetch(`${baseUrl}/api/epics/${epicId}/pause`, {
-      method: 'POST',
-    });
+    const again = await fetch(
+      `${baseUrl}/api/milestones/${milestoneId}/pause`,
+      {
+        method: 'POST',
+      }
+    );
     expect(again.status).toBe(409);
 
     // A paused session refuses a second dispatch — resume or stop it first.
-    const restart = await fetch(`${baseUrl}/api/epics/${epicId}/dispatch`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ executor: 'fake' }),
-    });
+    const restart = await fetch(
+      `${baseUrl}/api/milestones/${milestoneId}/dispatch`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ executor: 'fake' }),
+      }
+    );
     expect(restart.status).toBe(409);
     expect((await json(restart)).error).toContain('paused');
 
-    const resumeRes = await fetch(`${baseUrl}/api/epics/${epicId}/resume`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ maxSpendUsd: 100 }),
-    });
+    const resumeRes = await fetch(
+      `${baseUrl}/api/milestones/${milestoneId}/resume`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ maxSpendUsd: 100 }),
+      }
+    );
     expect(resumeRes.status).toBe(200);
     const resumed = await json(resumeRes);
     expect(resumed.state).toBe('active');
@@ -988,71 +1018,85 @@ describe('POST /api/epics/:id/dispatch, /stop, GET /progress', () => {
     expect(resumed.pausedReason).toBeUndefined();
 
     // Resume needs a paused session, as pause needs an active one.
-    const resumeAgain = await fetch(`${baseUrl}/api/epics/${epicId}/resume`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-    });
+    const resumeAgain = await fetch(
+      `${baseUrl}/api/milestones/${milestoneId}/resume`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      }
+    );
     expect(resumeAgain.status).toBe(409);
   });
 
-  it('409s pausing an epic with no session and 400s a bad resume body', async () => {
+  it('409s pausing a milestone with no session and 400s a bad resume body', async () => {
     await startWithPlanner(
       new FakePlanner({ ok: true, proposal: SAMPLE_PROPOSAL })
     );
-    const { epicId } = await createEpicWithChildren(1);
-    const pauseRes = await fetch(`${baseUrl}/api/epics/${epicId}/pause`, {
-      method: 'POST',
-    });
+    const { milestoneId } = await createMilestoneWithChildren(1);
+    const pauseRes = await fetch(
+      `${baseUrl}/api/milestones/${milestoneId}/pause`,
+      {
+        method: 'POST',
+      }
+    );
     expect(pauseRes.status).toBe(409);
 
-    await fetch(`${baseUrl}/api/epics/${epicId}/dispatch`, {
+    await fetch(`${baseUrl}/api/milestones/${milestoneId}/dispatch`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ executor: 'fake' }),
     });
-    await fetch(`${baseUrl}/api/epics/${epicId}/pause`, { method: 'POST' });
-    const badResume = await fetch(`${baseUrl}/api/epics/${epicId}/resume`, {
+    await fetch(`${baseUrl}/api/milestones/${milestoneId}/pause`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ maxRuns: 'many' }),
     });
+    const badResume = await fetch(
+      `${baseUrl}/api/milestones/${milestoneId}/resume`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ maxRuns: 'many' }),
+      }
+    );
     expect(badResume.status).toBe(400);
     // The bad body did not resume it.
-    const stopRes = await fetch(`${baseUrl}/api/epics/${epicId}/stop`, {
-      method: 'POST',
-    });
+    const stopRes = await fetch(
+      `${baseUrl}/api/milestones/${milestoneId}/stop`,
+      {
+        method: 'POST',
+      }
+    );
     expect(stopRes.status).toBe(200);
     expect((await json(stopRes)).state).toBe('stopped');
   });
 
-  it('GET /api/epics/progress lists every epic with session: null where never started', async () => {
+  it('GET /api/milestones/progress lists every milestone with session: null where never started', async () => {
     await startWithPlanner(
       new FakePlanner({ ok: true, proposal: SAMPLE_PROPOSAL })
     );
-    const started = await createEpicWithChildren(2);
-    const idle = await createEpicWithChildren(1);
-    await fetch(`${baseUrl}/api/epics/${started.epicId}/dispatch`, {
+    const started = await createMilestoneWithChildren(2);
+    const idle = await createMilestoneWithChildren(1);
+    await fetch(`${baseUrl}/api/milestones/${started.milestoneId}/dispatch`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ concurrency: 1, executor: 'fake', maxRuns: 5 }),
     });
     await waitFor(async () => {
       const progress = await json(
-        await fetch(`${baseUrl}/api/epics/${started.epicId}/progress`)
+        await fetch(`${baseUrl}/api/milestones/${started.milestoneId}/progress`)
       );
       return progress.liveRuns.length === 1;
     });
 
-    const res = await fetch(`${baseUrl}/api/epics/progress`);
+    const res = await fetch(`${baseUrl}/api/milestones/progress`);
     expect(res.status).toBe(200);
     const rows = (await json(res)) as Array<Record<string, unknown>>;
     const byId = (a: unknown, b: unknown): number =>
       String(a).localeCompare(String(b));
-    expect(rows.map((r) => r.epicId).sort(byId)).toEqual(
-      [started.epicId, idle.epicId].sort(byId)
+    expect(rows.map((r) => r.milestoneId).sort(byId)).toEqual(
+      [started.milestoneId, idle.milestoneId].sort(byId)
     );
 
-    const active = rows.find((r) => r.epicId === started.epicId)!;
+    const active = rows.find((r) => r.milestoneId === started.milestoneId)!;
     expect(active.active).toBe(true);
     expect((active.session as { state: string }).state).toBe('active');
     expect(active.spend).toMatchObject({
@@ -1076,7 +1120,7 @@ describe('POST /api/epics/:id/dispatch, /stop, GET /progress', () => {
       { index: 1, total: 2, byPhase: { queued: 1, working: 1 } },
     ]);
 
-    const never = rows.find((r) => r.epicId === idle.epicId)!;
+    const never = rows.find((r) => r.milestoneId === idle.milestoneId)!;
     expect(never.session).toBeNull();
     expect(never.active).toBe(false);
     expect(never.spend).toMatchObject({

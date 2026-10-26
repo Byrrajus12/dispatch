@@ -11,8 +11,6 @@ import { join } from 'node:path';
 
 import { ATTACHMENTS_DIR } from './attachments.js';
 import { generateTaskId, isTaskId, taskIdFromFilename } from './ids.js';
-import { canonicalKind } from './kinds.js';
-import type { TaskKindInput } from './kinds.js';
 import { slugify } from './slug.js';
 import { CANONICAL_STATUSES, canonicalStatus } from './status.js';
 import type { TaskStoreBackend } from './storeBackend.js';
@@ -56,7 +54,7 @@ autoCommit: true
 
 export interface CreateInput {
   title: string;
-  kind?: TaskKindInput;
+  kind?: TaskKind;
   status?: string;
   description?: string;
   parent?: string | null;
@@ -154,7 +152,7 @@ export interface UpdatePatch {
 
 export interface ListFilter {
   status?: string;
-  kind?: TaskKindInput;
+  kind?: TaskKind;
   parent?: string;
 }
 
@@ -304,7 +302,6 @@ export function applyUpdatePatch(
   // Write boundary for the status alias layer: an API caller (or old UI)
   // speaking a pre-rename name lands in canonical form.
   meta.status = canonicalStatus(meta.status);
-  meta.kind = canonicalKind(meta.kind) as TaskKind;
   // archivedAt is string|undefined on TaskMeta, so null (clear) is handled
   // separately rather than spread in like the other fields.
   if (archivedAt === null) delete meta.archivedAt;
@@ -502,7 +499,7 @@ export class TaskStore implements TaskStorePort {
   }
 
   create(input: CreateInput, now: string = new Date().toISOString()): TaskDoc {
-    const kind = canonicalKind(input.kind ?? 'task') as TaskKind;
+    const kind = input.kind ?? 'task';
     let id = generateTaskId(kind, input.title, now);
     for (let attempt = 1; this.idTaken(id); attempt++) {
       if (attempt > 5) throw new Error(`id collision persisted: ${id}`);
@@ -588,9 +585,7 @@ export class TaskStore implements TaskStorePort {
           : true
       )
       .filter((d) =>
-        filter.kind !== undefined
-          ? d.meta.kind === canonicalKind(filter.kind)
-          : true
+        filter.kind !== undefined ? d.meta.kind === filter.kind : true
       )
       .filter((d) =>
         filter.parent !== undefined ? d.meta.parent === filter.parent : true

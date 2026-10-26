@@ -147,9 +147,9 @@ describe('events mirror dispatchd', () => {
     expect(member(clientSource())).toEqual(server);
   });
 
-  it('epic.paused declares the same fields with the same optionality', () => {
+  it('milestone.paused declares the same fields with the same optionality', () => {
     const member = (source: string): string[] | null => {
-      const body = /\{\n {6}type: 'epic\.paused';([\s\S]*?)\n {4}\}/.exec(
+      const body = /\{\n {6}type: 'milestone\.paused';([\s\S]*?)\n {4}\}/.exec(
         source
       )?.[1];
       if (body === undefined) return null;
@@ -226,24 +226,24 @@ describe('plan types mirror dispatchd', () => {
     expect(client).toEqual(server);
   });
 
-  it('PlanRecord.epicId is optional on both sides', () => {
+  it('PlanRecord.milestoneId is optional on both sides', () => {
     const server = fields(
       serverSource('orchestrator', 'plan.ts'),
       'PlanRecord'
     );
     const client = fields(clientSource(), 'PlanRecord');
-    expect(server).toContain('epicId?');
-    expect(client).toContain('epicId?');
+    expect(server).toContain('milestoneId?');
+    expect(client).toContain('milestoneId?');
   });
 });
 
-describe('epic types mirror dispatchd', () => {
+describe('milestone types mirror dispatchd', () => {
   for (const [iface, file] of [
-    ['EpicSession', 'epic.ts'],
-    ['EpicProgress', 'epic.ts'],
-    ['EpicSpend', 'epicPhase.ts'],
-    ['EpicProgressChild', 'epicPhase.ts'],
-    ['EpicWave', 'epicPhase.ts'],
+    ['MilestoneSession', 'milestone.ts'],
+    ['MilestoneProgress', 'milestone.ts'],
+    ['MilestoneSpend', 'milestonePhase.ts'],
+    ['MilestoneProgressChild', 'milestonePhase.ts'],
+    ['MilestoneWave', 'milestonePhase.ts'],
   ] as const) {
     it(`${iface} declares the same fields with the same optionality`, () => {
       const server = fields(serverSource('orchestrator', file), iface);
@@ -254,9 +254,9 @@ describe('epic types mirror dispatchd', () => {
   }
 
   for (const [name, file] of [
-    ['EpicSessionState', 'epic.ts'],
-    ['EpicPauseReason', 'epic.ts'],
-    ['EpicChildPhase', 'epicPhase.ts'],
+    ['MilestoneSessionState', 'milestone.ts'],
+    ['MilestonePauseReason', 'milestone.ts'],
+    ['MilestoneChildPhase', 'milestonePhase.ts'],
   ] as const) {
     it(`${name} carries the same literals as the server`, () => {
       // The server keeps a union file-private once nothing else in the daemon

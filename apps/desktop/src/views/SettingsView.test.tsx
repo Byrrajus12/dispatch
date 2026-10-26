@@ -242,7 +242,7 @@ test('a search that names a group shows the whole group', () => {
   search('limits');
   for (const label of [
     'Runs at once',
-    'Runs at once per epic',
+    'Runs at once per milestone',
     'Turns per run',
     'Spend per run',
     'Expected cost per run',

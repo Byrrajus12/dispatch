@@ -26,7 +26,7 @@ export const testConfig: DispatchConfig = {
   autoCommit: false,
   orchestrator: {
     permissionMode: 'auto',
-    epicConcurrency: 3,
+    milestoneConcurrency: 3,
     verifyTimeoutSec: 600,
     maxConcurrency: 16,
     runCostEstimateUsd: 10,

@@ -76,7 +76,7 @@ function task(
 function dataWith(
   tasks: TaskDoc[],
   calls: DispatchCall[] = [],
-  epics: TaskDoc[] = []
+  milestones: TaskDoc[] = []
 ): DispatchProjectData {
   return {
     config: testConfig,
@@ -84,8 +84,8 @@ function dataWith(
     tasksIncludingArchived: tasks,
     archivedTasks: [],
     showArchived: false,
-    epics,
-    epicProgressById: new Map(),
+    milestones,
+    milestoneProgressById: new Map(),
     readyIds: new Set(tasks.map((t) => t.meta.id)),
     latestRunByTaskId: new Map(),
     liveRunStateByTaskId: new Map(),
@@ -339,10 +339,14 @@ test('groups by status in config order by default, with a tinted header and a + 
   expect(log.presets).toEqual([{ status: 'ready' }]);
 });
 
-test('a task under an epic in the same group nests 24px under it with a dimmer tree row', () => {
-  const epic = task('e-1', 'Payments epic', { kind: 'milestone' });
+test('a task under a milestone in the same group nests 24px under it with a dimmer tree row', () => {
+  const milestone = task('e-1', 'Payments milestone', { kind: 'milestone' });
   const { container } = renderList(
-    dataWith([epic, task('t-1', 'Charge card', { parent: 'e-1' })], [], [epic])
+    dataWith(
+      [milestone, task('t-1', 'Charge card', { parent: 'e-1' })],
+      [],
+      [milestone]
+    )
   );
 
   const rows = Array.from(
@@ -353,10 +357,10 @@ test('a task under an epic in the same group nests 24px under it with a dimmer t
   expect(
     rows[1]?.querySelector('[data-slot="list-row-connector"]')
   ).not.toBeNull();
-  // The epic row carries the `▶ N` sub-task count pill; the child wears the epic chip.
+  // The milestone row carries the `▶ N` sub-task count pill; the child wears the milestone chip.
   expect(rowById('e-1').querySelector('[title="1 sub-tasks"]')).not.toBeNull();
   expect(
-    rowById('t-1').querySelector('[title="Payments epic"]')
+    rowById('t-1').querySelector('[title="Payments milestone"]')
   ).not.toBeNull();
 });
 
@@ -497,7 +501,6 @@ test('the context menu offers the property submenus, open/peek/dispatch/copy, ar
     'Priority',
     'Assignee',
     'Labels',
-    'Epic',
     'Milestone',
     'Open',
     'Peek',
@@ -593,20 +596,20 @@ test('collapsing a group hides its rows and takes them out of the keyboard order
 });
 
 test('display prefs drive grouping and which properties a row shows', () => {
-  const epic = task('e-1', 'Payments epic', { kind: 'milestone' });
+  const milestone = task('e-1', 'Payments milestone', { kind: 'milestone' });
   const Shell = shellWith(shellLog());
   const { container } = render(
     <Shell>
       <TasksListView
         data={dataWith(
-          [epic, task('t-1', 'Charge card', { parent: 'e-1' })],
+          [milestone, task('t-1', 'Charge card', { parent: 'e-1' })],
           [],
-          [epic]
+          [milestone]
         )}
         onSelectTask={() => {}}
         display={{
           ...DEFAULT_TASKS_DISPLAY,
-          grouping: 'epic',
+          grouping: 'parent',
           properties: new Set(['status']),
         }}
       />
@@ -615,7 +618,7 @@ test('display prefs drive grouping and which properties a row shows', () => {
 
   expect(
     container.querySelector('[data-slot="group-header-name"]')?.textContent
-  ).toBe('Payments epic');
+  ).toBe('Payments milestone');
   const row = rowOf('Charge card');
   expect(row.querySelector('[data-slot="list-row-id"]')).toBeNull();
   expect(row.querySelector('[data-slot="list-row-date"]')).toBeNull();

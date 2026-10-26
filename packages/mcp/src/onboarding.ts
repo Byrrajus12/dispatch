@@ -10,7 +10,7 @@ safely — you never need to edit them directly, though you can if you want to
 
 ## Ids
 
-Task ids look like \`t-1a2b3c\` (tasks) or \`e-1a2b3c\` (epics) — a one-letter
+Task ids look like \`t-1a2b3c\` (tasks) or \`e-1a2b3c\` (milestones) — a one-letter
 kind prefix, a hyphen, six hex characters. Ids are assigned on creation and
 never change.
 

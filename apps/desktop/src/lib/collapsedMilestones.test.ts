@@ -9,7 +9,7 @@ import {
   toggleCollapsedGroup,
   TOGGLED_MILESTONES_STORAGE_KEY,
   writeCollapsedGroups,
-} from './collapsedEpics';
+} from './collapsedMilestones';
 
 describe('parseCollapsedGroups', () => {
   test('an unset value means nothing is collapsed', () => {
@@ -79,13 +79,16 @@ describe('storage key', () => {
   });
 });
 
-// The list's groups are keyed by kind and id (`status:ready`, `epic:e-1`), not by epic alone;
+// The list's groups are keyed by kind and id (`status:ready`, `milestone:e-1`), not by milestone alone;
 // the helpers take any string.
 describe('collapsed groups', () => {
   test('any group key round-trips', () => {
-    const keys = toggleCollapsedGroup(new Set(['status:ready']), 'epic:e-1');
+    const keys = toggleCollapsedGroup(
+      new Set(['status:ready']),
+      'milestone:e-1'
+    );
     expect(parseCollapsedGroups(serializeCollapsedGroups(keys))).toEqual(
-      new Set(['epic:e-1', 'status:ready'])
+      new Set(['milestone:e-1', 'status:ready'])
     );
   });
 

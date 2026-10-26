@@ -12,16 +12,16 @@ import type { FixLoopState } from './fixLoop.js';
 import type { RunMeta } from './types.js';
 import { runKind, TERMINAL_RUN_STATES } from './types.js';
 
-// The pure half of the epic engine: the per-child phase, wave and spend
-// derivations `EpicEngine.progress()` and its fill gate compute from data
+// The pure half of the milestone engine: the per-child phase, wave and spend
+// derivations `MilestoneEngine.progress()` and its fill gate compute from data
 // that lives elsewhere (task status, the run registry, fix loops, findings).
 // Nothing here is stored — every value is recomputed on read so a restart
-// reproduces it exactly. `epic.ts` re-exports the types so the API keeps one
+// reproduces it exactly. `milestone.ts` re-exports the types so the API keeps one
 // import.
 
-/** Where a child stands inside its epic's fan-out, first match wins in
+/** Where a child stands inside its milestone's fan-out, first match wins in
  *  `deriveChildPhase`'s order. Server-derived so the CLI and desktop agree. */
-type EpicChildPhase =
+type MilestoneChildPhase =
   | 'draft'
   | 'waiting'
   | 'queued'
@@ -38,7 +38,7 @@ type EpicChildPhase =
   | 'dropped';
 
 /** What one session has spent and started, against its ceilings. */
-export interface EpicSpend {
+export interface MilestoneSpend {
   /** Σ `RunMeta.costUsd` over the session's runs (stamped at finish). */
   settledUsd: number;
   /** Non-terminal session runs, any kind. */
@@ -51,11 +51,11 @@ export interface EpicSpend {
   maxRuns: number | null;
 }
 
-export interface EpicProgressChild {
+export interface MilestoneProgressChild {
   id: string;
   title: string;
   status: string;
-  phase: EpicChildPhase;
+  phase: MilestoneChildPhase;
   wave: number;
   reason?: string;
   /** The live run, else the latest one. */
@@ -65,10 +65,10 @@ export interface EpicProgressChild {
   openFindings: number;
 }
 
-export interface EpicWave {
+export interface MilestoneWave {
   index: number;
   total: number;
-  byPhase: Partial<Record<EpicChildPhase, number>>;
+  byPhase: Partial<Record<MilestoneChildPhase, number>>;
 }
 
 export interface ChildPhaseInput {
@@ -90,7 +90,7 @@ export interface ChildPhaseInput {
 }
 
 export interface ChildPhase {
-  phase: EpicChildPhase;
+  phase: MilestoneChildPhase;
   reason?: string;
   runId?: string;
 }
@@ -100,7 +100,7 @@ const BLOCKED_LABEL = 'blocked';
 
 function withRun(
   input: ChildPhaseInput,
-  phase: EpicChildPhase,
+  phase: MilestoneChildPhase,
   reason?: string
 ): ChildPhase {
   const runId = input.liveRun?.id ?? input.latestRun?.id;
@@ -181,7 +181,7 @@ export function deriveChildPhase(input: ChildPhaseInput): ChildPhase {
 
 /**
  * Each child's wave: 1 + the deepest wave among its blockers that are also
- * children of the same epic, 1 when it has none. Blockers outside the set do
+ * children of the same milestone, 1 when it has none. Blockers outside the set do
  * not count. Cycle-safe — a blocker already on the current path is skipped,
  * so a hand-edited cycle yields the longest acyclic depth instead of hanging.
  */
@@ -222,7 +222,7 @@ export function deriveSpend(
   startedAt: string | null,
   estimate: number,
   ceilings: { maxSpendUsd: number | null; maxRuns: number | null }
-): EpicSpend {
+): MilestoneSpend {
   const sessionRuns =
     startedAt === null ? runs : runs.filter((r) => r.createdAt >= startedAt);
   let settledUsd = 0;
@@ -242,8 +242,10 @@ export function deriveSpend(
 }
 
 /** Groups children by wave and counts each phase, ascending by wave index. */
-export function summarizeWaves(children: EpicProgressChild[]): EpicWave[] {
-  const byWave = new Map<number, EpicWave>();
+export function summarizeWaves(
+  children: MilestoneProgressChild[]
+): MilestoneWave[] {
+  const byWave = new Map<number, MilestoneWave>();
   for (const child of children) {
     let wave = byWave.get(child.wave);
     if (wave === undefined) {

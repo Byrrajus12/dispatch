@@ -229,7 +229,7 @@ function App() {
   );
   const [showCreate, setShowCreate] = useState(false);
   // What a board column's or list group's "+" pre-fills into the creator (status today;
-  // epic/milestone once the creator reads them); `null` leaves every field to its default.
+  // milestone/milestone once the creator reads them); `null` leaves every field to its default.
   const [createPreset, setCreatePreset] = useState<CreateTaskPreset | null>(
     null
   );
@@ -696,8 +696,8 @@ function App() {
   // The live fan-outs summed for the status strip: settled spend across them and their
   // spend ceilings added up — `null` ceilings when no live session set one.
   const liveCeilings = useMemo(
-    () => liveCeilingsOf(data.liveEpicSessions),
-    [data.liveEpicSessions]
+    () => liveCeilingsOf(data.liveMilestoneSessions),
+    [data.liveMilestoneSessions]
   );
 
   // How many runs the archive filter is holding back, computed off the *unfiltered* list so
@@ -1042,7 +1042,7 @@ function App() {
   // stay-in-place dispatch.
   // Plans' "Create & send agents…": the milestone's Plan tab opens Send agents once.
   const [sendAgents, setSendAgents] = useState<{
-    epicId: string;
+    milestoneId: string;
     nonce: number;
   } | null>(null);
   const onSendAgentsServed = useCallback(
@@ -2089,9 +2089,9 @@ function App() {
               />
             }
             outflow={{
-              sessions: data.liveEpicSessions,
-              epicTitle: (id) =>
-                data.epics.find((e) => e.meta.id === id)?.meta.title ?? id,
+              sessions: data.liveMilestoneSessions,
+              milestoneTitle: (id) =>
+                data.milestones.find((e) => e.meta.id === id)?.meta.title ?? id,
               mergeReady: mergeReadyCount,
               onMergeAll: data.handleMergeAllReady,
               spendToday: todaySpend,
@@ -2339,7 +2339,7 @@ function App() {
                       <CreateTaskModal
                         projectName={activeProject?.name}
                         statuses={data.config.statuses}
-                        epics={data.epics}
+                        milestones={data.milestones}
                         initialStatus={createPreset?.status}
                         labels={labelCatalogue}
                         onCreate={(input) => data.handleCreate(input)}

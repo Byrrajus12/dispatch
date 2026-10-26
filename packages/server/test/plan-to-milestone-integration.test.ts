@@ -6,8 +6,8 @@ import { basename, join } from 'node:path';
 
 import { TaskCache } from '../src/cache.js';
 import { EventBus } from '../src/events.js';
-import { EpicEngine } from '../src/orchestrator/epic.js';
 import { FakeExecutor } from '../src/orchestrator/executors/fake.js';
+import { MilestoneEngine } from '../src/orchestrator/milestone.js';
 import { Orchestrator } from '../src/orchestrator/orchestrator.js';
 import { PlanManager } from '../src/orchestrator/plan.js';
 import type { PlanProposal } from '../src/orchestrator/planner.js';
@@ -18,13 +18,13 @@ import { initGitRepo, runGitSync } from './orchestrator/helpers.js';
 let fakeHome: string;
 let repo: string;
 // Shut down in afterEach: an engine's retry timers outlive its test otherwise.
-const engines: EpicEngine[] = [];
+const engines: MilestoneEngine[] = [];
 const originalDispatchHome = process.env.DISPATCH_HOME;
 
 beforeEach(() => {
   fakeHome = mkdtempSync(join(tmpdir(), 'dispatch-home-'));
   process.env.DISPATCH_HOME = fakeHome;
-  repo = initGitRepo('dispatch-plan-to-epic-');
+  repo = initGitRepo('dispatch-plan-to-milestone-');
 });
 
 afterEach(() => {
@@ -51,13 +51,13 @@ function sleep(ms: number): Promise<void> {
 const CONCURRENCY = 2;
 const CHILD_COUNT = 5;
 
-// A five-task, no-epic-dependency proposal — every task is immediately
+// A five-task, no-milestone-dependency proposal — every task is immediately
 // ready, which is exactly the "5 ready children, concurrency 2" shape the
 // plan's verification contract asks this integration proof to exercise.
 const PROPOSAL: PlanProposal = {
-  epic: {
-    title: 'Ship the parallel epic',
-    description: 'End-to-end plan -> confirm -> epic dispatch proof.',
+  milestone: {
+    title: 'Ship the parallel milestone',
+    description: 'End-to-end plan -> confirm -> milestone dispatch proof.',
   },
   tasks: Array.from({ length: CHILD_COUNT }, (_, i) => ({
     title: `Parallel child ${i}`,
@@ -71,7 +71,7 @@ const PROPOSAL: PlanProposal = {
   })),
 };
 
-describe('plan -> confirm -> startEpic integration', () => {
+describe('plan -> confirm -> startMilestone integration', () => {
   it('writes+commits a distinct file per child, never exceeds concurrency, and lands every child in-review with a real commit on its branch', async () => {
     const store = TaskStore.init(repo);
     const cache = new TaskCache();
@@ -87,7 +87,7 @@ describe('plan -> confirm -> startEpic integration', () => {
     // Every dispatched run writes+commits one file into its OWN worktree
     // (cwd) before pausing at an approval gate — the pause is what gives
     // this test an observable "live" window to sample concurrency against
-    // (see epic.test.ts's own use of the same technique); the write+commit
+    // (see milestone.test.ts's own use of the same technique); the write+commit
     // happening *before* that pause is what proves each child produces a
     // real, distinct commit on its own branch, not just a log entry.
     orchestrator.registerExecutor(
@@ -123,14 +123,14 @@ describe('plan -> confirm -> startEpic integration', () => {
       'claude',
       new FakePlanner({ ok: true, proposal: PROPOSAL })
     );
-    const epicEngine = new EpicEngine({
+    const milestoneEngine = new MilestoneEngine({
       rootDir: repo,
       store,
       cache,
       events,
       orchestrator,
     });
-    engines.push(epicEngine);
+    engines.push(milestoneEngine);
 
     // --- plan -------------------------------------------------------
     const plan = planManager.startPlan('build 5 parallel things');
@@ -138,12 +138,12 @@ describe('plan -> confirm -> startEpic integration', () => {
     expect(planManager.get(plan.id).proposal).toEqual(PROPOSAL);
 
     // --- confirm ------------------------------------------------------
-    const { epicId, taskIds } = planManager.confirm(plan.id, PROPOSAL);
+    const { milestoneId, taskIds } = planManager.confirm(plan.id, PROPOSAL);
     expect(taskIds).toHaveLength(CHILD_COUNT);
     const childSet = new Set(taskIds);
 
-    // --- startEpic + concurrency-sampled dispatch ----------------------
-    const session = await epicEngine.start(epicId!, {
+    // --- startMilestone + concurrency-sampled dispatch ----------------------
+    const session = await milestoneEngine.start(milestoneId!, {
       concurrency: CONCURRENCY,
       executor: 'fake',
     });
@@ -151,7 +151,7 @@ describe('plan -> confirm -> startEpic integration', () => {
 
     // Registry-sampling instrumentation: poll orchestrator.list() on a
     // tight interval for the whole run and record the max number of this
-    // epic's children ever observed simultaneously live — this is the
+    // milestone's children ever observed simultaneously live — this is the
     // actual concurrency guarantee under test, not just an assumption
     // from reading fillQueue's code.
     let maxObservedLive = 0;
@@ -197,7 +197,7 @@ describe('plan -> confirm -> startEpic integration', () => {
     for (const taskId of taskIds) {
       const task = store.get(taskId);
       expect(task?.meta.status).toBe('review');
-      expect(task?.meta.parent).toBe(epicId);
+      expect(task?.meta.parent).toBe(milestoneId);
     }
 
     // Every child's run really did commit a distinct file on its own
@@ -218,10 +218,10 @@ describe('plan -> confirm -> startEpic integration', () => {
       expect(files[0]).toMatch(/^output-r-[0-9a-f]{6}\.txt$/);
       seenFiles.add(files[0]);
     }
-    // Every run's committed file is unique across the whole epic.
+    // Every run's committed file is unique across the whole milestone.
     expect(seenFiles.size).toBe(CHILD_COUNT);
 
-    const epicDoc = store.get(epicId!);
-    expect(epicDoc?.body).toContain('epic dispatch started');
+    const milestoneDoc = store.get(milestoneId!);
+    expect(milestoneDoc?.body).toContain('milestone dispatch started');
   }, 15000);
 });

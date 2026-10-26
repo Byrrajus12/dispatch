@@ -282,7 +282,7 @@ export class WorktreeManager {
     return entries;
   }
 
-  // Whether `refs/heads/<branch>` exists. Used to decide whether an epic's
+  // Whether `refs/heads/<branch>` exists. Used to decide whether a milestone's
   // integration branch still needs creating (or has been deleted by hand).
   hasBranch(branch: string): boolean {
     return runGit(this.mainRepoDir, [
@@ -294,8 +294,8 @@ export class WorktreeManager {
   }
 
   // Creates `branch` pointing at `from`, without checking it out anywhere.
-  // Used to cut an epic's integration branch from the default base on the
-  // epic's first dispatch.
+  // Used to cut a milestone's integration branch from the default base on the
+  // milestone's first dispatch.
   createBranch(branch: string, from: string): void {
     const result = runGit(this.mainRepoDir, ['branch', branch, from]);
     if (!result.ok) {
@@ -793,7 +793,7 @@ export class WorktreeManager {
   // mergeSquash's true-merge sibling: merges `branch` into the main checkout's
   // current branch as one real merge commit (`--no-ff`, so even a
   // fast-forwardable branch leaves a single revertible merge commit) — how a
-  // finished epic branch lands on the default base while preserving the
+  // finished milestone branch lands on the default base while preserving the
   // per-task squash commits it accumulated. Same two-step shape and contract
   // as mergeSquash: callers gate on a clean checkout first, and own conflict
   // recovery (`git reset --merge`) when the merge itself fails.
@@ -827,7 +827,7 @@ export class WorktreeManager {
    * Squash-merges `sourceBranch` into `targetBranch` WITHOUT any checkout —
    * the whole merge happens in the object database, so neither the user's
    * main checkout nor any worktree is touched. This is how a run lands on an
-   * epic integration branch: that branch is never checked out anywhere, which
+   * milestone integration branch: that branch is never checked out anywhere, which
    * rules out `mergeSquash` above (it merges into the main checkout's current
    * branch).
    *
@@ -862,7 +862,7 @@ export class WorktreeManager {
    * squashMergeIntoRef's true-merge sibling: identical checkout-free plumbing,
    * but the new commit records BOTH parents — the target's old tip and the
    * source tip — so the source branch's own history is preserved. This is how
-   * a finished epic branch lands on the default base when that base is not
+   * a finished milestone branch lands on the default base when that base is not
    * checked out: one revertible merge commit, per-task commits intact.
    */
   mergeCommitIntoRef(
@@ -1293,9 +1293,9 @@ export class WorktreeManager {
   }
 
   // The committed diff between two refs, anchored on their merge base — what
-  // an epic integration branch carries beyond the default base, in the same
+  // a milestone integration branch carries beyond the default base, in the same
   // DiffResult shape the worktree diffs above produce. Unlike those, no
-  // worktree is involved: an epic branch is never checked out anywhere, so
+  // worktree is involved: a milestone branch is never checked out anywhere, so
   // this runs against the refs alone in the main repo.
   diffBetweenRefs(base: string, branch: string): DiffResult {
     const mergeBase = runGit(this.mainRepoDir, ['merge-base', base, branch]);
