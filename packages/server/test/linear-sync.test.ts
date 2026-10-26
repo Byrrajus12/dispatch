@@ -22,14 +22,15 @@ import { join } from 'node:path';
 import { TaskCache } from '../src/cache.js';
 import { EventBus } from '../src/events.js';
 import type { ServerEvent } from '../src/events.js';
-import type { LinearSyncState } from '../src/linear/state.js';
+import { LINEAR_USAGE_LIMIT_MESSAGE } from '../src/linear/client.js';
+import type { LinearSyncState, PushAttempt } from '../src/linear/state.js';
 import {
   emptyLinearState,
   readLinearState,
   writeLinearState,
 } from '../src/linear/state.js';
 import { LinearSync } from '../src/linear/sync.js';
-import { FakeLinearClient } from './linearFake.js';
+import { FakeLinearClient, STATES } from './linearFake.js';
 
 // A custom state with no entry in the status map. It maps down to in-progress via
 // its `type`, and would map back up to "In Progress" — losing the real state.
@@ -350,6 +351,25 @@ describe('LinearSync error handling', () => {
     const retry = await sync.syncOnce();
     expect(retry.rateLimited).toBe(true);
     expect(retry.errors).toEqual(['linear rate limit backoff in effect']);
+  });
+
+  it('records the issue limit once and sends no further create that pass', async () => {
+    seedState({ bootstrappedAt: '2020-01-01T00:00:00.000Z' });
+    for (const n of [1, 2, 3, 4, 5]) store.create({ title: `Task ${n}` });
+    fake.issueLimit = 2;
+
+    const summary = await makeSync().syncOnce();
+
+    // Two land, the third is refused, and the last two are never sent.
+    expect(fake.calls.filter((c) => c === 'createIssue')).toHaveLength(3);
+    expect(fake.created).toHaveLength(2);
+    expect(summary.createdIssues).toBe(2);
+    expect(summary.errors).toEqual([LINEAR_USAGE_LIMIT_MESSAGE]);
+    expect(summary.usageLimited).toBe(true);
+    expect(summary.rateLimited).toBe(false);
+    const capacity = readLinearState(root).capacity;
+    expect(capacity?.message).toBe(LINEAR_USAGE_LIMIT_MESSAGE);
+    expect(Date.parse(capacity?.retryAt ?? '')).toBeGreaterThan(Date.now());
   });
 
   it('reports a missing key and a missing team without touching the client', async () => {
@@ -1301,5 +1321,727 @@ describe('LinearSync credential scope', () => {
     process.env.LINEAR_API_KEY = 'lin_api_from_env';
     writeProjectCredential(root, 'linear', { apiKey: 'lin_api_project_key' });
     expect(makeSync().status().keySource).toBe('project');
+  });
+});
+
+const DONE_STATE = STATES[4];
+const CANCELED_STATE = STATES[5];
+
+// A queued create as an explicit push or an export leaves it.
+function queuedEntry(overrides: Partial<PushAttempt> = {}): PushAttempt {
+  return {
+    origin: 'explicit',
+    queuedAt: '2026-07-01T00:00:00.000Z',
+    attempts: 0,
+    lastAttemptAt: null,
+    lastError: null,
+    lastErrorKind: null,
+    retryAt: null,
+    ...overrides,
+  };
+}
+
+function createCalls(): number {
+  return fake.calls.filter((c) => c === 'createIssue').length;
+}
+
+describe('LinearSync held-back accounting', () => {
+  it('holds unlinked tasks back in localOnly at the baseline, keeping pushed for linked ones', async () => {
+    const remote = fake.issue({ updatedAt: '2027-01-01T00:00:00.000Z' });
+    fake.issues = [remote];
+    const linked = store.create({ title: 'Linked' });
+    store.update(linked.meta.id, { external: `linear:${remote.id}` });
+    const local = store.create({ title: 'Local only' });
+
+    await makeSync().syncOnce();
+
+    const state = readLinearState(root);
+    expect(Object.keys(state.pushed)).toEqual([linked.meta.id]);
+    expect(Object.keys(state.localOnly ?? {})).toEqual([local.meta.id]);
+    expect(fake.created).toHaveLength(0);
+    expect(fake.updated).toHaveLength(0);
+  });
+
+  it('folds a state written before the split, once, creating nothing', async () => {
+    const remote = fake.issue({ updatedAt: '2027-01-01T00:00:00.000Z' });
+    fake.issues = [remote];
+    const a = store.create({ title: 'Linked' });
+    store.update(a.meta.id, { external: `linear:${remote.id}` });
+    const b = store.create({ title: 'Never sent' });
+    const at = (id: string) => store.get(id)?.meta.updated ?? '';
+    seedState({
+      bootstrappedAt: '2030-01-01T00:00:00.000Z',
+      pushed: { [a.meta.id]: at(a.meta.id), [b.meta.id]: at(b.meta.id) },
+    });
+    expect(readLinearState(root).localOnly).toBeUndefined();
+
+    await makeSync().syncOnce();
+
+    const state = readLinearState(root);
+    expect(state.pushed).toEqual({ [a.meta.id]: at(a.meta.id) });
+    expect(state.localOnly).toEqual({ [b.meta.id]: at(b.meta.id) });
+    expect(fake.created).toHaveLength(0);
+  });
+
+  it('keeps a task that left the linked teams in pushed when folding', async () => {
+    const moved = store.create({ title: 'Moved away' });
+    const at = store.get(moved.meta.id)?.meta.updated ?? '';
+    seedState({
+      bootstrappedAt: '2030-01-01T00:00:00.000Z',
+      pushed: { [moved.meta.id]: at },
+      movedOut: { 'issue-gone': moved.meta.id },
+    });
+
+    await makeSync().syncOnce();
+
+    const state = readLinearState(root);
+    expect(state.pushed[moved.meta.id]).toBe(at);
+    expect(state.localOnly).toEqual({});
+  });
+
+  it('reports coverage counts in status from the task cache', async () => {
+    const remote = fake.issue();
+    fake.issues = [remote];
+    const linked = store.create({ title: 'Linked' });
+    store.update(linked.meta.id, { external: `linear:${remote.id}` });
+    store.create({ title: 'Held back' });
+    store.create({ title: 'Review PR #7', derivedFrom: 'github-pr:7' });
+    const sync = makeSync();
+    await sync.syncOnce();
+    cache.rebuild(store);
+
+    expect(sync.status().coverage).toEqual({
+      total: 2,
+      linked: 1,
+      notLinked: 1,
+      heldBack: 1,
+      queued: 0,
+      failed: 0,
+      excluded: 1,
+    });
+  });
+});
+
+describe('LinearSync push queue', () => {
+  it('queues a failed explicit create and retries it on a later ordinary pass', async () => {
+    const doc = store.create({ title: 'Predates the link' });
+    fake.createFailure = {
+      ok: false,
+      kind: 'graphql',
+      error: 'validation failed',
+    };
+    const sync = makeSync();
+
+    const first = await sync.syncOnce([doc.meta.id]);
+
+    expect(first.failedTaskIds).toEqual([doc.meta.id]);
+    expect(first.queued).toBe(1);
+    const entry = readLinearState(root).pushQueue[doc.meta.id];
+    expect(entry).toMatchObject({
+      origin: 'explicit',
+      attempts: 1,
+      lastError: 'validation failed',
+      lastErrorKind: 'graphql',
+    });
+    // Five minutes out on the first failure.
+    expect(Date.parse(entry?.retryAt ?? '')).toBeGreaterThan(
+      Date.now() + 4 * 60_000
+    );
+
+    // Not due yet: an ordinary pass leaves it alone.
+    fake.createFailure = null;
+    await sync.syncOnce();
+    expect(fake.created).toHaveLength(0);
+
+    const state = readLinearState(root);
+    state.pushQueue[doc.meta.id] = {
+      ...queuedEntry(),
+      ...state.pushQueue[doc.meta.id],
+      retryAt: '2020-01-01T00:00:00.000Z',
+    };
+    writeLinearState(root, state);
+    const retried = await sync.syncOnce();
+
+    expect(retried.createdIssues).toBe(1);
+    expect(store.get(doc.meta.id)?.meta.external).toBe('linear:issue-1');
+    expect(readLinearState(root).pushQueue).toEqual({});
+    expect(readLinearState(root).localOnly?.[doc.meta.id]).toBeUndefined();
+  });
+
+  it('keeps every task a rate limit cut short queued, and sends them all later', async () => {
+    seedState({ bootstrappedAt: '2030-01-01T00:00:00.000Z' });
+    const ids = ['One', 'Two', 'Three'].map(
+      (title) => store.create({ title }).meta.id
+    );
+    fake.createFailure = {
+      ok: false,
+      kind: 'rate-limit',
+      error: 'linear rate limit reached',
+      retryAfterMs: 1,
+    };
+    const sync = makeSync();
+
+    await sync.syncOnce(ids);
+
+    const queue = readLinearState(root).pushQueue;
+    expect(Object.keys(queue).sort()).toEqual([...ids].sort());
+    for (const id of ids) {
+      expect(queue[id]).toMatchObject({ attempts: 0, lastError: null });
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    fake.createFailure = null;
+    // The tasks predate the link, so only the queue sends them.
+    const later = await sync.syncOnce();
+
+    expect(later.createdIssues).toBe(3);
+    expect(readLinearState(root).pushQueue).toEqual({});
+  });
+
+  it('runs an idle poll through to the push when a queued create is due', async () => {
+    seedState({ bootstrappedAt: '2030-01-01T00:00:00.000Z' });
+    const doc = store.create({ title: 'Queued' });
+    const sync = makeSync();
+    await sync.syncOnce();
+    await sync.pollOnce();
+    const idleCalls = fake.calls.length;
+    await sync.pollOnce();
+    // Idle: one probe and nothing else.
+    expect(fake.calls.slice(idleCalls)).toEqual(['probe']);
+
+    const state = readLinearState(root);
+    state.pushQueue[doc.meta.id] = queuedEntry({
+      attempts: 1,
+      lastError: 'validation failed',
+      retryAt: '2020-01-01T00:00:00.000Z',
+    });
+    writeLinearState(root, state);
+    await sync.pollOnce();
+
+    expect(fake.created).toHaveLength(1);
+    expect(readLinearState(root).pushQueue).toEqual({});
+  });
+
+  it('drops queued creates whose task is gone, derived or already linked', async () => {
+    const remote = fake.issue({ updatedAt: '2027-01-01T00:00:00.000Z' });
+    fake.issues = [remote];
+    const linked = store.create({ title: 'Linked meanwhile' });
+    store.update(linked.meta.id, { external: `linear:${remote.id}` });
+    const derived = store.create({
+      title: 'Review PR #7',
+      derivedFrom: 'github-pr:7',
+    });
+    seedState({
+      bootstrappedAt: '2030-01-01T00:00:00.000Z',
+      pushQueue: {
+        't-deleted': queuedEntry({ retryAt: '2099-01-01T00:00:00.000Z' }),
+        [derived.meta.id]: queuedEntry({ retryAt: '2099-01-01T00:00:00.000Z' }),
+        [linked.meta.id]: queuedEntry({ retryAt: '2099-01-01T00:00:00.000Z' }),
+      },
+    });
+
+    const summary = await makeSync().syncOnce();
+
+    expect(readLinearState(root).pushQueue).toEqual({});
+    expect(summary.queued).toBe(0);
+    expect(fake.created).toHaveLength(0);
+  });
+
+  it('sends a named update that failed again on the next ordinary pass', async () => {
+    const { id } = seedClonedRepo('2026-01-01T00:00:00.000Z');
+    const sync = makeSync();
+    await sync.syncOnce();
+    fake.failures.updateIssue = {
+      ok: false,
+      kind: 'graphql',
+      error: 'update refused',
+    };
+
+    await sync.syncOnce([id]);
+    expect(fake.updated).toHaveLength(0);
+    expect(readLinearState(root).pushed[id]).toBeUndefined();
+
+    delete fake.failures.updateIssue;
+    await sync.syncOnce();
+
+    expect(fake.updated).toHaveLength(1);
+    expect(fake.updated[0].input.title).toBe('Stale committed content');
+  });
+
+  it('forgets a queued create: it is held back and no longer retried', async () => {
+    seedState({ bootstrappedAt: '2020-01-01T00:00:00.000Z' });
+    const doc = store.create({ title: 'Keeps failing' });
+    fake.createFailure = { ok: false, kind: 'graphql', error: 'nope' };
+    const sync = makeSync();
+    await sync.syncOnce([doc.meta.id]);
+    cache.rebuild(store);
+    expect(sync.coverage().unlinked[0]?.reason).toBe('failed');
+
+    expect(sync.forget([doc.meta.id, 't-unknown'])).toBe(1);
+
+    const state = readLinearState(root);
+    expect(state.pushQueue).toEqual({});
+    expect(state.localOnly?.[doc.meta.id]).toBe(
+      store.get(doc.meta.id)?.meta.updated ?? ''
+    );
+    expect(sync.coverage().unlinked[0]?.reason).toBe('held-back');
+    fake.createFailure = null;
+    await sync.syncOnce();
+    expect(fake.created).toHaveLength(0);
+  });
+});
+
+describe('LinearSync issue limit pause', () => {
+  it('queues what the limit refused, pauses ordinary creates, and resumes once there is room', async () => {
+    const remote = fake.issue({ updatedAt: '2026-01-01T00:00:00.000Z' });
+    fake.issues = [remote];
+    const linked = store.create({ title: 'Linked and edited' });
+    store.update(linked.meta.id, { external: `linear:${remote.id}` });
+    // Created after the link, so an ordinary pass would create them itself.
+    seedState({ bootstrappedAt: '2020-01-01T00:00:00.000Z' });
+    const ids = ['A', 'B', 'C', 'D'].map(
+      (title) => store.create({ title }).meta.id
+    );
+    // The linked issue takes one slot, so two creates fit.
+    fake.issueLimit = 3;
+    const sync = makeSync();
+
+    const first = await sync.syncOnce(ids);
+
+    expect(createCalls()).toBe(3);
+    expect(first.createdIssues).toBe(2);
+    expect(first.usageLimited).toBe(true);
+    expect(first.errors).toEqual([LINEAR_USAGE_LIMIT_MESSAGE]);
+    expect(first.queued).toBe(2);
+    const queue = readLinearState(root).pushQueue;
+    expect(Object.keys(queue)).toHaveLength(2);
+    for (const entry of Object.values(queue)) {
+      expect(entry).toMatchObject({
+        attempts: 0,
+        lastError: LINEAR_USAGE_LIMIT_MESSAGE,
+        lastErrorKind: 'usage-limit',
+      });
+    }
+
+    // Paused: no create goes out, but the linked task's edit still does.
+    const paused = await sync.syncOnce();
+    expect(createCalls()).toBe(3);
+    expect(paused.errors).toEqual([]);
+    expect(fake.updated.map((u) => u.id)).toEqual([remote.id]);
+    const status = sync.status();
+    expect(status.capacity?.message).toBe(LINEAR_USAGE_LIMIT_MESSAGE);
+    expect(status.lastError).toBe(LINEAR_USAGE_LIMIT_MESSAGE);
+
+    // Room again: a fresh measurement ends the pause.
+    fake.issueLimit = null;
+    const measured = await sync.capacity(true);
+    expect(measured.ok && measured.data.active).toBe(3);
+    expect(measured.ok && measured.data.limitHitAt).not.toBeNull();
+    expect(sync.status().capacity).toMatchObject({
+      retryAt: null,
+      message: null,
+      active: 3,
+      limit: 250,
+      plan: 'free',
+    });
+    expect(sync.status().lastError).toBeNull();
+
+    const resumed = await sync.syncOnce();
+    expect(resumed.createdIssues).toBe(2);
+    expect(readLinearState(root).pushQueue).toEqual({});
+  });
+
+  it('lets a push by name try during the pause, and a create that lands ends it', async () => {
+    const doc = store.create({ title: 'Named while paused' });
+    seedState({
+      bootstrappedAt: '2020-01-01T00:00:00.000Z',
+      capacity: {
+        limitedAt: '2026-07-01T00:00:00.000Z',
+        retryAt: '2099-01-01T00:00:00.000Z',
+        message: LINEAR_USAGE_LIMIT_MESSAGE,
+        active: null,
+        limit: null,
+        limitSource: null,
+        plan: 'unknown',
+        checkedAt: null,
+      },
+    });
+    const sync = makeSync();
+
+    const summary = await sync.syncOnce([doc.meta.id]);
+
+    expect(summary.createdIssues).toBe(1);
+    expect(sync.status().capacity).toMatchObject({
+      limitedAt: '2026-07-01T00:00:00.000Z',
+      retryAt: null,
+      message: null,
+    });
+  });
+
+  it('retries now on request: the pause ends and the queued creates go', async () => {
+    const doc = store.create({ title: 'Refused at the limit' });
+    seedState({
+      bootstrappedAt: '2030-01-01T00:00:00.000Z',
+      capacity: {
+        limitedAt: '2026-07-01T00:00:00.000Z',
+        retryAt: '2099-01-01T00:00:00.000Z',
+        message: LINEAR_USAGE_LIMIT_MESSAGE,
+        active: 250,
+        limit: 250,
+        limitSource: 'plan',
+        plan: 'free',
+        checkedAt: null,
+      },
+      pushQueue: {
+        [doc.meta.id]: queuedEntry({
+          origin: 'export',
+          lastError: LINEAR_USAGE_LIMIT_MESSAGE,
+          lastErrorKind: 'usage-limit',
+        }),
+      },
+    });
+    const sync = makeSync();
+
+    const started = sync.startRetry();
+    expect(started).toMatchObject({ ok: true, candidates: 1 });
+    await sync.idle();
+
+    expect(fake.created).toHaveLength(1);
+    const status = sync.status();
+    expect(status.capacity?.retryAt).toBeNull();
+    expect(status.running).toBeNull();
+    expect(status.lastExport).toMatchObject({
+      action: 'retry',
+      candidates: 1,
+      done: 1,
+      remaining: 0,
+      halted: null,
+    });
+  });
+});
+
+describe('LinearSync export', () => {
+  // One task of every shape an export scope decides on.
+  function seedBoard(): Record<string, string> {
+    const remote = fake.issue({ updatedAt: '2027-01-01T00:00:00.000Z' });
+    fake.issues = [remote];
+    const linked = store.create({ title: 'Linked' });
+    store.update(linked.meta.id, { external: `linear:${remote.id}` });
+    const archived = store.create({ title: 'Archived open', status: 'todo' });
+    store.update(archived.meta.id, { archivedAt: '2026-07-01T00:00:00.000Z' });
+    const ids = {
+      open: store.create({ title: 'Open', status: 'todo' }).meta.id,
+      done: store.create({ title: 'Finished', status: 'done' }).meta.id,
+      archived: archived.meta.id,
+      derived: store.create({
+        title: 'Review PR #7',
+        derivedFrom: 'github-pr:7',
+      }).meta.id,
+      linked: linked.meta.id,
+    };
+    seedState({ bootstrappedAt: '2030-01-01T00:00:00.000Z' });
+    cache.rebuild(store);
+    return ids;
+  }
+
+  it('previews every scope without calling Linear', () => {
+    seedBoard();
+    expect(makeSync().exportPreview()).toEqual({
+      open: 1,
+      all: 2,
+      allArchiveFinished: 3,
+      finished: 1,
+      archived: 1,
+      derived: 1,
+      containers: 0,
+    });
+    expect(fake.calls).toEqual([]);
+  });
+
+  it('sends open work only, reporting its own progress and outcome', async () => {
+    seedBoard();
+    const sync = makeSync();
+
+    const started = sync.startExport('open');
+    expect(started).toMatchObject({ ok: true, candidates: 1 });
+    expect(sync.status().running?.action).toBe('export');
+    await sync.idle();
+
+    expect(fake.created.map((c) => c.title)).toEqual(['Open']);
+    const progress = broadcasts.flatMap((e) =>
+      e.type === 'linear.progress' ? [e.progress] : []
+    );
+    expect(progress.at(-1)).toEqual({
+      phase: 'creating',
+      done: 1,
+      total: 1,
+      action: 'export',
+    });
+    expect(progress.every((p) => p.phase === 'creating')).toBe(true);
+    const status = sync.status();
+    expect(status.progress).toBeNull();
+    expect(status.running).toBeNull();
+    expect(status.lastExport).toMatchObject({
+      action: 'export',
+      scope: 'open',
+      startedAt: started.ok ? started.startedAt : '',
+      candidates: 1,
+      done: 1,
+      remaining: 0,
+      halted: null,
+      errors: [],
+    });
+  });
+
+  it('sends finished work as closed issues under all, archiving nothing', async () => {
+    seedBoard();
+    const sync = makeSync();
+
+    sync.startExport('all');
+    await sync.idle();
+
+    expect(fake.created.map((c) => c.title ?? '').sort()).toEqual([
+      'Finished',
+      'Open',
+    ]);
+    expect(fake.created.find((c) => c.title === 'Finished')?.stateId).toBe(
+      's-done'
+    );
+    expect(fake.calls).not.toContain('archiveIssue');
+  });
+
+  it('archives finished and archived tasks on arrival, and leaves them be afterwards', async () => {
+    const ids = seedBoard();
+    const sync = makeSync();
+
+    sync.startExport('all-archive-finished');
+    await sync.idle();
+
+    expect(fake.created.map((c) => c.title ?? '').sort()).toEqual([
+      'Archived open',
+      'Finished',
+      'Open',
+    ]);
+    expect(fake.calls.filter((c) => c === 'archiveIssue')).toHaveLength(2);
+    const archivedTitles = fake.issues
+      .filter((i) => i.archivedAt !== null)
+      .map((i) => i.title)
+      .sort();
+    expect(archivedTitles).toEqual(['Archived open', 'Finished']);
+    expect(sync.status().lastExport).toMatchObject({
+      candidates: 3,
+      done: 3,
+      archivedOnArrival: 2,
+    });
+
+    await sync.syncOnce();
+
+    expect(fake.calls).not.toContain('unarchiveIssue');
+    expect(fake.updated).toHaveLength(0);
+    expect(store.get(ids.done)?.meta.archivedAt).toBeUndefined();
+  });
+
+  it('works before the link exists: it baselines, then creates the targets', async () => {
+    store.create({ title: 'Predates everything' });
+    cache.rebuild(store);
+    const sync = makeSync();
+
+    sync.startExport('open');
+    await sync.idle();
+
+    expect(fake.created.map((c) => c.title)).toEqual(['Predates everything']);
+    const state = readLinearState(root);
+    expect(state.bootstrappedAt).not.toBeNull();
+    expect(state.localOnly).toEqual({});
+  });
+
+  it('stops creating at the issue limit and reports what remains', async () => {
+    seedState({ bootstrappedAt: '2030-01-01T00:00:00.000Z' });
+    for (const title of ['One', 'Two', 'Three']) store.create({ title });
+    cache.rebuild(store);
+    fake.issueLimit = 1;
+    const sync = makeSync();
+
+    sync.startExport('open');
+    await sync.idle();
+
+    expect(createCalls()).toBe(2);
+    expect(sync.status().lastExport).toMatchObject({
+      candidates: 3,
+      done: 1,
+      remaining: 2,
+      halted: 'usage-limit',
+      errors: [LINEAR_USAGE_LIMIT_MESSAGE],
+    });
+    expect(Object.keys(readLinearState(root).pushQueue)).toHaveLength(2);
+  });
+
+  it('counts a repeated failure once in the outcome', async () => {
+    seedState({ bootstrappedAt: '2030-01-01T00:00:00.000Z' });
+    for (const title of ['One', 'Two', 'Three']) store.create({ title });
+    cache.rebuild(store);
+    fake.createFailure = {
+      ok: false,
+      kind: 'graphql',
+      error: 'validation failed',
+    };
+    const sync = makeSync();
+
+    sync.startExport('open');
+    await sync.idle();
+
+    expect(sync.status().lastExport?.errors).toEqual([
+      'validation failed (x3)',
+    ]);
+    const queue = readLinearState(root).pushQueue;
+    expect(Object.values(queue).map((e) => e.origin)).toEqual([
+      'export',
+      'export',
+      'export',
+    ]);
+  });
+
+  it('refuses a second bulk action while one runs, and a pull-only link', async () => {
+    seedBoard();
+    const sync = makeSync();
+
+    expect(sync.startExport('open').ok).toBe(true);
+    expect(sync.startExport('all')).toEqual({
+      ok: false,
+      status: 409,
+      error: 'an export or archive is already running',
+    });
+    await sync.idle();
+
+    writeConfig('pull');
+    expect(sync.startExport('open')).toEqual({
+      ok: false,
+      status: 409,
+      error: 'sync direction is pull only; export needs push',
+    });
+  });
+});
+
+describe('LinearSync archive closed issues', () => {
+  // Linked Done and Canceled issues, an unlinked Done one, and a live one.
+  async function seedClosed(): Promise<{
+    sync: LinearSync;
+    done: string;
+    canceled: string;
+  }> {
+    // Newer than the local tasks, so the first pass takes Linear's states.
+    const updatedAt = '2027-01-01T00:00:00.000Z';
+    fake.issues = [
+      fake.issue({ title: 'Done linked', state: DONE_STATE, updatedAt }),
+      fake.issue({ title: 'Done unlinked', state: DONE_STATE, updatedAt }),
+      fake.issue({
+        title: 'Canceled linked',
+        state: CANCELED_STATE,
+        updatedAt,
+      }),
+      fake.issue({ title: 'Still going', updatedAt }),
+    ];
+    const done = store.create({ title: 'Done linked' });
+    store.update(done.meta.id, { external: `linear:${fake.issues[0].id}` });
+    const canceled = store.create({ title: 'Canceled linked' });
+    store.update(canceled.meta.id, {
+      external: `linear:${fake.issues[2].id}`,
+    });
+    seedState({ bootstrappedAt: '2020-01-01T00:00:00.000Z' });
+    const sync = makeSync();
+    await sync.syncOnce();
+    return { sync, done: done.meta.id, canceled: canceled.meta.id };
+  }
+
+  it('refuses before the link exists', () => {
+    expect(makeSync().startArchiveClosed({ includeCanceled: false })).toEqual({
+      ok: false,
+      status: 409,
+      error: 'Linear is not linked yet; sync once first',
+    });
+  });
+
+  it('archives completed issues in Linear and pulls the archive onto their tasks', async () => {
+    const { sync, done, canceled } = await seedClosed();
+
+    const started = sync.startArchiveClosed({ includeCanceled: false });
+    expect(started.ok).toBe(true);
+    await sync.idle();
+
+    const archived = fake.issues
+      .filter((i) => i.archivedAt !== null)
+      .map((i) => i.title)
+      .sort();
+    expect(archived).toEqual(['Done linked', 'Done unlinked']);
+    expect(store.get(done)?.meta.archivedAt).toBeDefined();
+    expect(store.get(canceled)?.meta.archivedAt).toBeUndefined();
+    const progress = broadcasts.flatMap((e) =>
+      e.type === 'linear.progress' ? [e.progress] : []
+    );
+    expect(progress.at(-1)).toEqual({
+      phase: 'archiving',
+      done: 2,
+      total: 2,
+      action: 'archive',
+    });
+    expect(sync.status().lastArchive).toMatchObject({
+      action: 'archive',
+      includeCanceled: false,
+      candidates: 2,
+      done: 2,
+      remaining: 0,
+      halted: null,
+    });
+    // Nothing local was pushed back.
+    expect(fake.updated).toHaveLength(0);
+
+    sync.startArchiveClosed({ includeCanceled: true });
+    await sync.idle();
+
+    expect(store.get(canceled)?.meta.archivedAt).toBeDefined();
+    expect(fake.issues.find((i) => i.title === 'Still going')?.archivedAt).toBe(
+      null
+    );
+  });
+
+  it('ends the issue-limit pause and drains the creates queued behind it', async () => {
+    fake.issues = [fake.issue({ title: 'Closed', state: DONE_STATE })];
+    const doc = store.create({ title: 'Waiting for room' });
+    seedState({
+      bootstrappedAt: '2030-01-01T00:00:00.000Z',
+      capacity: {
+        limitedAt: '2026-07-01T00:00:00.000Z',
+        retryAt: '2099-01-01T00:00:00.000Z',
+        message: LINEAR_USAGE_LIMIT_MESSAGE,
+        active: 250,
+        limit: 250,
+        limitSource: 'plan',
+        plan: 'free',
+        checkedAt: null,
+      },
+      pushQueue: {
+        [doc.meta.id]: queuedEntry({
+          origin: 'export',
+          lastError: LINEAR_USAGE_LIMIT_MESSAGE,
+          lastErrorKind: 'usage-limit',
+        }),
+      },
+    });
+    const sync = new LinearSync({
+      rootDir: root,
+      store,
+      cache,
+      events,
+      client: fake,
+      pushDebounceMs: 1,
+    });
+
+    sync.startArchiveClosed({ includeCanceled: false });
+    await sync.idle();
+    expect(sync.status().capacity?.retryAt).toBeNull();
+
+    await waitFor(() => fake.created.length === 1);
+    await sync.stop();
+    expect(store.get(doc.meta.id)?.meta.external).toBe('linear:issue-2');
   });
 });

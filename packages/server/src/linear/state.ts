@@ -16,6 +16,8 @@ import {
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import type { LinearErrorKind } from './client.js';
+
 /** One record this sync wrote, and the `updatedAt` the mutation returned for it. */
 export interface EchoRecord {
   issueId: string;
@@ -67,6 +69,55 @@ export function webhookHooks(
   return [{ teamId: record.teamId, id: record.id }, ...(record.more ?? [])];
 }
 
+/** How long ordinary passes stop creating after Linear's usage limit. */
+export const CAPACITY_RETRY_MS = 30 * 60_000;
+
+/** A create to keep trying until it lands: named by a push or an export, or
+ *  an automatic create that failed (recorded for its reason only). */
+export interface PushAttempt {
+  origin: 'explicit' | 'export' | 'auto';
+  queuedAt: string;
+  attempts: number;
+  lastAttemptAt: string | null;
+  lastError: string | null;
+  lastErrorKind: LinearErrorKind | null;
+  retryAt: string | null;
+  /** Archive the issue as it is created (export of finished tasks). */
+  archive?: true;
+}
+
+/** The usage-limit pause, and the counts last measured against the cap. */
+export interface LinearCapacityState {
+  limitedAt: string | null;
+  /** Ordinary passes create nothing before this. */
+  retryAt: string | null;
+  message: string | null;
+  active: number | null;
+  limit: number | null;
+  limitSource: 'plan' | 'observed' | null;
+  plan: 'free' | 'paid' | 'trial' | 'unknown';
+  checkedAt: string | null;
+}
+
+/** Which unlinked tasks an export sends. */
+export type LinearExportScope = 'open' | 'all' | 'all-archive-finished';
+
+/** How the last export, archive or retry run ended. */
+export interface LinearBulkOutcome {
+  action: 'export' | 'archive' | 'retry';
+  startedAt: string;
+  at: string;
+  scope?: LinearExportScope;
+  includeCanceled?: boolean;
+  candidates: number;
+  done: number;
+  archivedOnArrival?: number;
+  remaining: number;
+  halted: 'usage-limit' | 'rate-limit' | null;
+  /** Deduplicated, at most 5, a repeat counted: 'usage limit exceeded (x44)'. */
+  errors: string[];
+}
+
 export interface LinearSyncState {
   /** High-water mark for the issue and container pulls; null until the first pull. */
   cursor: string | null;
@@ -76,6 +127,15 @@ export interface LinearSyncState {
   bootstrappedAt: string | null;
   /** Task id -> the `updated` value the sync has accounted for. Absent means outstanding. */
   pushed: Record<string, string>;
+  /** Task id -> the `updated` an unlinked task was held back at: never sent,
+   *  because it predates the link or was archived first. Absent on a state
+   *  written before the split, which a fold converts. */
+  localOnly?: Record<string, string>;
+  /** Task id -> a create still to land, or one that failed. */
+  pushQueue: Record<string, PushAttempt>;
+  capacity: LinearCapacityState | null;
+  lastExport: LinearBulkOutcome | null;
+  lastArchive: LinearBulkOutcome | null;
   /** Legacy retry queue, read once by the fold below and then dropped. */
   pushRetry?: string[];
   /** Watermark written by versions predating `pushed`; folded into it once, then cleared. */
@@ -121,6 +181,14 @@ export interface LinearSyncState {
   documentCursor?: string | null;
 }
 
+/** The version a task was last accounted for at: sent to Linear, or held back. */
+export function accountedAt(
+  state: LinearSyncState,
+  id: string
+): string | undefined {
+  return state.pushed[id] ?? state.localOnly?.[id];
+}
+
 // Sync state is user-level, not project-level: `.dispatch/` is committed to the
 // user's repo, so a cursor there would land in their git history.
 function stateHome(): string {
@@ -140,6 +208,10 @@ export function emptyLinearState(): LinearSyncState {
     commentCursor: null,
     bootstrappedAt: null,
     pushed: {},
+    pushQueue: {},
+    capacity: null,
+    lastExport: null,
+    lastArchive: null,
     lastPushAt: null,
     lastSyncAt: null,
     lastError: null,

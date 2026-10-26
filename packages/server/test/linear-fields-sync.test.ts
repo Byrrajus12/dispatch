@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { TaskCache } from '../src/cache.js';
 import { EventBus } from '../src/events.js';
 import type { ServerEvent } from '../src/events.js';
+import { LINEAR_USAGE_LIMIT_MESSAGE } from '../src/linear/client.js';
 import {
   readBase,
   readLinearState,
@@ -311,6 +312,92 @@ describe('labels', () => {
     ).toEqual(['perf', 'web']);
   });
 
+  it('creates a label a task carries twice only once', async () => {
+    const { id, sync } = await linkedPair();
+    edit(id, { labels: ['web', 'perf', 'Perf'] });
+
+    const summary = await sync.syncOnce();
+
+    expect(fake.calls.filter((c) => c === 'createLabel')).toHaveLength(1);
+    expect(summary.errors).toEqual([]);
+  });
+
+  it('reuses the label Linear already has when it refuses the create as a duplicate', async () => {
+    const { id, sync } = await linkedPair();
+    // Added in Linear after the pass cached the team's labels.
+    fake.labelList.push({ id: 'l-perf', name: 'Perf', teamId: 'team-1' });
+    edit(id, { labels: ['web', 'perf'] });
+
+    const summary = await sync.syncOnce();
+
+    expect(summary.errors).toEqual([]);
+    expect(fake.calls).toContain('labelsNamed');
+    expect(fake.labelList.map((l) => l.id)).toEqual(['l-web', 'l-perf']);
+    expect(new Set(fake.updated[0]?.input.labelIds)).toEqual(
+      new Set(['l-web', 'l-perf'])
+    );
+    expect(store.get(id)?.meta.labels).toEqual(['web', 'perf']);
+  });
+
+  it('names a label group a task carries instead of creating it, once per pass', async () => {
+    fake.issues.push(fake.issue(), fake.issue());
+    fake.labelList.push({
+      id: 'l-type',
+      name: 'Type',
+      isGroup: true,
+      teamId: 'team-1',
+    });
+    const sync = makeSync();
+    await sync.importIssues();
+    const ids = store.list().map((d) => d.meta.id);
+    fake.calls = [];
+    for (const id of ids)
+      edit(id, { title: `Renamed ${id}`, labels: ['web', 'type'] });
+
+    const summary = await sync.syncOnce();
+
+    expect(fake.calls.filter((c) => c === 'createLabel')).toHaveLength(1);
+    expect(fake.calls.filter((c) => c === 'labelsNamed')).toHaveLength(1);
+    expect(summary.errors).toHaveLength(1);
+    expect(summary.errors[0]).toContain('label group');
+    // The rest of each issue still goes out.
+    expect(new Set(fake.updated.map((u) => u.input.title))).toEqual(
+      new Set(ids.map((id) => `Renamed ${id}`))
+    );
+    // The labels field is kept, so the next pass tries once more.
+    fake.calls = [];
+    await sync.syncOnce();
+    expect(fake.calls.filter((c) => c === 'createLabel')).toHaveLength(1);
+  });
+
+  it('sends a label whose create failed with a new issue on the next pass', async () => {
+    const sync = makeSync();
+    await sync.syncOnce();
+    const doc = store.create({ title: 'Fresh work', labels: ['web', 'perf'] });
+    fake.failures.createLabel = {
+      ok: false,
+      kind: 'graphql',
+      error: 'label service down',
+    };
+
+    const first = await sync.syncOnce();
+
+    expect(first.createdIssues).toBe(1);
+    expect(first.errors).toEqual(['label service down']);
+    expect(fake.created[0]?.labelIds).toEqual(['l-web']);
+
+    delete fake.failures.createLabel;
+    const second = await sync.syncOnce();
+
+    expect(second.errors).toEqual([]);
+    const perf = fake.labelList.find((l) => l.name === 'perf');
+    expect(new Set(fake.updated[0]?.input.labelIds)).toEqual(
+      new Set(['l-web', perf?.id ?? 'missing'])
+    );
+    // Linear's label-less copy never overwrote the task's labels.
+    expect(store.get(doc.meta.id)?.meta.labels).toEqual(['web', 'perf']);
+  });
+
   it('takes a label removed in Linear off the task', async () => {
     const { issue, id, sync } = await linkedPair();
     issue.labels = [];
@@ -476,6 +563,34 @@ describe('archive', () => {
     touch(remote);
     await sync.syncOnce();
     expect(store.get(id)?.meta.archivedAt).toBeUndefined();
+  });
+
+  it('sends no further unarchive once one meets the issue limit, and retries both', async () => {
+    fake.issues.push(fake.issue(), fake.issue());
+    const sync = makeSync();
+    await sync.importIssues();
+    const ids = store.list().map((d) => d.meta.id);
+    for (const id of ids) edit(id, { archivedAt: new Date().toISOString() });
+    await sync.syncOnce();
+    expect(fake.issues.every((i) => i.archivedAt !== null)).toBe(true);
+
+    for (const id of ids) edit(id, { archivedAt: null });
+    fake.issueLimit = 0;
+    fake.calls = [];
+    const capped = await sync.syncOnce();
+
+    expect(capped.usageLimited).toBe(true);
+    expect(capped.errors).toEqual([LINEAR_USAGE_LIMIT_MESSAGE]);
+    expect(fake.calls.filter((c) => c === 'unarchiveIssue')).toHaveLength(1);
+    expect(fake.issues.every((i) => i.archivedAt !== null)).toBe(true);
+
+    fake.issueLimit = null;
+    await sync.syncOnce();
+    expect(fake.issues.every((i) => i.archivedAt === null)).toBe(true);
+    expect(ids.map((id) => store.get(id)?.meta.archivedAt)).toEqual([
+      undefined,
+      undefined,
+    ]);
   });
 
   it('leaves a finished task’s archive to Linear’s own schedule', async () => {

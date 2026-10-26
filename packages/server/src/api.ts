@@ -193,6 +193,7 @@ import type { ReadinessReading } from './judgments/readiness.js';
 import { buildLandingSnapshot } from './landing.js';
 import type { LedgerStorePort } from './ledger.js';
 import { HttpLinearClient } from './linear/client.js';
+import type { LinearExportScope } from './linear/state.js';
 import type { LinearSync } from './linear/sync.js';
 import {
   acceptIngestProblemRoute,
@@ -1744,13 +1745,20 @@ function getSyncStatus(ctx: ApiContext): Response {
 }
 
 // Maps a Linear client failure onto a status code: a bad key is the caller's
-// problem, a throttle is worth surfacing distinctly, anything else is upstream.
+// problem, a throttle is worth surfacing distinctly, a workspace at its plan's
+// issue limit needs a plan or an archive, anything else is upstream.
 function linearErrorResponse(failure: {
   kind: string;
   error: string;
 }): Response {
   const status =
-    failure.kind === 'auth' ? 401 : failure.kind === 'rate-limit' ? 429 : 502;
+    failure.kind === 'auth'
+      ? 401
+      : failure.kind === 'rate-limit'
+        ? 429
+        : failure.kind === 'usage-limit'
+          ? 402
+          : 502;
   return errorResponse(status, failure.error);
 }
 
@@ -1801,6 +1809,99 @@ async function linearStates(
     return errorResponse(409, 'no Linear API key configured');
   const result = await client.workflowStates(teamId);
   return result.ok ? jsonResponse(result.data) : linearErrorResponse(result);
+}
+
+const LINEAR_EXPORT_SCOPES: readonly LinearExportScope[] = [
+  'open',
+  'all',
+  'all-archive-finished',
+];
+
+function isTaskIdList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((v) => typeof v === 'string');
+}
+
+// A bulk start as HTTP: 202 once a background pass is begun (the 65s request
+// timeout would cut an awaited one), 200 when there was nothing to send.
+function linearBulkResponse(
+  start: ReturnType<LinearSync['startExport']>,
+  began: boolean
+): Response {
+  if (!start.ok) return errorResponse(start.status, start.error);
+  if (!began) return jsonResponse({ started: false, candidates: 0 });
+  const { candidates, startedAt } = start;
+  return jsonResponse({ started: true, candidates, startedAt }, 202);
+}
+
+// POST /api/linear/export {scope} — create Linear records for the unlinked
+// tasks the scope covers; progress and the outcome arrive through status.
+async function startLinearExport(
+  req: Request,
+  ctx: ApiContext
+): Promise<Response> {
+  const parsed = await readJsonBodyOptional(req);
+  if (!parsed.ok) return parsed.response;
+  const scope = LINEAR_EXPORT_SCOPES.find((s) => s === parsed.value.scope);
+  if (scope === undefined) {
+    return errorResponse(400, 'scope must be open|all|all-archive-finished');
+  }
+  const start = ctx.linearSync.startExport(scope);
+  return linearBulkResponse(start, start.ok && start.candidates > 0);
+}
+
+// POST /api/linear/retry {taskIds?} — send the named queued creates now, or
+// every queued one, resetting their backoff and the issue-limit pause.
+async function startLinearRetry(
+  req: Request,
+  ctx: ApiContext
+): Promise<Response> {
+  const parsed = await readJsonBodyOptional(req);
+  if (!parsed.ok) return parsed.response;
+  const raw = parsed.value.taskIds;
+  if (raw !== undefined && !isTaskIdList(raw)) {
+    return errorResponse(400, 'taskIds must be a list of strings');
+  }
+  const start = ctx.linearSync.startRetry(raw);
+  return linearBulkResponse(start, start.ok && start.candidates > 0);
+}
+
+// POST /api/linear/forget {taskIds} — stop retrying these tasks' creates.
+async function forgetLinear(req: Request, ctx: ApiContext): Promise<Response> {
+  const parsed = await readJsonBodyOptional(req);
+  if (!parsed.ok) return parsed.response;
+  const raw = parsed.value.taskIds;
+  if (!isTaskIdList(raw)) {
+    return errorResponse(400, 'taskIds must be a list of strings');
+  }
+  return jsonResponse({ forgotten: ctx.linearSync.forget(raw) });
+}
+
+// GET /api/linear/capacity[?refresh=1] — active issues against the plan's cap.
+async function linearCapacity(
+  ctx: ApiContext,
+  refresh: boolean
+): Promise<Response> {
+  if (ctx.linearSync.client() === null) {
+    return errorResponse(409, 'no Linear API key configured');
+  }
+  const result = await ctx.linearSync.capacity(refresh);
+  return result.ok ? jsonResponse(result.data) : linearErrorResponse(result);
+}
+
+// POST /api/linear/archive-closed {includeCanceled?} — archive the linked
+// teams' closed issues in Linear; their tasks here take the archive too.
+async function startLinearArchiveClosed(
+  req: Request,
+  ctx: ApiContext
+): Promise<Response> {
+  const parsed = await readJsonBodyOptional(req);
+  if (!parsed.ok) return parsed.response;
+  const includeCanceled = parsed.value.includeCanceled ?? false;
+  if (typeof includeCanceled !== 'boolean') {
+    return errorResponse(400, 'includeCanceled must be a boolean');
+  }
+  const start = ctx.linearSync.startArchiveClosed({ includeCanceled });
+  return linearBulkResponse(start, start.ok);
 }
 
 // A run's metadata, from the in-memory registry first (boot hydrates every
@@ -4384,8 +4485,14 @@ const ELEVATED_ROUTES: ReadonlyArray<{
   // control is not half-privileged. Using the key once set stays on the
   // request tier: sync pushes board data the caller can already read to a
   // destination higher tiers chose, and import only brings issues in.
+  // Export and retry push no more than sync {taskIds} already may, and
+  // forget only holds a local task back, so they stay there too.
   { method: 'POST', segments: ['linear', 'connect'], tier: 'operator' },
   { method: 'POST', segments: ['linear', 'disconnect'], tier: 'operator' },
+  // Archiving closed issues acts on records teammates made in a shared
+  // tracker, not only Dispatch's, so an agent token must not start it. Decide
+  // rather than operator: connecting already chose the workspace.
+  { method: 'POST', segments: ['linear', 'archive-closed'], tier: 'decide' },
   // `evaluate` runs arbitrary JavaScript in a browser carrying the user's own
   // session cookies, which is at least the authority a shell has. The whole
   // family stays together for that reason.
@@ -5192,13 +5299,38 @@ export async function handleApi(
         const parsed = await readJsonBodyOptional(req);
         if (!parsed.ok) return parsed.response;
         const raw = parsed.value.taskIds;
-        if (
-          raw !== undefined &&
-          (!Array.isArray(raw) || !raw.every((v) => typeof v === 'string'))
-        ) {
+        if (raw !== undefined && !isTaskIdList(raw)) {
           return errorResponse(400, 'taskIds must be a list of strings');
         }
         return jsonResponse(await ctx.linearSync.syncOnce(raw));
+      }
+      // GET /api/linear/export — how many tasks each export scope would send.
+      // Reads the task cache only; Linear is not called.
+      if (segments[1] === 'export' && method === 'GET') {
+        return jsonResponse(ctx.linearSync.exportPreview());
+      }
+      if (segments[1] === 'export' && method === 'POST') {
+        return await startLinearExport(req, ctx);
+      }
+      // GET /api/linear/coverage — which tasks have a Linear record, and why
+      // the rest do not. No Linear call, so it answers while disconnected.
+      if (segments[1] === 'coverage' && method === 'GET') {
+        return jsonResponse(ctx.linearSync.coverage());
+      }
+      if (segments[1] === 'retry' && method === 'POST') {
+        return await startLinearRetry(req, ctx);
+      }
+      if (segments[1] === 'forget' && method === 'POST') {
+        return await forgetLinear(req, ctx);
+      }
+      if (segments[1] === 'capacity' && method === 'GET') {
+        return await linearCapacity(
+          ctx,
+          url.searchParams.get('refresh') === '1'
+        );
+      }
+      if (segments[1] === 'archive-closed' && method === 'POST') {
+        return await startLinearArchiveClosed(req, ctx);
       }
     }
 
