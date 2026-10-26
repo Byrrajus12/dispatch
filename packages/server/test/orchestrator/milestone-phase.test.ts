@@ -1,14 +1,14 @@
 import type { TaskDoc } from '@dispatch-foo/core';
 import { describe, expect, it } from 'bun:test';
 
+import type { FixLoopState } from '../../src/orchestrator/fixLoop.js';
 import {
   type ChildPhaseInput,
   deriveChildPhase,
   deriveSpend,
   deriveWaves,
   summarizeWaves,
-} from '../../src/orchestrator/epicPhase.js';
-import type { FixLoopState } from '../../src/orchestrator/fixLoop.js';
+} from '../../src/orchestrator/milestonePhase.js';
 import type { RunMeta, RunState } from '../../src/orchestrator/types.js';
 
 function task(id: string, overrides: Partial<TaskDoc['meta']> = {}): TaskDoc {
@@ -315,7 +315,7 @@ describe('deriveWaves', () => {
     expect(waves.get('e')).toBe(4);
   });
 
-  it('a blocker outside the epic does not count', () => {
+  it('a blocker outside the milestone does not count', () => {
     const waves = deriveWaves([task('a', { blockedBy: ['t-outside'] })]);
     expect(waves.get('a')).toBe(1);
   });

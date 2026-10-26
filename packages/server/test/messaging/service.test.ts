@@ -849,11 +849,11 @@ describe('wake gate handler', () => {
     });
   }
 
-  it('does not wake an epic or a missing task on replay', async () => {
+  it('does not wake a milestone or a missing task on replay', async () => {
     const { orchestrator, store } = makeOrchestrator(project.root());
     const executor = new StallingExecutor();
     orchestrator.registerExecutor('claude', executor);
-    const epic = store.create({ title: 'An epic', kind: 'epic' });
+    const milestone = store.create({ title: 'A milestone', kind: 'milestone' });
     const messaging = openMessaging({
       rootDir: project.root(),
       orchestrator,
@@ -864,7 +864,7 @@ describe('wake gate handler', () => {
     });
     await messaging.recover();
 
-    for (const target of [`task:${epic.meta.id}`, 'task:t-000000']) {
+    for (const target of [`task:${milestone.meta.id}`, 'task:t-000000']) {
       const { question, answer } = seedApprovedWake(messaging, {
         from: 'human:asker',
         target,
@@ -878,7 +878,7 @@ describe('wake gate handler', () => {
       .filter((i) => i.message.kind === 'notice')
       .map((i) => i.message.body);
     expect(notices).toEqual([
-      `Not woken: task ${epic.meta.id} is an epic.`,
+      `Not woken: task ${milestone.meta.id} is a milestone.`,
       'Not woken: task t-000000 is missing.',
     ]);
     messaging.close();

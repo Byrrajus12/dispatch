@@ -127,7 +127,7 @@ interface Harness extends OverseerToolContext {
 function makeHarness(
   opts: {
     docs?: OverseerToolContext['docs'];
-    epics?: OverseerToolContext['epics'];
+    milestones?: OverseerToolContext['milestones'];
   } = {}
 ): Harness {
   const store = TaskStore.init(repo);
@@ -189,7 +189,7 @@ function makeHarness(
     ownerRef: 'human:test',
     overseer: 'agent:test/overseer',
     docs: opts.docs ?? null,
-    ...(opts.epics === undefined ? {} : { epics: opts.epics }),
+    ...(opts.milestones === undefined ? {} : { milestones: opts.milestones }),
     tasks: {
       create: (input) => {
         const doc = store.create(input);
@@ -631,21 +631,21 @@ describe('overseer status tools', () => {
     expect(scoped.questions[0].question).toBe('Second?');
   });
 
-  it('ledger_entries returns only audit receipts, and narrows to one epic on request', () => {
+  it('ledger_entries returns only audit receipts, and narrows to one milestone on request', () => {
     const h = makeHarness();
     h.ledgerStore.add({
       kind: 'decision',
       title: 'Merged r-1',
       detail: 'ok — auto-decided by policy rung 4 (merge gate)',
       authoredBy: 'human:test',
-      epicId: 'e-111111',
+      milestoneId: 'e-111111',
     });
     h.ledgerStore.add({
       kind: 'decision',
       title: 'Scope extended for run r-2',
       detail: 'src/a.ts — needed it',
       authoredBy: 'human:test',
-      epicId: 'e-222222',
+      milestoneId: 'e-222222',
     });
     // A lesson lives in memory now, so the overseer reads it there instead.
     h.ledgerStore.add({
@@ -653,7 +653,7 @@ describe('overseer status tools', () => {
       title: 'Flaky suite',
       detail: 'retries',
       authoredBy: 'human:test',
-      epicId: 'e-111111',
+      milestoneId: 'e-111111',
     });
 
     const all = h.registry.callStatusTool('ledger_entries') as {
@@ -662,7 +662,7 @@ describe('overseer status tools', () => {
     expect(all.total).toBe(2);
 
     const scoped = h.registry.callStatusTool('ledger_entries', {
-      epicId: 'e-111111',
+      milestoneId: 'e-111111',
     }) as { entries: Record<string, unknown>[]; total: number };
     expect(scoped.total).toBe(1);
     expect(scoped.entries[0]).toMatchObject({
@@ -1681,11 +1681,11 @@ describe('the agent drives everything behind cards', () => {
   });
 
   it('create_plan sends agents on its new milestone once approved, and says so first', async () => {
-    const started: { epicId: string; operator?: string }[] = [];
+    const started: { milestoneId: string; operator?: string }[] = [];
     const h = makeHarness({
-      epics: {
-        start: (epicId, opts) => {
-          started.push({ epicId, operator: opts.operator });
+      milestones: {
+        start: (milestoneId, opts) => {
+          started.push({ milestoneId, operator: opts.operator });
           return Promise.resolve();
         },
       },
@@ -1703,16 +1703,16 @@ describe('the agent drives everything behind cards', () => {
       .query()
       .find((t) => t.meta.title === 'Checkout v2');
     expect(started).toEqual([
-      { epicId: milestone?.meta.id ?? '', operator: 'human:test' },
+      { milestoneId: milestone?.meta.id ?? '', operator: 'human:test' },
     ]);
   });
 
   it('create_plan leaves the agents to the human when asked to, or when nothing can send them', async () => {
     const started: string[] = [];
     const h = makeHarness({
-      epics: {
-        start: (epicId) => {
-          started.push(epicId);
+      milestones: {
+        start: (milestoneId) => {
+          started.push(milestoneId);
           return Promise.resolve();
         },
       },

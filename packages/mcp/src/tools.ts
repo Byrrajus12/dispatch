@@ -1,5 +1,4 @@
 import {
-  ACCEPTED_KINDS,
   ASSIGNEES,
   canonicalStatus,
   ConfigError,
@@ -401,7 +400,7 @@ async function taskList(
     config.statuses,
     'status'
   );
-  const kind = validate(args.kind, ACCEPTED_KINDS, 'kind');
+  const kind = validate(args.kind, KINDS, 'kind');
 
   if (route.via === 'daemon') {
     const query = new URLSearchParams();
@@ -565,7 +564,7 @@ async function taskSave(
     if (input.title === undefined || input.title.trim() === '') {
       throw new ToolError('title must not be empty');
     }
-    const kind = validate(input.kind, ACCEPTED_KINDS, 'kind');
+    const kind = validate(input.kind, KINDS, 'kind');
     const create = {
       title: input.title,
       kind,
@@ -979,11 +978,11 @@ export function registerDispatchTools(
       inputSchema: {
         ...pageInput,
         status: z.string().optional().describe(STATUS_PARAM_DOC),
-        kind: z.string().optional().describe('task | epic'),
+        kind: z.string().optional().describe('task | milestone'),
         parent: z
           .string()
           .optional()
-          .describe('An epic id (e-…): only that epic’s child tasks.'),
+          .describe('A milestone id (e-…): only that milestone’s child tasks.'),
       },
       outputSchema: {
         tasks: z.array(z.object(taskSummaryShape)),
@@ -1051,7 +1050,7 @@ export function registerDispatchTools(
           .optional()
           .describe(
             'task | milestone | project | initiative (default task; legacy ' +
-              'epic reads as milestone). Create only.'
+              'milestone reads as milestone). Create only.'
           ),
         parent: z
           .string()
@@ -1091,7 +1090,7 @@ export function registerDispatchTools(
           .describe(
             "Markdown for the task's Description section. Create only."
           ),
-        // Files this task expects to touch, for the epic scheduler. Omitted
+        // Files this task expects to touch, for the milestone scheduler. Omitted
         // means "unknown", which serializes against everything.
         writes: z
           .array(z.string())

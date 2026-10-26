@@ -5,30 +5,33 @@
 // import is type-only) so it stays bun-test-able without a DOM.
 
 import type {
-  EpicChildPhase,
-  EpicPauseReason,
-  EpicProgressChild,
-  EpicSpend,
-  EpicWave,
+  MilestoneChildPhase,
+  MilestonePauseReason,
+  MilestoneProgressChild,
+  MilestoneSpend,
+  MilestoneWave,
   ServerEvent,
 } from '@dispatch/client';
 
 import type { TaskTab } from './appNav';
 import type { Step } from '@/ui/chrome/StepStrip';
 
-/** What the fan-out dialog hands `handleWorkEpic`/`handleResumeEpic`. `null`
+/** What the fan-out dialog hands `handleWorkMilestone`/`handleResumeMilestone`. `null`
  * lifts a ceiling; `undefined` leaves the server default (start) or the
  * session's current value (resume) in place. */
-export interface WorkEpicOptions {
+export interface WorkMilestoneOptions {
   concurrency: number;
   maxSpendUsd?: number | null;
   maxRuns?: number | null;
 }
 
-/** The `epic.paused` frame, by itself. */
-export type EpicPausedEvent = Extract<ServerEvent, { type: 'epic.paused' }>;
+/** The `milestone.paused` frame, by itself. */
+export type MilestonePausedEvent = Extract<
+  ServerEvent,
+  { type: 'milestone.paused' }
+>;
 
-export const PHASE_LABEL: Record<EpicChildPhase, string> = {
+export const PHASE_LABEL: Record<MilestoneChildPhase, string> = {
   draft: 'Draft',
   waiting: 'Waiting',
   queued: 'Queued',
@@ -47,7 +50,7 @@ export const PHASE_LABEL: Record<EpicChildPhase, string> = {
 
 /** The colour a phase pill or chip carries, as a CSS token; `null` for the
  * phases the status glyph already says everything about. */
-export function phaseTint(phase: EpicChildPhase): string | null {
+export function phaseTint(phase: MilestoneChildPhase): string | null {
   switch (phase) {
     case 'working':
     case 'reviewing':
@@ -71,7 +74,7 @@ export function phaseTint(phase: EpicChildPhase): string | null {
 
 /** The phases an active session's header counts, left to right. A zero
  * count renders nothing, so the order is only ever a subset of this. */
-export const PHASE_CHIP_ORDER: readonly EpicChildPhase[] = [
+export const PHASE_CHIP_ORDER: readonly MilestoneChildPhase[] = [
   'working',
   'reviewing',
   'fixing',
@@ -84,9 +87,9 @@ export const PHASE_CHIP_ORDER: readonly EpicChildPhase[] = [
 /** How many children stand in each phase — every phase present, zeros
  * included, so callers index without a guard. */
 export function phaseCounts(
-  children: readonly EpicProgressChild[]
-): Record<EpicChildPhase, number> {
-  const counts: Record<EpicChildPhase, number> = {
+  children: readonly MilestoneProgressChild[]
+): Record<MilestoneChildPhase, number> {
+  const counts: Record<MilestoneChildPhase, number> = {
     draft: 0,
     waiting: 0,
     queued: 0,
@@ -106,20 +109,21 @@ export function phaseCounts(
   return counts;
 }
 
-const PILL_PHASES: ReadonlySet<EpicChildPhase> = new Set<EpicChildPhase>([
-  'working',
-  'reviewing',
-  'fixing',
-  'capped',
-  'failed',
-  'blocked',
-  'held',
-  'waiting',
-]);
+const PILL_PHASES: ReadonlySet<MilestoneChildPhase> =
+  new Set<MilestoneChildPhase>([
+    'working',
+    'reviewing',
+    'fixing',
+    'capped',
+    'failed',
+    'blocked',
+    'held',
+    'waiting',
+  ]);
 
 /** Whether a row shows a phase pill: only when the phase says more than the
  * task's status glyph already does. */
-export function showsPhasePill(phase: EpicChildPhase): boolean {
+export function showsPhasePill(phase: MilestoneChildPhase): boolean {
   return PILL_PHASES.has(phase);
 }
 
@@ -147,7 +151,7 @@ function formatUsdFixed(n: number): string {
 }
 
 /** The spend pill: `$41.20 / $60`, or just `$41.20` with no ceiling. */
-export function spendPillLabel(spend: EpicSpend): string {
+export function spendPillLabel(spend: MilestoneSpend): string {
   const settled = formatUsd(spend.settledUsd);
   return spend.maxSpendUsd === null
     ? settled
@@ -160,7 +164,7 @@ export function spendPillLabel(spend: EpicSpend): string {
  * (`spendPillLabel`), so the tone can flip while the printed number still
  * looks low; every pill that carries this tone renders `spendTitle` as its
  * hover text, which is where the in-flight half is spelled out. */
-export function spendTone(spend: EpicSpend): 'working' | 'warning' {
+export function spendTone(spend: MilestoneSpend): 'working' | 'warning' {
   if (spend.maxSpendUsd === null) return 'working';
   const committed = spend.settledUsd + spend.estimatedLiveUsd;
   return committed >= spend.maxSpendUsd * 0.8 ? 'warning' : 'working';
@@ -168,7 +172,7 @@ export function spendTone(spend: EpicSpend): 'working' | 'warning' {
 
 /** The spend pill's hover text: `+~$30.00 in flight · 7/20 runs`. The
  * in-flight half is omitted with nothing live; the `/N` with no run ceiling. */
-export function spendTitle(spend: EpicSpend): string {
+export function spendTitle(spend: MilestoneSpend): string {
   const parts: string[] = [];
   if (spend.liveCount > 0) {
     parts.push(`+~${formatUsdFixed(spend.estimatedLiveUsd)} in flight`);
@@ -182,7 +186,7 @@ export function spendTitle(spend: EpicSpend): string {
 }
 
 /** The paused pill's text, by why the session stopped filling. */
-export function pausedReasonLabel(reason: EpicPauseReason): string {
+export function pausedReasonLabel(reason: MilestonePauseReason): string {
   switch (reason) {
     case 'budget':
       return 'Paused — budget ceiling';
@@ -196,7 +200,9 @@ export function pausedReasonLabel(reason: EpicPauseReason): string {
 }
 
 /** Children whose fix loop ran out of rounds and now wait on a ruling. */
-export function rulingsWaiting(children: readonly EpicProgressChild[]): number {
+export function rulingsWaiting(
+  children: readonly MilestoneProgressChild[]
+): number {
   return children.filter((c) => c.phase === 'capped').length;
 }
 
@@ -215,18 +221,18 @@ export function defaultMaxRuns(taskCount: number): number {
   return taskCount;
 }
 
-export interface EpicPausedNotice {
+export interface MilestonePausedNotice {
   title: string;
   body: string;
 }
 
-/** Toast and inbox wording for an `epic.paused` event, in
+/** Toast and inbox wording for an `milestone.paused` event, in
  * `fixLoopCappedNotice`'s shape. The row is durable, so the body carries the
  * numbers the event had rather than anything a later fetch might change. */
-export function epicPausedNotice(
-  epicTitle: string,
-  event: EpicPausedEvent
-): EpicPausedNotice {
+export function milestonePausedNotice(
+  milestoneTitle: string,
+  event: MilestonePausedEvent
+): MilestonePausedNotice {
   const resume = 'Resume or raise the ceiling to continue.';
   switch (event.reason) {
     case 'budget': {
@@ -239,7 +245,7 @@ export function epicPausedNotice(
           ? ''
           : ` of ${formatUsdFixed(event.maxSpendUsd)}`;
       return {
-        title: `${epicTitle} paused — spend ceiling`,
+        title: `${milestoneTitle} paused — spend ceiling`,
         body: `${formatUsdFixed(event.settledUsd)} settled${inFlight}${ceiling}. ${resume}`,
       };
     }
@@ -249,14 +255,14 @@ export function epicPausedNotice(
           ? `${event.runsStarted} runs started`
           : `${event.runsStarted}/${event.maxRuns} runs started`;
       return {
-        title: `${epicTitle} paused — run ceiling`,
+        title: `${milestoneTitle} paused — run ceiling`,
         body: `${runs}. ${resume}`,
       };
     }
     case 'fill-failed': {
       const detail = event.detail?.trim() ?? '';
       return {
-        title: `${epicTitle} paused — auto-dispatch failed`,
+        title: `${milestoneTitle} paused — auto-dispatch failed`,
         body:
           detail === ''
             ? 'Auto-dispatch kept failing. Resume to try again.'
@@ -265,7 +271,7 @@ export function epicPausedNotice(
     }
     case 'human':
       return {
-        title: `${epicTitle} paused`,
+        title: `${milestoneTitle} paused`,
         body: 'Paused by you. Resume to keep dispatching.',
       };
   }
@@ -273,14 +279,18 @@ export function epicPausedNotice(
 
 // A child that has cleared review — nothing in the wave is still being
 // worked, checked or fixed for it.
-const PAST_REVIEWING: ReadonlySet<EpicChildPhase> = new Set<EpicChildPhase>([
-  'needs-review',
-  'landing',
-  'landed',
-  'dropped',
-]);
+const PAST_REVIEWING: ReadonlySet<MilestoneChildPhase> =
+  new Set<MilestoneChildPhase>([
+    'needs-review',
+    'landing',
+    'landed',
+    'dropped',
+  ]);
 
-function waveCount(wave: EpicWave, phases: Iterable<EpicChildPhase>): number {
+function waveCount(
+  wave: MilestoneWave,
+  phases: Iterable<MilestoneChildPhase>
+): number {
   let n = 0;
   for (const phase of phases) n += wave.byPhase[phase] ?? 0;
   return n;
@@ -288,7 +298,7 @@ function waveCount(wave: EpicWave, phases: Iterable<EpicChildPhase>): number {
 
 /** One `StepStrip` segment per wave. A failure outranks activity — a wave
  * that is both still running and already broken needs a person first. */
-export function waveSteps(waves: readonly EpicWave[]): Step[] {
+export function waveSteps(waves: readonly MilestoneWave[]): Step[] {
   return waves.map((wave) => {
     const name = `Wave ${wave.index}`;
     if (waveCount(wave, ['blocked', 'failed']) > 0) {
@@ -306,7 +316,7 @@ export function waveSteps(waves: readonly EpicWave[]): Step[] {
 
 /** Where clicking a row's phase pill lands: a failed run's transcript,
  * otherwise the task page on whatever its state calls for. */
-export function drillTargetFor(child: EpicProgressChild): {
+export function drillTargetFor(child: MilestoneProgressChild): {
   tab: TaskTab;
   runId?: string;
 } {

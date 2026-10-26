@@ -42,7 +42,7 @@ const TASKS = [
 
 const noop = () => {};
 const resolved = () => Promise.resolve();
-const NO_EPICS: TaskDoc[] = [];
+const NO_MILESTONES: TaskDoc[] = [];
 const LABELS = [...new Set(TASKS.flatMap((t) => t.meta.labels))].sort();
 
 // A popover positions itself a microtask after mount (floating-ui), so anything that opens
@@ -99,7 +99,7 @@ function Grid({
           live={false}
           needsYou={false}
           statuses={testConfig.statuses}
-          epics={NO_EPICS}
+          milestones={NO_MILESTONES}
           labelCandidates={LABELS}
           onUpdate={onUpdate}
           onMoveStatus={resolved}
@@ -224,7 +224,7 @@ test('a cursor move re-renders only the rows whose focus changed', () => {
             live={false}
             needsYou={false}
             statuses={testConfig.statuses}
-            epics={NO_EPICS}
+            milestones={NO_MILESTONES}
             onUpdate={resolved}
             onMoveStatus={resolved}
             picker={null}
@@ -259,7 +259,7 @@ test('a task whose run is in the merge queue carries the Landing badge', () => {
     live: false,
     needsYou: false,
     statuses: testConfig.statuses,
-    epics: NO_EPICS,
+    milestones: NO_MILESTONES,
     onUpdate: resolved,
     onMoveStatus: resolved,
     picker: null,

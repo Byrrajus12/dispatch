@@ -1,4 +1,4 @@
-// The epic lane header's concurrency picker is a `SelectPill` (`1×` … `4×`): a fixed
+// The milestone lane header's concurrency picker is a `SelectPill` (`1×` … `4×`): a fixed
 // menu rather than a free-text stepper, so the only parsing left is the menu value on the
 // way back. Both helpers stay pure so the rounding rule is unit-testable like the rest of
 // lib/.

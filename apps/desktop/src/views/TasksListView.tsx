@@ -43,7 +43,7 @@ import {
   readCollapsedGroups,
   toggleCollapsedGroup,
   writeCollapsedGroups,
-} from '../lib/collapsedEpics';
+} from '../lib/collapsedMilestones';
 import { landingStateByTaskId } from '../lib/landingBadge';
 import {
   type GroupIcon,
@@ -52,7 +52,7 @@ import {
   type ListGroupRow,
   visibleRowIds,
 } from '../lib/listGrouping';
-import { colorForEpic } from '../lib/projectColor';
+import { colorForMilestone } from '../lib/projectColor';
 import { useStatusModelOf } from '../lib/statusModel';
 import { assigneeLabel, priorityLabel, statusLabel } from '../lib/taskDisplay';
 import {
@@ -131,9 +131,9 @@ function rowDomId(id: string): string {
  * Linear's list layout for Tasks: rows straight on the panel (no card, no column header, no
  * dividers), grouped under status-tinted 36px `GroupHeader`s with a `+` each, every row a
  * 36px `ListRow` — priority glyph, sans id, status glyph, title, then the right-aligned pills
- * (labels, epic chip, sub-task count, live run mark, assignee) and the absolute date. The
+ * (labels, milestone chip, sub-task count, live run mark, assignee) and the absolute date. The
  * grouping/ordering/properties come from `display` (`groupTasks`), the same model the board
- * and Milestones read. A right-click menu and the single-key shortcuts (`s p a e` pickers,
+ * and Milestones read. A right-click menu and the single-key shortcuts (`s p a m` pickers,
  * `x` select, `d` dispatch, `o`/Enter open, Space peek, `⌘C` copy id, `j/k`) work on the
  * focused row; bulk selection surfaces a dispatch bar at the bottom. The caller owns the
  * page header, view tabs and filter/display controls; this only renders once the project
@@ -190,13 +190,14 @@ export function TasksListView({
   }, []);
   const virtualRef = useRef<VirtualRowsHandle>(null);
 
-  const epicById = useMemo(() => {
+  const milestoneById = useMemo(() => {
     const map = new Map<string, TaskListItem>();
-    for (const epic of data.epics) map.set(epic.meta.id, epic);
+    for (const milestone of data.milestones)
+      map.set(milestone.meta.id, milestone);
     return map;
-  }, [data.epics]);
+  }, [data.milestones]);
 
-  // Children per parent, for the epic row's `▶ N` sub-task count.
+  // Children per parent, for the milestone row's `▶ N` sub-task count.
   const childCountByParent = useMemo(() => {
     const map = new Map<string, number>();
     for (const doc of data.tasks) {
@@ -218,7 +219,7 @@ export function TasksListView({
     const passes = (doc: TaskListItem) => taskFilter?.(doc) ?? true;
     return groupTasks(data.tasks.filter(passes), prefs, {
       statuses: data.config.statuses,
-      epics: data.epics,
+      milestones: data.milestones,
       archivedTasks: data.showArchived
         ? data.archivedTasks.filter(passes)
         : undefined,
@@ -227,7 +228,7 @@ export function TasksListView({
   }, [
     data.tasks,
     data.config,
-    data.epics,
+    data.milestones,
     data.showArchived,
     data.archivedTasks,
     taskFilter,
@@ -385,14 +386,14 @@ export function TasksListView({
       case 'status':
       case 'milestone':
         return <StatusIcon status={icon.status} />;
-      case 'epic':
-        return icon.epicId === null ? (
+      case 'parent':
+        return icon.parentId === null ? (
           <Milestone className="text-muted-foreground size-3.5" />
         ) : (
           <span
             aria-hidden
             className="size-2.5 rounded-[3px]"
-            style={{ backgroundColor: colorForEpic(icon.epicId) }}
+            style={{ backgroundColor: colorForMilestone(icon.parentId) }}
           />
         );
       case 'assignee':
@@ -402,9 +403,9 @@ export function TasksListView({
     }
   };
 
-  // Under an epic or milestone header the ` › epic` chip repeats the header.
-  const showEpicChip =
-    prefs.grouping !== 'epic' && prefs.grouping !== 'milestone';
+  // Under a parent or milestone header the ` › milestone` chip repeats the header.
+  const showMilestoneChip =
+    prefs.grouping !== 'parent' && prefs.grouping !== 'milestone';
 
   const menuDoc = menuTaskId !== null ? docById.get(menuTaskId) : undefined;
   const menuEditable =
@@ -416,7 +417,7 @@ export function TasksListView({
           headers (and their chevrons) in place. */}
       {groups.length === 0 ? (
         <>
-          {data.tasks.length === 0 && data.epics.length === 0 ? (
+          {data.tasks.length === 0 && data.milestones.length === 0 ? (
             <EmptyState
               icon={ListTodo}
               heading="No tasks yet"
@@ -464,8 +465,9 @@ export function TasksListView({
               renderRow={(row) => {
                 if (row.kind === 'header') {
                   const group = row.header;
-                  const knownEpic =
-                    group.epicId !== null && epicById.has(group.epicId);
+                  const knownMilestone =
+                    group.milestoneId !== null &&
+                    milestoneById.has(group.milestoneId);
                   const accessory = groupAccessory?.(group);
                   return (
                     <div data-group-key={group.key}>
@@ -483,15 +485,15 @@ export function TasksListView({
                         }
                         addLabel={`New task in ${group.label}`}
                         actions={
-                          knownEpic || accessory !== undefined ? (
+                          knownMilestone || accessory !== undefined ? (
                             <>
                               {accessory}
-                              {knownEpic && (
+                              {knownMilestone && (
                                 <IconButton
                                   label={`Open the flight plan for ${group.label}`}
                                   onClick={() => {
-                                    if (group.epicId !== null) {
-                                      shell.openTask(group.epicId, 'plan');
+                                    if (group.milestoneId !== null) {
+                                      shell.openTask(group.milestoneId, 'plan');
                                     }
                                   }}
                                 >
@@ -523,7 +525,7 @@ export function TasksListView({
                     speech={speechByTask?.get(id)}
                     landing={landingByTaskId.get(id)}
                     statuses={statuses}
-                    epics={data.epics}
+                    milestones={data.milestones}
                     labelCandidates={
                       picker?.taskId === id ? labelCandidates : undefined
                     }
@@ -531,13 +533,13 @@ export function TasksListView({
                     onMoveStatus={data.moveTaskStatus}
                     indent={listRow.indent}
                     archived={archived}
-                    epic={
+                    milestone={
                       listRow.doc.meta.parent !== null
-                        ? epicById.get(listRow.doc.meta.parent)
+                        ? milestoneById.get(listRow.doc.meta.parent)
                         : undefined
                     }
                     childCount={childCountByParent.get(id) ?? 0}
-                    showEpicChip={showEpicChip}
+                    showMilestoneChip={showMilestoneChip}
                     picker={picker?.taskId === id ? picker : null}
                     onPickerChange={setPicker}
                     selected={selectedIds.has(id)}
@@ -656,9 +658,9 @@ export function TasksListView({
                   </ContextMenuSub>
                   <ContextMenuSub>
                     <ContextMenuSubTrigger>
-                      <Milestone />
-                      Epic
-                      <ContextMenuShortcut>E</ContextMenuShortcut>
+                      <Target />
+                      Milestone
+                      <ContextMenuShortcut>M</ContextMenuShortcut>
                     </ContextMenuSubTrigger>
                     <ContextMenuSubContent>
                       <ContextMenuItem
@@ -668,40 +670,18 @@ export function TasksListView({
                           })
                         }
                       >
-                        No epic
+                        No milestone
                       </ContextMenuItem>
-                      {data.epics.map((epic) => (
+                      {data.milestones.map((milestone) => (
                         <ContextMenuItem
-                          key={epic.meta.id}
+                          key={milestone.meta.id}
                           onClick={() =>
                             void data.handleUpdate(menuDoc.meta.id, {
-                              parent: epic.meta.id,
+                              parent: milestone.meta.id,
                             })
                           }
                         >
-                          {epic.meta.title}
-                        </ContextMenuItem>
-                      ))}
-                    </ContextMenuSubContent>
-                  </ContextMenuSub>
-                  {/* Milestone = epic today (e-be4827): the same choices, the same field. */}
-                  <ContextMenuSub>
-                    <ContextMenuSubTrigger>
-                      <Target />
-                      Milestone
-                      <ContextMenuShortcut>M</ContextMenuShortcut>
-                    </ContextMenuSubTrigger>
-                    <ContextMenuSubContent>
-                      {data.epics.map((epic) => (
-                        <ContextMenuItem
-                          key={epic.meta.id}
-                          onClick={() =>
-                            void data.handleUpdate(menuDoc.meta.id, {
-                              parent: epic.meta.id,
-                            })
-                          }
-                        >
-                          {epic.meta.title}
+                          {milestone.meta.title}
                         </ContextMenuItem>
                       ))}
                     </ContextMenuSubContent>
@@ -808,7 +788,9 @@ export function TasksListView({
           readyIds={data.readyIds}
           runningNow={data.liveRunStateByTaskId.size}
           liveClaims={liveClaimsFrom(data.runs)}
-          defaultConcurrency={data.config?.orchestrator.epicConcurrency ?? 3}
+          defaultConcurrency={
+            data.config?.orchestrator.milestoneConcurrency ?? 3
+          }
           onCancel={() => setDispatchOpen(false)}
           onConfirm={async ({ concurrency }) => {
             // Dispatched one at a time up to the chosen concurrency, matching what the preview

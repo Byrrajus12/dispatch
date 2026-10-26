@@ -90,7 +90,6 @@ const LIST_GROUPS: ShortcutGroup[] = [
       { label: 'Priority', keys: ['P'] },
       { label: 'Assignee', keys: ['A'] },
       { label: 'Labels', keys: ['L'] },
-      { label: 'Epic', keys: ['E'] },
       { label: 'Milestone', keys: ['M'] },
       { label: 'Dispatch', keys: ['D'] },
     ],

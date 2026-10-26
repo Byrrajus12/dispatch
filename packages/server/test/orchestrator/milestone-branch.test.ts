@@ -6,9 +6,9 @@ import { join } from 'node:path';
 
 import { TaskCache } from '../../src/cache.js';
 import { EventBus } from '../../src/events.js';
-import { epicBranchName } from '../../src/orchestrator/epicBranch.js';
 import { FakeExecutor } from '../../src/orchestrator/executors/fake.js';
 import { MergeQueue } from '../../src/orchestrator/mergeQueue.js';
+import { milestoneBranchName } from '../../src/orchestrator/milestoneBranch.js';
 import { Orchestrator } from '../../src/orchestrator/orchestrator.js';
 import { transcriptPath } from '../../src/orchestrator/paths.js';
 import type { CommandRunner } from '../../src/orchestrator/pr.js';
@@ -28,7 +28,7 @@ const liveQueues: MergeQueue[] = [];
 beforeEach(() => {
   fakeHome = mkdtempSync(join(tmpdir(), 'dispatch-home-'));
   process.env.DISPATCH_HOME = fakeHome;
-  repo = initGitRepo('dispatch-epic-branch-');
+  repo = initGitRepo('dispatch-milestone-branch-');
 });
 
 afterEach(() => {
@@ -75,14 +75,20 @@ const noJjRunner: CommandRunner = async (cwd, cmd) =>
     ? { ok: false, stdout: '', stderr: 'jj: command not found' }
     : defaultCommandRunner(cwd, cmd);
 
-function makeEpicWithChild(
+function makeMilestoneWithChild(
   h: Harness,
   childTitle = 'Child task'
-): { epicId: string; taskId: string } {
-  const epic = h.store.create({ title: 'The epic', kind: 'epic' });
-  const child = h.store.create({ title: childTitle, parent: epic.meta.id });
+): { milestoneId: string; taskId: string } {
+  const milestone = h.store.create({
+    title: 'The milestone',
+    kind: 'milestone',
+  });
+  const child = h.store.create({
+    title: childTitle,
+    parent: milestone.meta.id,
+  });
   h.cache.rebuild(h.store);
-  return { epicId: epic.meta.id, taskId: child.meta.id };
+  return { milestoneId: milestone.meta.id, taskId: child.meta.id };
 }
 
 // Dispatches `taskId`, waits for the fake run to finish, and commits one real
@@ -113,11 +119,11 @@ function fileOnBranch(branch: string, file: string): string | null {
   return result.exitCode === 0 ? result.stdout.toString('utf8') : null;
 }
 
-describe('epic branch creation at dispatch', () => {
-  it('lazily cuts epic/<id> from the default base on first dispatch and uses it as baseBranch', async () => {
+describe('milestone branch creation at dispatch', () => {
+  it('lazily cuts milestone/<id> from the default base on first dispatch and uses it as baseBranch', async () => {
     const h = makeHarness();
-    const { epicId, taskId } = makeEpicWithChild(h);
-    const branch = epicBranchName(epicId);
+    const { milestoneId, taskId } = makeMilestoneWithChild(h);
+    const branch = milestoneBranchName(milestoneId);
     expect(runGitSync(repo, ['branch', '--list', branch]).trim()).toBe('');
 
     const run = await h.orchestrator.dispatch(taskId, 'fake');
@@ -127,21 +133,21 @@ describe('epic branch creation at dispatch', () => {
     expect(runGitSync(repo, ['rev-parse', branch]).trim()).toBe(
       runGitSync(repo, ['rev-parse', 'main']).trim()
     );
-    // The creation is recorded on the epic's own Activity.
-    expect(h.store.get(epicId)?.body).toContain(
+    // The creation is recorded on the milestone's own Activity.
+    expect(h.store.get(milestoneId)?.body).toContain(
       `integration branch ${branch} created from main`
     );
   });
 
-  it('reuses the existing epic branch for later dispatches instead of re-creating it', async () => {
+  it('reuses the existing milestone branch for later dispatches instead of re-creating it', async () => {
     const h = makeHarness();
-    const { epicId, taskId } = makeEpicWithChild(h);
+    const { milestoneId, taskId } = makeMilestoneWithChild(h);
     const sibling = h.store.create({
       title: 'Second child',
-      parent: epicId,
+      parent: milestoneId,
     });
     h.cache.rebuild(h.store);
-    const branch = epicBranchName(epicId);
+    const branch = milestoneBranchName(milestoneId);
 
     await dispatchWithWork(h, taskId, 'a.txt');
     const tip = runGitSync(repo, ['rev-parse', branch]).trim();
@@ -150,11 +156,11 @@ describe('epic branch creation at dispatch', () => {
     expect(second.baseBranch).toBe(branch);
     // Still pointing where it was — dispatch never moved or re-cut it.
     expect(runGitSync(repo, ['rev-parse', branch]).trim()).toBe(tip);
-    const activity = h.store.get(epicId)?.body ?? '';
+    const activity = h.store.get(milestoneId)?.body ?? '';
     expect(activity.split('integration branch').length).toBe(2);
   });
 
-  it('leaves tasks without a parent epic on the default base', async () => {
+  it('leaves tasks without a parent milestone on the default base', async () => {
     const h = makeHarness();
     const task = h.store.create({ title: 'Plain task' });
     h.cache.rebuild(h.store);
@@ -163,11 +169,11 @@ describe('epic branch creation at dispatch', () => {
   });
 });
 
-describe('review-merge onto the epic branch', () => {
-  it('lands the run on epic/<id> without touching main or the main checkout', async () => {
+describe('review-merge onto the milestone branch', () => {
+  it('lands the run on milestone/<id> without touching main or the main checkout', async () => {
     const h = makeHarness();
-    const { epicId, taskId } = makeEpicWithChild(h);
-    const branch = epicBranchName(epicId);
+    const { milestoneId, taskId } = makeMilestoneWithChild(h);
+    const branch = milestoneBranchName(milestoneId);
     const runId = await dispatchWithWork(h, taskId, 'a.txt', 'A work');
     const mainTipBefore = runGitSync(repo, ['rev-parse', 'main']).trim();
 
@@ -175,7 +181,7 @@ describe('review-merge onto the epic branch', () => {
 
     expect(reviewed.reviewAction).toBe('merge');
     expect(reviewed.mergeCommit).toBeDefined();
-    // The squash commit is the epic branch's new tip, and carries the file.
+    // The squash commit is the milestone branch's new tip, and carries the file.
     expect(reviewed.mergeCommit).toBe(
       runGitSync(repo, ['rev-parse', branch]).trim()
     );
@@ -192,16 +198,16 @@ describe('review-merge onto the epic branch', () => {
     expect(runGitSync(repo, ['branch', '--list', runBranch]).trim()).toBe('');
   });
 
-  it('merges a second child cleanly after the epic branch moved under it', async () => {
+  it('merges a second child cleanly after the milestone branch moved under it', async () => {
     const h = makeHarness();
-    const { epicId, taskId } = makeEpicWithChild(h, 'Child A');
-    const branch = epicBranchName(epicId);
-    const taskB = h.store.create({ title: 'Child B', parent: epicId });
+    const { milestoneId, taskId } = makeMilestoneWithChild(h, 'Child A');
+    const branch = milestoneBranchName(milestoneId);
+    const taskB = h.store.create({ title: 'Child B', parent: milestoneId });
     h.cache.rebuild(h.store);
 
     const runA = await dispatchWithWork(h, taskId, 'a.txt', 'A work');
     const runB = await dispatchWithWork(h, taskB.meta.id, 'b.txt', 'B work');
-    // A lands first, moving the epic tip past what B was cut from.
+    // A lands first, moving the milestone tip past what B was cut from.
     h.orchestrator.review(runA, 'merge');
     const reviewedB = h.orchestrator.review(runB, 'merge');
 
@@ -210,11 +216,11 @@ describe('review-merge onto the epic branch', () => {
     expect(fileOnBranch(branch, 'b.txt')).toBe('B work\n');
   });
 
-  it('409s a real content conflict and leaves the epic branch tip unmoved', async () => {
+  it('409s a real content conflict and leaves the milestone branch tip unmoved', async () => {
     const h = makeHarness();
-    const { epicId, taskId } = makeEpicWithChild(h, 'Child A');
-    const branch = epicBranchName(epicId);
-    const taskB = h.store.create({ title: 'Child B', parent: epicId });
+    const { milestoneId, taskId } = makeMilestoneWithChild(h, 'Child A');
+    const branch = milestoneBranchName(milestoneId);
+    const taskB = h.store.create({ title: 'Child B', parent: milestoneId });
     h.cache.rebuild(h.store);
 
     const runA = await dispatchWithWork(h, taskId, 'same.txt', 'A version');
@@ -236,10 +242,10 @@ describe('review-merge onto the epic branch', () => {
     expect(metaB.reviewedAt).toBeUndefined();
   });
 
-  it('records why an epic-branch merge failed on the run and the task, and clears it once a review lands', async () => {
+  it('records why a milestone-branch merge failed on the run and the task, and clears it once a review lands', async () => {
     const h = makeHarness();
-    const { epicId, taskId } = makeEpicWithChild(h, 'Child A');
-    const taskB = h.store.create({ title: 'Child B', parent: epicId });
+    const { milestoneId, taskId } = makeMilestoneWithChild(h, 'Child A');
+    const taskB = h.store.create({ title: 'Child B', parent: milestoneId });
     h.cache.rebuild(h.store);
 
     const runA = await dispatchWithWork(h, taskId, 'same.txt', 'A version');
@@ -273,24 +279,24 @@ describe('review-merge onto the epic branch', () => {
     ).toBeUndefined();
   });
 
-  it('409s with a named reason when the epic branch was deleted by hand', async () => {
+  it('409s with a named reason when the milestone branch was deleted by hand', async () => {
     const h = makeHarness();
-    const { epicId, taskId } = makeEpicWithChild(h);
-    const branch = epicBranchName(epicId);
+    const { milestoneId, taskId } = makeMilestoneWithChild(h);
+    const branch = milestoneBranchName(milestoneId);
     const runId = await dispatchWithWork(h, taskId, 'a.txt');
     runGitSync(repo, ['branch', '-D', branch]);
 
     expect(() => h.orchestrator.review(runId, 'merge')).toThrow(
-      `epic branch ${branch} no longer exists`
+      `milestone branch ${branch} no longer exists`
     );
     const meta = h.orchestrator.list().find((r) => r.id === runId)!;
     expect(meta.reviewedAt).toBeUndefined();
   });
 
-  it('falls back to the checkout merge path when the epic branch is checked out in the main repo', async () => {
+  it('falls back to the checkout merge path when the milestone branch is checked out in the main repo', async () => {
     const h = makeHarness();
-    const { epicId, taskId } = makeEpicWithChild(h);
-    const branch = epicBranchName(epicId);
+    const { milestoneId, taskId } = makeMilestoneWithChild(h);
+    const branch = milestoneBranchName(milestoneId);
     const runId = await dispatchWithWork(h, taskId, 'a.txt', 'A work');
     runGitSync(repo, ['checkout', branch]);
 
@@ -299,7 +305,7 @@ describe('review-merge onto the epic branch', () => {
     expect(reviewed.reviewAction).toBe('merge');
     expect(fileOnBranch(branch, 'a.txt')).toBe('A work\n');
     // The checkout path merged into the working tree, which must still be on
-    // the epic branch and clean afterwards — untracked `.dispatch/`
+    // the milestone branch and clean afterwards — untracked `.dispatch/`
     // bookkeeping excepted, exactly as the merge gates themselves except it.
     expect(runGitSync(repo, ['rev-parse', '--abbrev-ref', 'HEAD']).trim()).toBe(
       branch
@@ -310,15 +316,15 @@ describe('review-merge onto the epic branch', () => {
     expect(dirt).toEqual([]);
   });
 
-  it('reconciles a hand merge of a child branch into the epic branch', async () => {
+  it('reconciles a hand merge of a child branch into the milestone branch', async () => {
     const h = makeHarness();
-    const { epicId, taskId } = makeEpicWithChild(h);
-    const branch = epicBranchName(epicId);
+    const { milestoneId, taskId } = makeMilestoneWithChild(h);
+    const branch = milestoneBranchName(milestoneId);
     const runId = await dispatchWithWork(h, taskId, 'a.txt');
     const runBranch = h.orchestrator.list().find((r) => r.id === runId)!.branch;
 
-    // A hand squash-merge into the epic branch, done in a scratch worktree the
-    // way a user would (the epic branch is not checked out in the main repo).
+    // A hand squash-merge into the milestone branch, done in a scratch worktree the
+    // way a user would (the milestone branch is not checked out in the main repo).
     runGitSync(repo, ['checkout', branch]);
     runGitSync(repo, ['merge', '--squash', runBranch]);
     runGitSync(repo, ['commit', '-m', 'hand merge']);
@@ -330,14 +336,14 @@ describe('review-merge onto the epic branch', () => {
   });
 });
 
-describe('epic branches on the branches surface', () => {
-  it('lists the epic branch with status epic and surfaces drift behind the default base', async () => {
+describe('milestone branches on the branches surface', () => {
+  it('lists the milestone branch with status milestone and surfaces drift behind the default base', async () => {
     const h = makeHarness();
-    const { epicId, taskId } = makeEpicWithChild(h);
-    const branch = epicBranchName(epicId);
+    const { milestoneId, taskId } = makeMilestoneWithChild(h);
+    const branch = milestoneBranchName(milestoneId);
     await dispatchWithWork(h, taskId, 'a.txt');
 
-    // Main moves on after the epic branch was cut — that is drift, which is
+    // Main moves on after the milestone branch was cut — that is drift, which is
     // surfaced rather than repaired.
     writeFileSync(join(repo, 'mainline.txt'), 'mainline\n');
     runGitSync(repo, ['add', '-A']);
@@ -347,7 +353,7 @@ describe('epic branches on the branches surface', () => {
       (e) => e.branch === branch
     );
     expect(entry).toBeDefined();
-    expect(entry?.status).toBe('epic');
+    expect(entry?.status).toBe('milestone');
     expect(entry?.baseBranch).toBe('main');
     expect(entry?.behindBase).toBe(1);
     // Nothing has merged into it yet, so nothing is ahead either.
@@ -355,17 +361,17 @@ describe('epic branches on the branches surface', () => {
   });
 });
 
-describe('epic branch and the merge queue', () => {
-  it('restacks a dependent sibling onto the epic branch after its blocker lands there', async () => {
+describe('milestone branch and the merge queue', () => {
+  it('restacks a dependent sibling onto the milestone branch after its blocker lands there', async () => {
     const h = makeHarness();
-    const { epicId, taskId: taskA } = makeEpicWithChild(h, 'Child A');
-    const branch = epicBranchName(epicId);
+    const { milestoneId, taskId: taskA } = makeMilestoneWithChild(h, 'Child A');
+    const branch = milestoneBranchName(milestoneId);
     const runA = await dispatchWithWork(h, taskA, 'a.txt', 'A work');
 
     // B is blocked on A, which is in-review — so B stacks on A's branch.
     const taskB = h.store.create({
       title: 'Child B',
-      parent: epicId,
+      parent: milestoneId,
       blockedBy: [taskA],
     });
     h.cache.rebuild(h.store);
@@ -381,7 +387,7 @@ describe('epic branch and the merge queue', () => {
       queue.snapshot().history.some((e) => e.state === 'merged')
     );
 
-    // A landed on the epic branch, and B was restacked onto it: the epic
+    // A landed on the milestone branch, and B was restacked onto it: the milestone
     // branch moved under B, and B followed.
     expect(fileOnBranch(branch, 'a.txt')).toBe('A work\n');
     const metaB = h.orchestrator.list().find((r) => r.id === runB)!;
@@ -395,22 +401,22 @@ describe('epic branch and the merge queue', () => {
     );
   });
 
-  it('flags (mirroring baseDiscarded) a dependent whose blocker landed off its epic branch', async () => {
+  it('flags (mirroring baseDiscarded) a dependent whose blocker landed off its milestone branch', async () => {
     const h = makeHarness();
-    // The epic branch exists because child C dispatched first.
-    const { epicId, taskId: taskC } = makeEpicWithChild(h, 'Child C');
-    const branch = epicBranchName(epicId);
+    // The milestone branch exists because child C dispatched first.
+    const { milestoneId, taskId: taskC } = makeMilestoneWithChild(h, 'Child C');
+    const branch = milestoneBranchName(milestoneId);
     await dispatchWithWork(h, taskC, 'c.txt');
 
-    // A is a plain task outside the epic: its run lands on main.
+    // A is a plain task outside the milestone: its run lands on main.
     const taskA = h.store.create({ title: 'Outside blocker' });
     h.cache.rebuild(h.store);
     const runA = await dispatchWithWork(h, taskA.meta.id, 'a.txt');
 
-    // B lives under the epic but stacks on A's branch.
+    // B lives under the milestone but stacks on A's branch.
     const taskB = h.store.create({
       title: 'Child B',
-      parent: epicId,
+      parent: milestoneId,
       blockedBy: [taskA.meta.id],
     });
     h.cache.rebuild(h.store);

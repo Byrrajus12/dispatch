@@ -38,11 +38,11 @@ export function milestoneWaits(
   const milestoneOf = new Map<string, string>();
   const live: [string, TaskListItem][] = [];
   for (const group of groups) {
-    if (group.epicId === null || group.archived) continue;
+    if (group.milestoneId === null || group.archived) continue;
     for (const { doc } of group.rows) {
       if (isCanceledStatus(doc.meta.status, model)) continue;
-      milestoneOf.set(doc.meta.id, group.epicId);
-      live.push([group.epicId, doc]);
+      milestoneOf.set(doc.meta.id, group.milestoneId);
+      live.push([group.milestoneId, doc]);
     }
   }
   const pairs = new Map<string, [string, string][]>();
@@ -67,9 +67,9 @@ export function milestoneMap(
 ): MilestoneMap {
   const childrenOf = new Map<string, TaskListItem[]>();
   for (const group of groups) {
-    if (group.epicId === null || group.archived) continue;
+    if (group.milestoneId === null || group.archived) continue;
     childrenOf.set(
-      group.epicId,
+      group.milestoneId,
       group.rows.map((row) => row.doc)
     );
   }
@@ -86,8 +86,8 @@ export function milestoneMap(
 
   const nodes: DagTask[] = [];
   for (const group of groups) {
-    if (group.epicId === null || group.archived) continue;
-    const id = group.epicId;
+    if (group.milestoneId === null || group.archived) continue;
+    const id = group.milestoneId;
     nodes.push({
       id,
       title: group.label,
