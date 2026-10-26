@@ -270,6 +270,25 @@ describe('update', () => {
     expect(existsSync(dir)).toBe(false);
   });
 
+  it('drops a label repeated on create or update', () => {
+    const store = TaskStore.init(root);
+    const doc = store.create({
+      title: 'Cut spend',
+      labels: ['cost', 'cost', 'web'],
+    });
+    expect(doc.meta.labels).toEqual(['cost', 'web']);
+    expect(store.get(doc.meta.id)?.meta.labels).toEqual(['cost', 'web']);
+    const out = store.update(doc.meta.id, {
+      labels: ['web', 'perf', 'web', 'cost'],
+    });
+    expect(out.meta.labels).toEqual(['web', 'perf', 'cost']);
+    expect(store.get(doc.meta.id)?.meta.labels).toEqual([
+      'web',
+      'perf',
+      'cost',
+    ]);
+  });
+
   it('normalizes an emptied attachments list to an absent key', () => {
     const store = TaskStore.init(root);
     const doc = store.create({ title: 'Fix login' });

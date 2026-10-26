@@ -304,6 +304,7 @@ export function buildContext(
     labels: labelIndex,
     labelsById,
     includeAcceptanceCriteria: config.linear.includeAcceptanceCriteria,
+    archiveFinished: config.linear.archiveFinished,
     projectStatuses,
     labelColors: labelColorIndex(config.labels ?? []),
   };

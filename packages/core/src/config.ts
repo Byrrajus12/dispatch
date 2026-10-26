@@ -1351,6 +1351,13 @@ function parseLinearConfig(raw: unknown): LinearConfig {
     );
   }
 
+  const { archiveFinished } = obj;
+  if (archiveFinished !== undefined && typeof archiveFinished !== 'boolean') {
+    throw new ConfigError(
+      'invalid .dispatch/config.yml: linear.archiveFinished must be a boolean'
+    );
+  }
+
   const { statusMap } = obj;
   const mergedStatusMap = { ...defaults.statusMap };
   if (statusMap !== undefined) {
@@ -1382,6 +1389,7 @@ function parseLinearConfig(raw: unknown): LinearConfig {
     direction: (direction as LinearConfig['direction']) ?? defaults.direction,
     includeAcceptanceCriteria:
       includeAcceptanceCriteria ?? defaults.includeAcceptanceCriteria,
+    archiveFinished: archiveFinished ?? defaults.archiveFinished,
   };
 }
 
@@ -2012,6 +2020,14 @@ function applyLinearPatch(
       ['linear', 'includeAcceptanceCriteria'],
       patch.includeAcceptanceCriteria
     );
+  }
+  if (patch.archiveFinished !== undefined) {
+    if (typeof patch.archiveFinished !== 'boolean') {
+      throw new ConfigError(
+        'invalid linear.archiveFinished: must be a boolean'
+      );
+    }
+    doc.setIn(['linear', 'archiveFinished'], patch.archiveFinished);
   }
   if (patch.statusMap !== undefined) {
     if (

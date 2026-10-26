@@ -13,6 +13,7 @@ import { ATTACHMENTS_DIR } from './attachments.js';
 import { generateTaskId, isTaskId, taskIdFromFilename } from './ids.js';
 import { canonicalKind } from './kinds.js';
 import type { TaskKindInput } from './kinds.js';
+import { uniqueLabels } from './labels.js';
 import { slugify } from './slug.js';
 import { CANONICAL_STATUSES, canonicalStatus } from './status.js';
 import type { TaskStoreBackend } from './storeBackend.js';
@@ -221,7 +222,7 @@ export function newTaskDoc(
     parent: input.parent ?? null,
     milestone: input.milestone ?? null,
     blockedBy: input.blockedBy ?? [],
-    labels: input.labels ?? [],
+    labels: uniqueLabels(input.labels ?? []),
     priority: input.priority ?? 'none',
     assignee: input.assignee ?? 'none',
     created: input.created ?? now,
@@ -305,6 +306,8 @@ export function applyUpdatePatch(
   // speaking a pre-rename name lands in canonical form.
   meta.status = canonicalStatus(meta.status);
   meta.kind = canonicalKind(meta.kind) as TaskKind;
+  // A repeated label would ask Linear to create it twice in one push.
+  if (patch.labels !== undefined) meta.labels = uniqueLabels(meta.labels);
   // archivedAt is string|undefined on TaskMeta, so null (clear) is handled
   // separately rather than spread in like the other fields.
   if (archivedAt === null) delete meta.archivedAt;

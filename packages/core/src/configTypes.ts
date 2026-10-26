@@ -621,6 +621,9 @@ export interface LinearConfig {
   direction: 'both' | 'pull' | 'push';
   /** Whether a task's Acceptance Criteria travels in the Linear description. */
   includeAcceptanceCriteria: boolean;
+  /** Whether archiving a completed or canceled task archives its Linear issue
+   *  too. Off: Linear's own auto-archive owns finished issues. */
+  archiveFinished: boolean;
 }
 
 export const LINEAR_DIRECTIONS = ['both', 'pull', 'push'] as const;
@@ -633,6 +636,7 @@ export const DEFAULT_LINEAR: LinearConfig = {
   intervalSec: 30,
   direction: 'both',
   includeAcceptanceCriteria: true,
+  archiveFinished: false,
 };
 
 /** Per-role model ids. Each role is a distinct kind of agent work, so cheap
