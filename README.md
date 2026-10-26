@@ -178,6 +178,22 @@ connection comes from your own `~/.ssh/config`:
 Terminals can be opened on a remote. Agent runs cannot — the orchestrator works
 in local worktree paths throughout.
 
+**Linear from the CLI.** Link a project in **Settings → Linear**; then
+`dispatch linear` reports on the link and drives it from a terminal. The first
+pass sends no task that predates the link, so push those yourself:
+
+    dispatch linear                      # the link, the last pass, what is not in Linear
+    dispatch linear sync                 # run a pass now (board sync is `dispatch sync`)
+    dispatch linear push t-1a2b t-3c4d   # send these tasks by id
+    dispatch linear push --unlinked      # every open task not in Linear; --all adds finished ones
+    dispatch linear push --failed        # retry the creates that failed
+    dispatch linear coverage             # which tasks are not in Linear, and why
+    dispatch linear capacity             # active issues against the plan's limit
+    dispatch linear archive-closed       # archive closed issues to free room (app token)
+
+Long exports and archives run in the daemon; the command follows them and prints
+progress. Every subcommand takes `--json`.
+
 ## Running more than one agent
 
 Dispatch ships native executors for Claude and Codex. Any other coding agent

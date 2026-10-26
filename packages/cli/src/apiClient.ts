@@ -1704,6 +1704,280 @@ export function createA2AApiClient(
   };
 }
 
+// Hand-kept mirrors of @dispatch/server's Linear types (server/src/linear).
+// Fields a newer daemon added are optional, so an older one still prints.
+
+/** One Linear pass, as reconcile.ts reports it. `at` is when it started. */
+export interface LinearSyncSummary {
+  at: string;
+  pulled: number;
+  pushed: number;
+  created: number;
+  createdIssues: number;
+  conflicts: number;
+  errors: string[];
+  rateLimited: boolean;
+  usageLimited?: boolean;
+  queued?: number;
+  failedTaskIds?: string[];
+  migrated?: number;
+  archivedIssues?: number;
+}
+
+/** Where a long pass has got to. `phase` stays a plain string so a phase a
+ *  newer daemon adds prints raw instead of breaking. */
+export interface LinearProgress {
+  phase: string;
+  done: number;
+  total: number | null;
+  /** Absent means an import. */
+  action?: string;
+}
+
+type LinearBulkAction = 'export' | 'archive' | 'retry';
+
+/** Which unlinked tasks an export sends. */
+export type LinearExportScope = 'open' | 'all' | 'all-archive-finished';
+
+/** How the last export, retry or archive-closed run ended. */
+export interface LinearBulkOutcome {
+  action: LinearBulkAction;
+  startedAt: string;
+  at: string;
+  scope?: LinearExportScope;
+  includeCanceled?: boolean;
+  candidates: number;
+  done: number;
+  archivedOnArrival?: number;
+  remaining: number;
+  halted: 'usage-limit' | 'rate-limit' | null;
+  errors: string[];
+}
+
+/** The usage-limit pause and the counts last measured against the cap. */
+interface LinearCapacityState {
+  limitedAt: string | null;
+  retryAt: string | null;
+  message: string | null;
+  active: number | null;
+  limit: number | null;
+  limitSource: 'plan' | 'observed' | null;
+  plan: string;
+  checkedAt: string | null;
+}
+
+export interface LinearStatus {
+  enabled: boolean;
+  connected: boolean;
+  keySource: 'project' | 'env' | 'global' | null;
+  teamId: string | null;
+  teamIds?: string[];
+  direction: 'both' | 'pull' | 'push';
+  intervalSec: number;
+  bootstrappedAt: string | null;
+  lastSyncAt: string | null;
+  lastError: string | null;
+  /** In memory on the daemon, so null after a restart. */
+  lastSummary: LinearSyncSummary | null;
+  /** True while any pass is queued or running. */
+  syncing: boolean;
+  progress?: LinearProgress | null;
+  webhook?: {
+    state: 'active' | 'polling' | 'error' | 'off';
+    url: string | null;
+    lastDeliveryAt: string | null;
+    error: string | null;
+    pollSec: number;
+  };
+  capacity?: LinearCapacityState | null;
+  coverage?: {
+    total: number;
+    linked: number;
+    notLinked: number;
+    heldBack: number;
+    queued: number;
+    failed: number;
+    excluded: number;
+  } | null;
+  running?: { action: LinearBulkAction; startedAt: string } | null;
+  lastExport?: LinearBulkOutcome | null;
+  lastArchive?: LinearBulkOutcome | null;
+}
+
+/** How many tasks each export scope would send. */
+export interface LinearExportPreview {
+  open: number;
+  all: number;
+  allArchiveFinished: number;
+  finished: number;
+  archived: number;
+  derived: number;
+  containers: number;
+}
+
+export interface LinearUnlinkedTask {
+  id: string;
+  title: string;
+  kind: string;
+  status: string;
+  finished: boolean;
+  archived: boolean;
+  /** failed | at-capacity | queued | moved-out | pull-only | held-back |
+   *  pending; a plain string so a reason a newer daemon adds prints raw. */
+  reason: string;
+  attempts: number;
+  lastError: string | null;
+  lastAttemptAt: string | null;
+  retryAt: string | null;
+}
+
+export interface LinearCoverage {
+  total: number;
+  linked: number;
+  notLinked: number;
+  excluded: { derived: number };
+  byEntity: {
+    issue: number;
+    project: number;
+    milestone: number;
+    initiative: number;
+  };
+  counts: Partial<Record<string, number>>;
+  /** Failed first, then by reason, then by title. */
+  unlinked: LinearUnlinkedTask[];
+}
+
+export interface LinearCapacity {
+  /** The linked teams: non-archived issues, and how many of those are closed. */
+  teams: {
+    id: string;
+    key: string;
+    name: string;
+    active: number;
+    completed: number;
+    canceled: number;
+  }[];
+  active: number | null;
+  activeScope: 'workspace' | 'linked-teams';
+  limit: number | null;
+  limitSource: 'plan' | 'observed' | null;
+  plan: 'free' | 'paid' | 'trial' | 'unknown';
+  limitHitAt: string | null;
+  /** A closed count stopped at its cap, so it is a floor. */
+  truncated: boolean;
+  checkedAt: string;
+}
+
+/** A background run's start: 202 with its startedAt, or nothing to send. */
+export interface LinearBulkStart {
+  started: boolean;
+  candidates: number;
+  startedAt?: string;
+}
+
+/** A Linear route this dispatchd does not have: it predates the command. */
+export class LinearRouteMissingError extends CliError {}
+
+// Separate from ApiClient so its two full test fakes need not grow the Linear routes.
+export interface LinearApiClient {
+  linearStatus(): Promise<LinearStatus>;
+  /** Awaits the pass; named tasks are pushed even if they predate the link. */
+  linearSync(taskIds?: readonly string[]): Promise<LinearSyncSummary>;
+  linearImport(): Promise<LinearSyncSummary>;
+  linearExportPreview(): Promise<LinearExportPreview>;
+  linearExport(scope: LinearExportScope): Promise<LinearBulkStart>;
+  linearCoverage(): Promise<LinearCoverage>;
+  /** Every queued create when `taskIds` is absent. */
+  linearRetry(taskIds?: readonly string[]): Promise<LinearBulkStart>;
+  linearForget(taskIds: readonly string[]): Promise<{ forgotten: number }>;
+  linearCapacity(refresh?: boolean): Promise<LinearCapacity>;
+  /** Decide tier: needs the app token. */
+  linearArchiveClosed(opts: {
+    includeCanceled: boolean;
+  }): Promise<LinearBulkStart>;
+  linearLinks(): Promise<Record<string, { identifier: string; url: string }>>;
+}
+
+// An older dispatchd answers a Linear route it lacks with 404
+// 'not found: /api/linear/…'; this names the command instead.
+async function linearRequest<T>(
+  target: ApiTarget,
+  command: string,
+  path: string,
+  init?: RequestInit
+): Promise<T> {
+  try {
+    return await request<T>(target, path, init);
+  } catch (err) {
+    if (
+      err instanceof CliError &&
+      !(err instanceof DaemonUnreachableError) &&
+      err.message.startsWith('not found: /api/linear/')
+    )
+      throw new LinearRouteMissingError(
+        `this dispatchd predates dispatch linear ${command}; update Dispatch and try again`
+      );
+    throw err;
+  }
+}
+
+export function createLinearApiClient(
+  baseUrl: string,
+  token: string
+): LinearApiClient {
+  const target: ApiTarget = { baseUrl, token };
+  return {
+    linearStatus: () => linearRequest(target, 'status', '/api/linear/status'),
+    linearSync: (taskIds) =>
+      linearRequest(
+        target,
+        'sync',
+        '/api/linear/sync',
+        jsonBody(taskIds === undefined ? {} : { taskIds })
+      ),
+    linearImport: () =>
+      linearRequest(target, 'import', '/api/linear/import', {
+        method: 'POST',
+      }),
+    linearExportPreview: () =>
+      linearRequest(target, 'push --dry-run', '/api/linear/export'),
+    linearExport: (scope) =>
+      linearRequest(target, 'push', '/api/linear/export', jsonBody({ scope })),
+    linearCoverage: () =>
+      linearRequest(target, 'coverage', '/api/linear/coverage'),
+    linearRetry: (taskIds) =>
+      linearRequest(
+        target,
+        'push --failed',
+        '/api/linear/retry',
+        jsonBody(taskIds === undefined ? {} : { taskIds })
+      ),
+    linearForget: (taskIds) =>
+      linearRequest(
+        target,
+        'push --forget',
+        '/api/linear/forget',
+        jsonBody({ taskIds })
+      ),
+    linearCapacity: (refresh) =>
+      linearRequest(
+        target,
+        'capacity',
+        refresh === true
+          ? '/api/linear/capacity?refresh=1'
+          : '/api/linear/capacity'
+      ),
+    linearArchiveClosed: ({ includeCanceled }) =>
+      linearRequest(
+        target,
+        'archive-closed',
+        '/api/linear/archive-closed',
+        jsonBody({ includeCanceled })
+      ),
+    linearLinks: () => linearRequest(target, 'status', '/api/linear/links'),
+  };
+}
+
 // How long a team action waits for the daemon to come back with board sync on.
 const SHARING_RESTART_WAIT_MS = 90_000;
 
