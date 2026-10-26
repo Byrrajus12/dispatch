@@ -214,19 +214,31 @@ describe('a review role shared with dispatched', () => {
 });
 
 describe('draftStatus', () => {
-  it('is the first backlog status, else triage, else ready', () => {
+  it('is the first backlog status, else triage, else none', () => {
     expect(draftStatus()).toBe('draft');
     expect(draftStatus(SHARED)).toBe('Backlog');
     // LINEAR_CONFIG has Triage and no backlog status.
     expect(
       draftStatus(statusModelOf(loadConfig(writeConfig(LINEAR_CONFIG))))
     ).toBe('Triage');
+    // Never the ready status, which would queue the draft for dispatch.
     expect(
       draftStatus({
         definitions: SHARED.definitions.filter((d) => d.type !== 'backlog'),
         roles: SHARED.roles,
       })
-    ).toBe('Todo');
+    ).toBeNull();
+  });
+
+  it('refuses draft on a board with no backlog or triage status', () => {
+    const model = statusModelOf(
+      loadConfig(
+        writeConfig('statuses: [ready, working, review, landed, dropped]\n')
+      )
+    );
+    const names = model.definitions.map((d) => d.name);
+    expect(resolveStatusName('draft', names, model)).toBeNull();
+    expect(resolveStatusName('ready', names, model)).toBe('ready');
   });
 });
 

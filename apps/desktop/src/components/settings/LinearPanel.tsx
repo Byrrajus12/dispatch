@@ -341,12 +341,14 @@ export function LinearPanel({ data }: { data: DispatchProjectData }) {
   const exportBlocked = !configured || pullOnly || running !== null;
   // Offered once the link is made, until an export has run: linking mirrors
   // changes from then on, so the tasks made before it stay local otherwise.
+  // Only those count: a task made since goes on its own, and a failed or
+  // queued create has Retry under Coverage.
+  const heldBack = coverage?.heldBack ?? 0;
   const offerExport =
     !exportBlocked &&
     linearStatus.bootstrappedAt !== null &&
     (linearStatus.lastExport ?? null) === null &&
-    coverage !== null &&
-    coverage.notLinked > 0;
+    heldBack > 0;
   // The usage limit's message, unless an error line already shows it.
   const usageLimited =
     summary?.usageLimited === true || capacityPaused(linearStatus.capacity);
@@ -610,7 +612,7 @@ export function LinearPanel({ data }: { data: DispatchProjectData }) {
               >
                 <Upload className="text-muted-foreground size-3.5!" />
                 <AlertTitle className="text-[13px]">
-                  {`${coverage.notLinked.toLocaleString('en-US')} task${coverage.notLinked === 1 ? '' : 's'} here ${coverage.notLinked === 1 ? 'isn’t' : 'aren’t'} in Linear yet`}
+                  {`${heldBack.toLocaleString('en-US')} task${heldBack === 1 ? '' : 's'} here ${heldBack === 1 ? 'isn’t' : 'aren’t'} in Linear yet`}
                 </AlertTitle>
                 <AlertDescription className="font-book flex flex-col gap-2 text-[12px]">
                   <p>
@@ -772,6 +774,7 @@ export function LinearPanel({ data }: { data: DispatchProjectData }) {
         open={exportOpen}
         onOpenChange={setExportOpen}
         preview={data.linearExportPreview}
+        previewError={data.linearExportPreviewError ?? null}
         capacity={data.linearCapacity}
         onExport={data.handleExportLinear}
       />

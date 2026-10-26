@@ -1921,48 +1921,58 @@ async function linearRequest<T>(
   }
 }
 
+/** A Linear client for `command`, which an older daemon's missing route is
+ *  named for; without one, each request names the command it serves. */
 export function createLinearApiClient(
   baseUrl: string,
-  token: string
+  token: string,
+  command?: string
 ): LinearApiClient {
   const target: ApiTarget = { baseUrl, token };
+  const as = (own: string): string => command ?? own;
   return {
-    linearStatus: () => linearRequest(target, 'status', '/api/linear/status'),
+    linearStatus: () =>
+      linearRequest(target, as('status'), '/api/linear/status'),
     linearSync: (taskIds) =>
       linearRequest(
         target,
-        'sync',
+        as('sync'),
         '/api/linear/sync',
         jsonBody(taskIds === undefined ? {} : { taskIds })
       ),
     linearImport: () =>
-      linearRequest(target, 'import', '/api/linear/import', {
+      linearRequest(target, as('import'), '/api/linear/import', {
         method: 'POST',
       }),
     linearExportPreview: () =>
-      linearRequest(target, 'push --dry-run', '/api/linear/export'),
+      linearRequest(target, as('push --dry-run'), '/api/linear/export'),
     linearExport: (scope) =>
-      linearRequest(target, 'push', '/api/linear/export', jsonBody({ scope })),
+      linearRequest(
+        target,
+        as('push'),
+        '/api/linear/export',
+        jsonBody({ scope })
+      ),
     linearCoverage: () =>
-      linearRequest(target, 'coverage', '/api/linear/coverage'),
+      linearRequest(target, as('coverage'), '/api/linear/coverage'),
     linearRetry: (taskIds) =>
       linearRequest(
         target,
-        'push --failed',
+        as('push --failed'),
         '/api/linear/retry',
         jsonBody(taskIds === undefined ? {} : { taskIds })
       ),
     linearForget: (taskIds) =>
       linearRequest(
         target,
-        'push --forget',
+        as('push --forget'),
         '/api/linear/forget',
         jsonBody({ taskIds })
       ),
     linearCapacity: (refresh) =>
       linearRequest(
         target,
-        'capacity',
+        as('capacity'),
         refresh === true
           ? '/api/linear/capacity?refresh=1'
           : '/api/linear/capacity'
@@ -1970,11 +1980,11 @@ export function createLinearApiClient(
     linearArchiveClosed: ({ includeCanceled }) =>
       linearRequest(
         target,
-        'archive-closed',
+        as('archive-closed'),
         '/api/linear/archive-closed',
         jsonBody({ includeCanceled })
       ),
-    linearLinks: () => linearRequest(target, 'status', '/api/linear/links'),
+    linearLinks: () => linearRequest(target, as('status'), '/api/linear/links'),
   };
 }
 

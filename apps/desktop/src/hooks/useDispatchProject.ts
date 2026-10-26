@@ -637,11 +637,14 @@ export interface DispatchProjectData {
   /** Which tasks have a Linear record and why the rest do not. Null until fetched, and
    *  fetched only while something holds `watchLinearDetails`. */
   linearCoverage: LinearCoverage | null;
+  /** Why coverage could not be fetched (an older daemon has no route), or null. */
+  linearCoverageError: unknown;
   /** Active issues against the plan's cap, measured in Linear. Null until fetched. */
   linearCapacity: LinearCapacity | null;
   linearCapacityError: unknown;
   /** How many tasks each export scope would send. Null until fetched. */
   linearExportPreview: LinearExportPreview | null;
+  linearExportPreviewError: unknown;
   /** Fetches coverage, capacity and the export preview until the returned release
    *  is called: capacity walks Linear, so only a view showing them pays for it. */
   watchLinearDetails: () => () => void;
@@ -1101,7 +1104,7 @@ export function useDispatchProject(
     client !== null &&
     linearDetailWatchers > 0 &&
     linearStatus?.connected === true;
-  const { data: linearCoverage } = useQuery({
+  const { data: linearCoverage, error: linearCoverageError } = useQuery({
     queryKey: [...linearDetailsQueryKey, 'coverage'],
     queryFn: () => {
       if (client === null) throw new Error('dispatchd client not ready');
@@ -1109,14 +1112,15 @@ export function useDispatchProject(
     },
     enabled: linearDetailsOn,
   });
-  const { data: linearExportPreview } = useQuery({
-    queryKey: [...linearDetailsQueryKey, 'export'],
-    queryFn: () => {
-      if (client === null) throw new Error('dispatchd client not ready');
-      return client.previewLinearExport();
-    },
-    enabled: linearDetailsOn,
-  });
+  const { data: linearExportPreview, error: linearExportPreviewError } =
+    useQuery({
+      queryKey: [...linearDetailsQueryKey, 'export'],
+      queryFn: () => {
+        if (client === null) throw new Error('dispatchd client not ready');
+        return client.previewLinearExport();
+      },
+      enabled: linearDetailsOn,
+    });
   const linearCapacityQueryKey = useMemo(
     () => [...linearDetailsQueryKey, 'capacity'],
     [linearDetailsQueryKey]
@@ -1984,9 +1988,29 @@ export function useDispatchProject(
             queryKey: syncStatusQueryKey,
           });
         } else if (event.type === 'linear.progress') {
-          // An import moved on: patch the status in place, no refetch.
-          queryClient.setQueryData<LinearStatus>(linearStatusQueryKey, (prev) =>
-            prev === undefined ? prev : { ...prev, progress: event.progress }
+          // A pass moved on: patch the status in place, no refetch. An export,
+          // retry or archive started elsewhere (the CLI, another window) reads
+          // as running from its first step, so this window's controls wait.
+          const action = event.progress.action;
+          queryClient.setQueryData<LinearStatus>(
+            linearStatusQueryKey,
+            (prev) => {
+              if (prev === undefined) return prev;
+              const bulk =
+                action !== undefined &&
+                action !== 'import' &&
+                (prev.running ?? null) === null;
+              return {
+                ...prev,
+                syncing: true,
+                progress: event.progress,
+                ...(bulk
+                  ? {
+                      running: { action, startedAt: new Date().toISOString() },
+                    }
+                  : {}),
+              };
+            }
           );
         } else if (event.type === 'linear.changed') {
           // A sync pass finished — refetch status (lastSyncAt/lastSummary/lastError) so
@@ -3156,9 +3180,11 @@ export function useDispatchProject(
       handleSyncLinear,
       handleImportLinear,
       linearCoverage: linearCoverage ?? null,
+      linearCoverageError,
       linearCapacity: linearCapacity ?? null,
       linearCapacityError,
       linearExportPreview: linearExportPreview ?? null,
+      linearExportPreviewError,
       watchLinearDetails,
       refreshLinearCapacity,
       handleExportLinear,
@@ -3286,9 +3312,11 @@ export function useDispatchProject(
       handleSyncLinear,
       handleImportLinear,
       linearCoverage,
+      linearCoverageError,
       linearCapacity,
       linearCapacityError,
       linearExportPreview,
+      linearExportPreviewError,
       watchLinearDetails,
       refreshLinearCapacity,
       handleExportLinear,

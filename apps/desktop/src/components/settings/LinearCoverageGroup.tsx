@@ -109,11 +109,16 @@ function UnlinkedRow({
       {sendable && (
         <div className="flex shrink-0 items-center gap-2">
           {retryable && (
-            <PillButton disabled={pending} onClick={() => void act(onForget)}>
+            <PillButton
+              aria-label={`Stop retrying ${task.title}`}
+              disabled={pending}
+              onClick={() => void act(onForget)}
+            >
               Stop retrying
             </PillButton>
           )}
           <PillButton
+            aria-label={`${retryable ? 'Retry' : 'Send'} ${task.title}`}
             disabled={!canSend || pending}
             onClick={() => void act(onSend)}
           >
@@ -140,6 +145,8 @@ export function LinearCoverageGroup({
   const [retryError, setRetryError] = useState<string | null>(null);
   if (status === null) return null;
   const counts = status.coverage ?? null;
+  // An older daemon has no coverage route: say so rather than count forever.
+  const fetchError = data.linearCoverageError ?? null;
   const total = coverage?.total ?? counts?.total ?? null;
   const linked = coverage?.linked ?? counts?.linked ?? null;
   const derived = coverage?.excluded.derived ?? counts?.excluded ?? 0;
@@ -174,7 +181,9 @@ export function LinearCoverageGroup({
         title="In Linear"
         subtitle={
           total === null || linked === null
-            ? 'Counting…'
+            ? fetchError === null
+              ? 'Counting…'
+              : `Couldn’t count: ${describeError(fetchError)}`
             : `${linked.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} tasks${
                 derived > 0
                   ? ` · ${derived.toLocaleString('en-US')} PR review tasks never sync`

@@ -7,6 +7,7 @@ import {
   fanoutWaitingOn,
   hasStatusRole,
   isContainerKind,
+  isReviewStatus,
   isUnstartedStatus,
   loadConfig,
   releasesFanoutDependents,
@@ -1121,20 +1122,29 @@ export class EpicEngine {
     const children = this.ownWork(epicId, scope, this.cacheLookup());
     const statuses = statusModelFor(this.ctx.rootDir);
     const { holder } = this.holderFor(this.sessions.get(epicId));
+    const runs = this.ctx.orchestrator.list();
+    // A child in a review status shared with dispatched is waiting for review
+    // once its run finished, not still working.
+    const finished = tasksWithFinishedRun(runs);
     if (
       children.some(
         (c) =>
           holder(c) === null &&
           (isUnstartedStatus(c.meta.status, statuses) ||
-            hasStatusRole(c.meta.status, 'dispatched', statuses))
+            (hasStatusRole(c.meta.status, 'dispatched', statuses) &&
+              !isReviewStatus(
+                c.meta.status,
+                statuses,
+                finished.has(c.meta.id)
+              )))
       )
     ) {
       return false;
     }
     const childIds = new Set(children.map((c) => c.meta.id));
-    const liveRun = this.ctx.orchestrator
-      .list()
-      .some((r) => childIds.has(r.taskId) && !TERMINAL_RUN_STATES.has(r.state));
+    const liveRun = runs.some(
+      (r) => childIds.has(r.taskId) && !TERMINAL_RUN_STATES.has(r.state)
+    );
     if (liveRun) return false;
     const loopInFlight =
       this.fixLoop

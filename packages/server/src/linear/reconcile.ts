@@ -4,6 +4,7 @@
 import {
   canonicalKind,
   containerCreate,
+  fieldHash,
   getSection,
   INITIATIVE_FIELDS,
   initiativePatch,
@@ -286,6 +287,19 @@ export interface PassDeps {
   note: (failure: LinearFailure) => string;
   /** Hears every label the pass creates or recolors, to keep caches current. */
   onLabel: (label: LinearLabel) => void;
+  /** Labels Linear holds in a form no team here can apply (a group, a
+   *  retired label), by team and lowercased name: the reason, and until when
+   *  it is not looked up again. Kept across passes by the engine. */
+  blockedLabels?: Map<string, { reason: string; until: number }>;
+}
+
+// How long a label found blocked is not looked up again.
+const BLOCKED_LABEL_MS = 30 * 60_000;
+
+// The Halted a throw carries; anything else is rethrown.
+function haltOf(err: unknown): Halted {
+  if (err instanceof Halted) return err;
+  throw err;
 }
 
 function later(a: string, b: string): string {
@@ -550,10 +564,11 @@ export class LinearPass {
     const id = doc.meta.id;
     const base = readBase(state, id, ops.entity);
     const unknown = ops.unknown(remote);
+    const remoteValues = ops.remote(remote, ctx);
     const decisions = mergeFields({
       fields: ops.fields,
       local: ops.local(doc, ctx),
-      remote: ops.remote(remote, ctx),
+      remote: remoteValues,
       base,
       localUpdated: doc.meta.updated,
       remoteUpdated: remote.updatedAt,
@@ -584,6 +599,19 @@ export class LinearPass {
           heldBack = true;
         }
       }
+    }
+    // A finished task's archive (linear.archiveFinished) is not sent in the
+    // pass that pulls its issue reopened: the field is rebased instead.
+    const reopened = remoteValues.state;
+    if (
+      ops.entity === 'issue' &&
+      pulls.includes('state') &&
+      pushes.includes('archived') &&
+      typeof reopened === 'string' &&
+      isDoneStatus(doc.meta.status, ctx.model) &&
+      !isDoneStatus(reopened, ctx.model)
+    ) {
+      pushes.splice(pushes.indexOf('archived'), 1);
     }
     // An unrecorded link Linear holds a newer copy of, in a pass that may not
     // take it: the push waits, and the summary says why.
@@ -678,6 +706,13 @@ export class LinearPass {
         ok = false;
         continue;
       }
+      const blocked = this.d.blockedLabels?.get(key);
+      if (blocked !== undefined && blocked.until > Date.now()) {
+        this.recordFailure(blocked.reason);
+        this.refusedLabels.add(key);
+        ok = false;
+        continue;
+      }
       const color = ctx.labelColors.get(name.toLowerCase());
       const created = await client.createLabel({
         name,
@@ -721,6 +756,10 @@ export class LinearPass {
     }
     if ('blocked' in hit) {
       this.recordFailure(hit.blocked);
+      this.d.blockedLabels?.set(`${teamId}\n${name.toLowerCase()}`, {
+        reason: hit.blocked,
+        until: Date.now() + BLOCKED_LABEL_MS,
+      });
       return null;
     }
     return plainLabel(hit.reuse);
@@ -999,6 +1038,9 @@ export class LinearPass {
     let ops: EntityOps<RemoteRecord>;
     let assumed: FieldValues = {};
     const failed = new Set<string>();
+    // A throttle after the record exists: it is linked first, so a retry
+    // never creates it twice, and the pass stops once that is written.
+    let halt: Halted | null = null;
     if (entity === 'initiative') {
       ops = INITIATIVE_OPS as unknown as EntityOps<RemoteRecord>;
       const input = initiativePush(doc, INITIATIVE_FIELDS, ctx);
@@ -1019,14 +1061,19 @@ export class LinearPass {
       if (created !== null) {
         const members = projectPush(doc, ['initiatives'], created, ctx);
         let ok = true;
-        for (const initiativeId of members.link) {
-          if (
-            this.check(
-              await client.linkProjectInitiative(created.id, initiativeId)
-            ) === null
-          ) {
-            ok = false;
+        try {
+          for (const initiativeId of members.link) {
+            if (
+              this.check(
+                await client.linkProjectInitiative(created.id, initiativeId)
+              ) === null
+            ) {
+              ok = false;
+            }
           }
+        } catch (err) {
+          halt = haltOf(err);
+          ok = false;
         }
         if (ok)
           assumed = { initiatives: taskProjectValues(doc, ctx).initiatives };
@@ -1061,11 +1108,23 @@ export class LinearPass {
       remote = created;
       if (created !== null) {
         const follow = issuePush(doc, ISSUE_FOLLOW_UP_FIELDS, created, ctx);
-        assumed = await this.followUps(doc, created, follow, failed);
-        if (follow.archive === true || opts?.archive === true) {
-          const archived = this.check(await client.archiveIssue(created.id));
-          if (archived === null) failed.add('archived');
-          else remote = archived;
+        // An archive the task's own fields do not ask for (a finished task's,
+        // see taskIssueValues) is never resent from the base.
+        const arrival = opts?.archive === true && follow.archive !== true;
+        try {
+          assumed = await this.followUps(doc, created, follow, failed);
+          if (follow.archive === true || arrival) {
+            const archived = this.check(await client.archiveIssue(created.id));
+            if (archived === null) failed.add('archived');
+            else remote = archived;
+          }
+        } catch (err) {
+          halt = haltOf(err);
+          assumed = {};
+          for (const field of ISSUE_FOLLOW_UP_FIELDS) failed.add(field);
+        }
+        if (arrival && failed.has('archived')) {
+          (this.d.state.pendingArchives ??= {})[doc.meta.id] = created.id;
         }
       }
     }
@@ -1116,7 +1175,23 @@ export class LinearPass {
     this.recordChip(remote);
     summary.createdIssues++;
     summary.pushed++;
+    if (halt !== null) throw halt;
     return { created: true };
+  }
+
+  /** Archives an issue an export created to arrive archived, whose archive
+   *  did not land then; answers whether it landed now. */
+  async archiveOnArrival(taskId: string, issueId: string): Promise<boolean> {
+    const archived = this.check(await this.d.client.archiveIssue(issueId));
+    if (archived === null) return false;
+    // Recorded as Linear's side only, as the create would have.
+    const base = readBase(this.d.state, taskId, 'issue');
+    if (base !== null) {
+      base.remote.archived = fieldHash(true);
+      writeBase(this.d.state, taskId, 'issue', ISSUE_FIELDS, base);
+    }
+    this.recordEcho(archived.id, archived.updatedAt);
+    return true;
   }
 
   // A new issue joins its parent issue's team when that is a linked one (a

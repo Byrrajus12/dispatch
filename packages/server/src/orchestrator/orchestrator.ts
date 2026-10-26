@@ -116,6 +116,7 @@ import type {
   RunSurvey,
 } from './types.js';
 import {
+  BOOT_FORCE_FAIL_ERROR,
   DEFAULT_EXECUTOR_PROFILE,
   MergeEnvironmentError,
   OrchestratorClientError,
@@ -225,12 +226,6 @@ const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 // Minimum gap between opportunistic claims refreshes for one run — see
 // scheduleClaimsRefresh.
 const CLAIMS_REFRESH_COOLDOWN_MS = 5_000;
-
-// The reason stamped onto every run reconcileOnBoot force-fails. The run's
-// agent did nothing wrong — dispatchd lost track of it across a restart — and
-// the process itself survives a daemon restart, so it may still be working.
-export const BOOT_FORCE_FAIL_ERROR =
-  'dispatchd restarted while this run was in flight; the agent process may still be running';
 
 // Minimum gap between opportunistic orphan-work re-surveys for one run — see
 // scheduleOrphanRecheck. An orphaned agent commits on human timescales

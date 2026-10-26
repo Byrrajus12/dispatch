@@ -2045,3 +2045,292 @@ describe('LinearSync archive closed issues', () => {
     expect(store.get(doc.meta.id)?.meta.external).toBe('linear:issue-2');
   });
 });
+
+describe('LinearSync creates a throttle cuts short', () => {
+  it('links an issue a throttle stopped after its create, and never creates it twice', async () => {
+    seedState({ bootstrappedAt: '2030-01-01T00:00:00.000Z' });
+    const doc = store.create({ title: 'Finished thing', status: 'done' });
+    cache.rebuild(store);
+    fake.failures.archiveIssue = {
+      ok: false,
+      kind: 'rate-limit',
+      error: 'linear rate limit reached',
+      retryAfterMs: 1,
+    };
+    const sync = makeSync();
+
+    sync.startExport('all-archive-finished');
+    await sync.idle();
+
+    expect(fake.issues).toHaveLength(1);
+    const issueId = fake.issues[0]?.id;
+    expect(store.get(doc.meta.id)?.meta.external).toBe(`linear:${issueId}`);
+    expect(readLinearState(root).pushQueue).toEqual({});
+    expect(sync.status().lastExport).toMatchObject({
+      done: 1,
+      halted: 'rate-limit',
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    delete fake.failures.archiveIssue;
+    await sync.syncOnce();
+
+    expect(createCalls()).toBe(1);
+    expect(
+      store.list().filter((d) => d.meta.title === 'Finished thing')
+    ).toHaveLength(1);
+    // The archive it was to arrive with goes on the next pass.
+    expect(fake.issues[0]?.archivedAt).not.toBeNull();
+  });
+
+  it('retries an arrival archive that failed, without archiving the task here', async () => {
+    seedState({ bootstrappedAt: '2030-01-01T00:00:00.000Z' });
+    const doc = store.create({ title: 'Finished', status: 'done' });
+    cache.rebuild(store);
+    fake.failures.archiveIssue = {
+      ok: false,
+      kind: 'network',
+      error: 'socket hang up',
+    };
+    const sync = makeSync();
+
+    sync.startExport('all-archive-finished');
+    await sync.idle();
+    expect(fake.issues[0]?.archivedAt).toBeNull();
+    expect(sync.status().lastExport).toMatchObject({
+      done: 1,
+      archivedOnArrival: 0,
+      errors: ['socket hang up'],
+    });
+
+    delete fake.failures.archiveIssue;
+    await sync.syncOnce();
+    expect(fake.issues[0]?.archivedAt).not.toBeNull();
+    expect(readLinearState(root).pendingArchives).toEqual({});
+
+    fake.calls = [];
+    await sync.syncOnce();
+    expect(fake.calls).not.toContain('archiveIssue');
+    expect(fake.calls).not.toContain('unarchiveIssue');
+    expect(store.get(doc.meta.id)?.meta.archivedAt).toBeUndefined();
+  });
+
+  it('queues an export a throttle stops before any create, so later passes send it', async () => {
+    seedState({ bootstrappedAt: '2030-01-01T00:00:00.000Z' });
+    const doc = store.create({ title: 'Waits out the throttle' });
+    cache.rebuild(store);
+    fake.failures.capacity = {
+      ok: false,
+      kind: 'rate-limit',
+      error: 'linear rate limit reached',
+      retryAfterMs: 300,
+    };
+    const sync = makeSync();
+    await sync.capacity(true);
+
+    expect(sync.startExport('open')).toMatchObject({ ok: true, candidates: 1 });
+    await sync.idle();
+
+    expect(createCalls()).toBe(0);
+    expect(sync.status().lastExport).toMatchObject({
+      done: 0,
+      remaining: 1,
+      halted: 'rate-limit',
+    });
+    expect(readLinearState(root).pushQueue[doc.meta.id]).toMatchObject({
+      origin: 'export',
+      attempts: 0,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    await sync.syncOnce();
+    expect(store.get(doc.meta.id)?.meta.external).toBe('linear:issue-1');
+  });
+
+  it('never exports a task whose issue moved out of the linked teams', async () => {
+    seedState({
+      bootstrappedAt: '2030-01-01T00:00:00.000Z',
+      movedOut: { 'issue-elsewhere': '' },
+    });
+    const moved = store.create({ title: 'Moved away' });
+    const open = store.create({ title: 'Open' });
+    const state = readLinearState(root);
+    state.movedOut = { 'issue-elsewhere': moved.meta.id };
+    writeLinearState(root, state);
+    cache.rebuild(store);
+    const sync = makeSync();
+
+    expect(sync.exportPreview().open).toBe(1);
+    sync.startExport('all');
+    await sync.idle();
+
+    expect(fake.created.map((c) => c.title)).toEqual(['Open']);
+    expect(store.get(open.meta.id)?.meta.external).not.toBeNull();
+    expect(store.get(moved.meta.id)?.meta.external).toBeNull();
+  });
+});
+
+describe('LinearSync capacity and the pause', () => {
+  it('keeps the pause a pass set when a measurement taken during it showed room', async () => {
+    seedState({ bootstrappedAt: '2020-01-01T00:00:00.000Z' });
+    const ids = ['A', 'B'].map((title) => store.create({ title }).meta.id);
+    fake.issueLimit = 1;
+    const sync = makeSync();
+    const measuring: Promise<unknown>[] = [];
+    fake.onCall = (method) => {
+      if (method === 'createIssue' && measuring.length === 0) {
+        measuring.push(sync.capacity(true));
+      }
+    };
+
+    const summary = await sync.syncOnce(ids);
+    await Promise.all(measuring);
+
+    expect(summary.usageLimited).toBe(true);
+    expect(sync.status().capacity).toMatchObject({
+      message: LINEAR_USAGE_LIMIT_MESSAGE,
+    });
+    expect(sync.status().capacity?.retryAt).not.toBeNull();
+  });
+
+  it('ends the pause only once the count drops, since the key may not see every team', async () => {
+    seedState({
+      bootstrappedAt: '2030-01-01T00:00:00.000Z',
+      capacity: {
+        limitedAt: '2026-07-01T00:00:00.000Z',
+        retryAt: '2099-01-01T00:00:00.000Z',
+        message: LINEAR_USAGE_LIMIT_MESSAGE,
+        active: 1,
+        limit: 250,
+        limitSource: 'plan',
+        plan: 'free',
+        checkedAt: '2026-06-30T00:00:00.000Z',
+      },
+    });
+    fake.issues = [fake.issue()];
+    const sync = makeSync();
+
+    await sync.capacity(true);
+    expect(sync.status().capacity?.retryAt).toBe('2099-01-01T00:00:00.000Z');
+
+    fake.issues = [];
+    await sync.capacity(true);
+    expect(sync.status().capacity?.retryAt).toBeNull();
+  });
+
+  it('takes the Free plan’s limit as observed once Linear refused a create on an unread plan', async () => {
+    seedState({
+      bootstrappedAt: '2030-01-01T00:00:00.000Z',
+      capacity: {
+        limitedAt: '2026-07-01T00:00:00.000Z',
+        retryAt: null,
+        message: null,
+        active: null,
+        limit: null,
+        limitSource: null,
+        plan: 'unknown',
+        checkedAt: null,
+      },
+    });
+    fake.plan = 'unknown';
+    const sync = makeSync();
+
+    const measured = await sync.capacity(true);
+
+    expect(measured.ok && measured.data).toMatchObject({
+      limit: 250,
+      limitSource: 'observed',
+      plan: 'unknown',
+    });
+    expect(sync.status().capacity).toMatchObject({
+      limit: 250,
+      limitSource: 'observed',
+    });
+  });
+
+  it('reuses a paid plan’s closed counts between measurements, and shares one in flight', async () => {
+    fake.plan = 'paid';
+    const sync = makeSync();
+
+    const [a, b] = await Promise.all([
+      sync.capacity(true),
+      sync.capacity(true),
+    ]);
+    expect(a).toBe(b);
+    expect(fake.calls.filter((c) => c === 'capacity')).toHaveLength(1);
+
+    // Past the minute the measurement is reused for: the counts are re-read
+    // but the closed walks are not.
+    const realNow = Date.now;
+    Date.now = () => realNow() + 2 * 60_000;
+    try {
+      await sync.capacity();
+    } finally {
+      Date.now = realNow;
+    }
+    expect(fake.capacityReuse).toHaveLength(2);
+    expect(fake.capacityReuse[0]).toBeUndefined();
+    expect(fake.capacityReuse[1]?.teams.map((t) => t.id)).toEqual(['team-1']);
+  });
+});
+
+describe('LinearSync archive closed issues, refused', () => {
+  function linkedClosed(n: number): LinearSync {
+    fake.issues = Array.from({ length: n }, (_, i) =>
+      fake.issue({ title: `Closed ${i}`, state: DONE_STATE })
+    );
+    seedState({ bootstrappedAt: '2020-01-01T00:00:00.000Z' });
+    return makeSync();
+  }
+
+  it('stops at the first auth failure', async () => {
+    const sync = linkedClosed(4);
+    fake.failures.archiveIssue = {
+      ok: false,
+      kind: 'auth',
+      error: 'invalid Linear API key',
+    };
+
+    sync.startArchiveClosed({ includeCanceled: false });
+    await sync.idle();
+
+    expect(fake.calls.filter((c) => c === 'archiveIssue')).toHaveLength(1);
+    expect(sync.status().lastArchive?.errors).toContain(
+      'stopped archiving after 1 of 4: Linear refused the archive'
+    );
+  });
+
+  it('stops after a run of refusals', async () => {
+    const sync = linkedClosed(12);
+    fake.failures.archiveIssue = {
+      ok: false,
+      kind: 'graphql',
+      error: 'forbidden',
+    };
+
+    sync.startArchiveClosed({ includeCanceled: false });
+    await sync.idle();
+
+    expect(fake.calls.filter((c) => c === 'archiveIssue')).toHaveLength(5);
+  });
+
+  it('archives Duplicate issues with the canceled ones', async () => {
+    const duplicate = {
+      id: 's-duplicate',
+      name: 'Duplicate',
+      type: 'duplicate',
+      position: 6,
+    };
+    fake.states = [...STATES, duplicate];
+    fake.issues = [fake.issue({ title: 'Dupe', state: duplicate })];
+    seedState({ bootstrappedAt: '2020-01-01T00:00:00.000Z' });
+    const sync = makeSync();
+
+    const measured = await sync.capacity(true);
+    expect(measured.ok && measured.data.teams[0]?.canceled).toBe(1);
+    sync.startArchiveClosed({ includeCanceled: true });
+    await sync.idle();
+
+    expect(fake.issues[0]?.archivedAt).not.toBeNull();
+  });
+});

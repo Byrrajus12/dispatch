@@ -129,6 +129,36 @@ describe('workflow states and people', () => {
     expect(broadcasts.some((e) => e.type === 'config.changed')).toBe(true);
   });
 
+  it('moves tasks waiting for review into a review state the team adds', async () => {
+    fake.states = STATES.filter((s) => s.name !== 'In Review');
+    const finished = store.create({ title: 'Run finished', status: 'working' });
+    const running = store.create({ title: 'Still running', status: 'working' });
+    const withRuns = () =>
+      new LinearSync({
+        rootDir: root,
+        store,
+        cache,
+        events,
+        client: fake,
+        localHumanRef: 'human:wyat',
+        finishedRuns: () => new Set([finished.meta.id]),
+      });
+    await withRuns().syncOnce();
+    expect(loadConfig(root).statusRoles?.review).toBe('In Progress');
+
+    fake.states = STATES;
+    await withRuns().syncOnce();
+
+    expect(loadConfig(root).statusRoles?.review).toBe('In Review');
+    expect(store.get(finished.meta.id)?.meta.status).toBe('In Review');
+    expect(store.get(running.meta.id)?.meta.status).toBe('In Progress');
+    // Unlinked, so the move is bookkeeping: it does not send the task.
+    expect(store.get(finished.meta.id)?.meta.updated).toBe(
+      finished.meta.updated
+    );
+    expect(fake.created).toHaveLength(0);
+  });
+
   it('keeps a role the user overrode, and follows a renamed state', async () => {
     await makeSync().syncOnce();
     updateConfig(root, {
@@ -390,10 +420,13 @@ describe('labels', () => {
     expect(new Set(fake.updated.map((u) => u.input.title))).toEqual(
       new Set(ids.map((id) => `Renamed ${id}`))
     );
-    // The labels field is kept, so the next pass tries once more.
+    // The labels field is kept, so the next pass sends the issue again, but
+    // the group is not looked up again: Linear's answer has not changed.
     fake.calls = [];
-    await sync.syncOnce();
-    expect(fake.calls.filter((c) => c === 'createLabel')).toHaveLength(1);
+    const again = await sync.syncOnce();
+    expect(fake.calls).not.toContain('createLabel');
+    expect(fake.calls).not.toContain('labelsNamed');
+    expect(again.errors[0]).toContain('label group');
   });
 
   it('sends a label whose create failed with a new issue on the next pass', async () => {
@@ -627,6 +660,27 @@ describe('archive', () => {
     await sync.syncOnce();
 
     expect(fake.calls).not.toContain('archiveIssue');
+  });
+
+  it('does not archive an issue a teammate reopened once archiveFinished is on', async () => {
+    const done = STATES.find((s) => s.name === 'Done') ?? null;
+    const started = STATES.find((s) => s.name === 'In Progress') ?? null;
+    const { issue, id, sync } = await linkedPair({ state: done });
+    edit(id, { archivedAt: new Date().toISOString() });
+    await sync.syncOnce();
+    updateConfig(root, { linear: { archiveFinished: true } });
+    const remote = fake.issues.find((i) => i.id === issue.id);
+    if (remote === undefined) throw new Error('issue vanished');
+    remote.state = started;
+    touch(remote);
+    fake.calls = [];
+
+    await sync.syncOnce();
+    await sync.syncOnce();
+
+    expect(fake.calls).not.toContain('archiveIssue');
+    expect(remote.archivedAt).toBeNull();
+    expect(store.get(id)?.meta.status).toBe('In Progress');
   });
 });
 

@@ -75,12 +75,15 @@ export function LinearExportDialog({
   open,
   onOpenChange,
   preview,
+  previewError = null,
   capacity,
   onExport,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   preview: LinearExportPreview | null;
+  /** Why the preview could not be fetched; null while it loads or once it has. */
+  previewError?: unknown;
   capacity: LinearCapacity | null;
   onExport: (scope: LinearExportScope) => Promise<LinearBulkStart>;
 }) {
@@ -144,7 +147,11 @@ export function LinearExportDialog({
                   id={`${id}-${option.value}`}
                   className="text-muted-foreground pl-5.5 text-[12px]"
                 >
-                  {preview === null ? 'Counting…' : option.hint(preview)}
+                  {preview !== null
+                    ? option.hint(preview)
+                    : previewError === null
+                      ? 'Counting…'
+                      : `Couldn’t count: ${describeError(previewError)}`}
                 </span>
               </div>
             ))}

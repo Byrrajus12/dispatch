@@ -341,6 +341,8 @@ export function CreateTaskModal({
   const { createPreset } = useShellActions();
   const toasts = useToasts();
   const statusModel = useActiveStatusModel();
+  // A board with no backlog or triage status has nowhere to keep a draft.
+  const draft = draftStatus(statusModel);
   // Title and description survive an accidental close (Escape, outside click) — the two
   // fields with real typing in them. The chips cost one click to redo and stay ephemeral.
   const [title, setTitle] = usePersistedDraft(CREATE_TASK_TITLE_KEY);
@@ -645,11 +647,11 @@ export function CreateTaskModal({
             checked={createMore}
             onCheckedChange={(next) => setCreateMore(next)}
           />
-          {title.trim() !== '' && (
+          {title.trim() !== '' && draft !== null && (
             <Button
               variant="ghost"
               disabled={submitting}
-              onClick={() => void submit(draftStatus(statusModel))}
+              onClick={() => void submit(draft)}
             >
               Save as draft
             </Button>

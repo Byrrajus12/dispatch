@@ -486,6 +486,19 @@ describe('dispatch linear coverage', () => {
       'this dispatchd predates dispatch linear coverage; update Dispatch and try again'
     );
   });
+
+  it('names the command run, not the route that failed first', async () => {
+    answers.delete('GET /api/linear/export');
+    answers.delete('POST /api/linear/export');
+    await expect(run('push', '--all')).rejects.toThrow(
+      'this dispatchd predates dispatch linear push; update Dispatch and try again'
+    );
+    answers.delete('GET /api/linear/capacity');
+    process.env.DISPATCH_APP_TOKEN = APP_TOKEN;
+    await expect(run('archive-closed')).rejects.toThrow(
+      'this dispatchd predates dispatch linear archive-closed; update Dispatch and try again'
+    );
+  });
 });
 
 describe('dispatch linear capacity', () => {
@@ -518,6 +531,19 @@ describe('dispatch linear archive-closed', () => {
       'Archive 143 closed issues (120 completed and 23 canceled) in Linear?'
     );
     expect(writes()).toEqual([]);
+  });
+
+  it('on a push-only link the prompt says the tasks here stay as they are', async () => {
+    process.env.DISPATCH_APP_TOKEN = APP_TOKEN;
+    status = { ...status, direction: 'push' };
+    const asked: string[] = [];
+    ctx.confirm = (q) => {
+      asked.push(q);
+      return Promise.resolve(false);
+    };
+    await expect(run('archive-closed')).rejects.toThrow('not archived');
+    expect(asked[0]).toContain('Their tasks here stay as they are');
+    expect(asked[0]).not.toContain('archived too');
   });
 
   it('--dry-run says how many and sends nothing', async () => {

@@ -61,6 +61,13 @@ export const LINEAR_USAGE_LIMIT_MESSAGE =
 /** Non-archived issues a Free-plan workspace may hold. */
 export const FREE_PLAN_ISSUE_LIMIT = 250;
 
+// The state types a closed kind covers: Linear's 'duplicate' is a canceled one.
+function closedTypes(types: readonly ('completed' | 'canceled')[]): string[] {
+  return types.flatMap((t) =>
+    t === 'canceled' ? ['canceled', 'duplicate'] : [t]
+  );
+}
+
 export type LinearResult<T> = { ok: true; data: T } | LinearFailure;
 
 export interface LinearViewer {
@@ -156,8 +163,12 @@ export interface LinearClient {
    *  retired ones included and flagged. */
   labelsNamed(name: string): Promise<LinearResult<LinearLabelMatch[]>>;
   /** Issue counts against the plan's cap; `teamIds` picks the teams detailed
-   *  (every team when absent), while `active` covers the whole workspace. */
-  capacity(teamIds?: readonly string[]): Promise<LinearResult<LinearCapacity>>;
+   *  (every team when absent), while `active` covers the whole workspace.
+   *  A team in `reuse` keeps those closed counts instead of walking them. */
+  capacity(
+    teamIds?: readonly string[],
+    reuse?: Pick<LinearCapacity, 'teams' | 'truncated'>
+  ): Promise<LinearResult<LinearCapacity>>;
   /** The team's non-archived issues in a closed state of one of `types`. */
   closedIssues(
     teamId: string,
@@ -1018,7 +1029,8 @@ export class HttpLinearClient implements LinearClient {
   }
 
   async capacity(
-    teamIds?: readonly string[]
+    teamIds?: readonly string[],
+    reuse?: Pick<LinearCapacity, 'teams' | 'truncated'>
   ): Promise<LinearResult<LinearCapacity>> {
     const counted = await this.walk<TeamCountNode, TeamCountNode>(
       Q.TEAM_ISSUE_COUNTS,
@@ -1035,6 +1047,19 @@ export class HttpLinearClient implements LinearClient {
     const teams: LinearCapacity['teams'] = [];
     let truncated = false;
     for (const team of detailed) {
+      const known = reuse?.teams.find((t) => t.id === team.id);
+      if (known !== undefined) {
+        truncated ||= reuse?.truncated === true;
+        teams.push({
+          id: team.id,
+          key: team.key,
+          name: team.name,
+          active: team.issueCount,
+          completed: known.completed,
+          canceled: known.canceled,
+        });
+        continue;
+      }
       const completed = await this.countClosed(team.id, 'completed');
       if (!completed.ok) return completed;
       const canceled = await this.countClosed(team.id, 'canceled');
@@ -1069,15 +1094,16 @@ export class HttpLinearClient implements LinearClient {
   }
 
   // Free when the organization has no subscription. A refused read (a key
-  // that cannot see billing) is 'unknown'; only a throttle fails the call.
+  // that cannot see billing) is 'unknown'; a throttle, a timeout or a server
+  // error fails the call, so a transient failure is not taken as an answer.
   private async plan(): Promise<LinearResult<LinearCapacity['plan']>> {
     const result = await this.request<{
       organization: { subscription: { type: string | null } | null } | null;
     }>(Q.ORGANIZATION_PLAN);
     if (!result.ok) {
-      return result.kind === 'rate-limit'
-        ? result
-        : { ok: true, data: 'unknown' };
+      return result.kind === 'graphql' || result.kind === 'auth'
+        ? { ok: true, data: 'unknown' }
+        : result;
     }
     const org = result.data.organization;
     if (org === null) return { ok: true, data: 'unknown' };
@@ -1091,8 +1117,8 @@ export class HttpLinearClient implements LinearClient {
     type: 'completed' | 'canceled'
   ): Promise<LinearResult<{ count: number; truncated: boolean }>> {
     const result = await this.paginate<unknown>(
-      Q.CLOSED_ISSUES_QUERY,
-      { teamId, types: [type] },
+      Q.CLOSED_ISSUE_COUNT_QUERY,
+      { teamId, types: closedTypes([type]) },
       (data) => (data as { issues?: Connection<unknown> }).issues,
       undefined,
       COUNT_WALK_NODES
@@ -1114,7 +1140,7 @@ export class HttpLinearClient implements LinearClient {
   ): Promise<LinearResult<LinearPage<LinearIssueRef>>> {
     return this.walk(
       Q.CLOSED_ISSUES_QUERY,
-      { teamId, types: [...types] },
+      { teamId, types: closedTypes(types) },
       'issues',
       (r: LinearIssueRef) => r
     );

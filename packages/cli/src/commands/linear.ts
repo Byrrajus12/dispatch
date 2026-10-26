@@ -355,8 +355,13 @@ export function describeCapacity(cap: LinearCapacity): string[] {
   const where = cap.activeScope === 'workspace' ? 'Workspace' : 'Linked teams';
   const plan = cap.plan === 'unknown' ? 'plan unknown' : `${cap.plan} plan`;
   if (cap.limit === null) {
+    // Only a plan read as paid says there is no limit; an unread one does not.
+    const limit =
+      cap.plan === 'paid'
+        ? 'Linear reports no issue limit for this workspace'
+        : 'Linear did not say whether this workspace has an issue limit';
     lines.push(
-      `${where}: ${cap.active ?? 'unknown'} active issues. Linear reports no issue limit for this workspace (${plan}).`
+      `${where}: ${cap.active ?? 'unknown'} active issues. ${limit} (${plan}).`
     );
   } else if (cap.active === null) {
     lines.push(
@@ -368,7 +373,9 @@ export function describeCapacity(cap: LinearCapacity): string[] {
     );
   }
   if (cap.limitSource === 'observed')
-    lines.push('The limit is the count at which Linear refused a create.');
+    lines.push(
+      "Linear refused a create while the plan could not be read, so the limit is the Free plan's."
+    );
   if (cap.limitHitAt !== null)
     lines.push(`Linear refused a create over the limit at ${cap.limitHitAt}.`);
   const closed = closedCounts(cap, true);
@@ -401,14 +408,34 @@ function scopeCount(
   return scope === 'all' ? preview.all : preview.allArchiveFinished;
 }
 
-// The warning before an export that will not fit under the plan's limit.
+/** What an export takes under the plan's limit: the issues it leaves active,
+ *  and how many arrive archived, which free their slot as they land. */
+interface ExportSlots {
+  kept: number;
+  arriving: number;
+}
+
+function exportSlots(
+  preview: LinearExportPreview,
+  scope: LinearExportScope
+): ExportSlots {
+  if (scope === 'all-archive-finished')
+    return {
+      kept: preview.open,
+      arriving: preview.allArchiveFinished - preview.open,
+    };
+  return { kept: scope === 'all' ? preview.all : preview.open, arriving: 0 };
+}
+
+// The warning before an export that will not fit under the plan's limit. An
+// issue archived on arrival needs one free slot to land, then frees it.
 function capacityWarning(
   cap: LinearCapacity | null,
-  sending: number
+  { kept, arriving }: ExportSlots
 ): string | null {
   if (cap === null || cap.limit === null || cap.active === null) return null;
   const room = Math.max(0, cap.limit - cap.active);
-  if (sending <= room) return null;
+  if (kept < room || (kept === room && arriving === 0)) return null;
   return `Room for ${room} more issues in Linear (${cap.active} of ${cap.limit} active); the push stops creating at the limit. Free room first: dispatch linear archive-closed`;
 }
 
@@ -425,7 +452,7 @@ export function describeExportPreview(
       `  --all                  ${preview.all} tasks (${preview.finished} finished, arriving closed)`,
       `  --archive-on-arrival   ${preview.allArchiveFinished} tasks (${preview.finished + preview.archived} finished or archived, arriving archived)`,
     ];
-    const warning = capacityWarning(cap, preview.open);
+    const warning = capacityWarning(cap, { kept: preview.open, arriving: 0 });
     if (warning !== null) lines.push(warning);
     return lines;
   }
@@ -447,7 +474,7 @@ export function describeExportPreview(
     lines.push(
       `Linear holds ${cap.active} of ${cap.limit} active issues; room for ${Math.max(0, cap.limit - cap.active)}.`
     );
-  const warning = capacityWarning(cap, n);
+  const warning = capacityWarning(cap, exportSlots(preview, scope));
   if (warning !== null) lines.push(warning);
   return lines;
 }
@@ -625,11 +652,13 @@ async function pollStatus<T>(
  * Runs an awaited pass (sync, import) and answers its summary. The daemon
  * cuts a request at 65s and the CLI gives up at 60s, so when the request
  * outlives that this follows the pass through status until it goes idle.
+ * `joins` says the request joins a pass already running (a sync naming no
+ * tasks), which may have started before it.
  */
 export async function followLinearPass(
   api: StatusReader,
   start: () => Promise<LinearSyncSummary>,
-  opts: FollowOptions = {}
+  opts: FollowOptions & { joins?: boolean } = {}
 ): Promise<LinearSyncSummary> {
   const began = (opts.now ?? Date.now)();
   const report = progressReporter(opts.onProgress);
@@ -641,11 +670,23 @@ export async function followLinearPass(
   } catch (err) {
     if (!(err instanceof DaemonUnreachableError)) throw err;
   }
+  // The first summary to land after the request is this pass's: a pass
+  // queued behind it (a push a task edit scheduled) replaces it before the
+  // daemon goes idle. summary.at is when a pass started, with a second of
+  // slack for rounding; a joined pass may have started earlier, so for it any
+  // summary replacing the one the first poll found is new.
+  let found: string | null | undefined;
+  let ours: LinearSyncSummary | null = null;
   return pollStatus(api, opts, began, report, (status) => {
-    if (status.syncing) return undefined;
     const last = status.lastSummary;
-    // summary.at is when the pass started; a second of slack covers rounding.
-    if (last !== null && Date.parse(last.at) >= began - 1000) return last;
+    if (found === undefined && status.syncing) found = last?.at ?? null;
+    const fresh =
+      last !== null &&
+      (Date.parse(last.at) >= began - 1000 ||
+        (opts.joins === true && found !== undefined && last.at !== found));
+    if (ours === null && fresh) ours = last;
+    if (status.syncing) return undefined;
+    if (ours !== null) return ours;
     throw new CliError(
       'the Linear pass ended without a summary; check it with: dispatch linear status'
     );
@@ -696,12 +737,17 @@ export function registerLinearCommands(
     );
 
   // Attaches to the running daemon, never starting one: on the app token when
-  // one is given, else the agent token from the daemon file.
-  async function client(token: string | undefined): Promise<LinearApiClient> {
+  // one is given, else the agent token from the daemon file. `command` is the
+  // subcommand run, which an older daemon's missing route is named for.
+  async function client(
+    token: string | undefined,
+    command: string
+  ): Promise<LinearApiClient> {
     const { baseUrl, agentToken } = await attachToRunningDaemon(ctx);
     return createLinearApiClient(
       baseUrl,
-      optionalAppToken(token) ?? agentToken
+      optionalAppToken(token) ?? agentToken,
+      command
     );
   }
 
@@ -787,7 +833,7 @@ export function registerLinearCommands(
     .option('--json')
     .option('--token <token>', TOKEN_HELP)
     .action(async (opts: CommonOptions) => {
-      const status = await (await client(opts.token)).linearStatus();
+      const status = await (await client(opts.token, 'status')).linearStatus();
       if (opts.json === true) json(status);
       else for (const line of describeLinearStatus(status)) ctx.log(line);
     });
@@ -800,13 +846,12 @@ export function registerLinearCommands(
     .option('--json')
     .option('--token <token>', TOKEN_HELP)
     .action(async (opts: CommonOptions) => {
-      const api = await client(opts.token);
+      const api = await client(opts.token, 'sync');
       requireLinked(await api.linearStatus(), { enabled: true });
-      const summary = await followLinearPass(
-        api,
-        () => api.linearSync(),
-        follow(opts)
-      );
+      const summary = await followLinearPass(api, () => api.linearSync(), {
+        ...follow(opts),
+        joins: true,
+      });
       fail(printSummary(summary, opts));
     });
 
@@ -835,7 +880,7 @@ export function registerLinearCommands(
     .option('--token <token>', TOKEN_HELP)
     .action(async (ids: string[], opts: PushOptions & CommonOptions) => {
       const plan = parsePushArgs(ids, opts);
-      const api = await client(opts.token);
+      const api = await client(opts.token, 'push');
       if (plan.kind === 'forget') {
         const { forgotten } = await api.linearForget(plan.ids);
         if (opts.json === true) json({ forgotten });
@@ -881,7 +926,10 @@ export function registerLinearCommands(
             api.linearExportPreview(),
             capacityOrNull(api),
           ]);
-          const warning = capacityWarning(cap, scopeCount(preview, plan.scope));
+          const warning = capacityWarning(
+            cap,
+            exportSlots(preview, plan.scope)
+          );
           if (warning !== null) ctx.log(warning);
         }
         const outcome = await followLinearBulk(
@@ -907,7 +955,7 @@ export function registerLinearCommands(
     .option('--json')
     .option('--token <token>', TOKEN_HELP)
     .action(async (opts: CommonOptions) => {
-      const api = await client(opts.token);
+      const api = await client(opts.token, 'import');
       requireLinked(await api.linearStatus());
       const summary = await followLinearPass(
         api,
@@ -926,7 +974,9 @@ export function registerLinearCommands(
     .option('--token <token>', TOKEN_HELP)
     .action(
       async (opts: CommonOptions & { all?: boolean; failed?: boolean }) => {
-        const coverage = await (await client(opts.token)).linearCoverage();
+        const coverage = await (
+          await client(opts.token, 'coverage')
+        ).linearCoverage();
         if (opts.json === true) {
           json(coverage);
           return;
@@ -949,7 +999,7 @@ export function registerLinearCommands(
     .option('--token <token>', TOKEN_HELP)
     .action(async (opts: CommonOptions & { refresh?: boolean }) => {
       const cap = await (
-        await client(opts.token)
+        await client(opts.token, 'capacity')
       ).linearCapacity(opts.refresh === true);
       if (opts.json === true) json(cap);
       else for (const line of describeCapacity(cap)) ctx.log(line);
@@ -958,7 +1008,7 @@ export function registerLinearCommands(
   linear
     .command('archive-closed')
     .description(
-      "Archive the linked teams' completed issues in Linear to free room under the plan's limit; their tasks here are archived too (needs the app token)"
+      "Archive the linked teams' completed issues in Linear to free room under the plan's limit; their tasks here are archived too, unless the link is push only (needs the app token)"
     )
     .option('--canceled', 'canceled issues too')
     .option('--dry-run', 'say how many would be archived, and archive nothing')
@@ -978,7 +1028,7 @@ export function registerLinearCommands(
           opts.token,
           'dispatch linear archive-closed'
         );
-        const api = createLinearApiClient(baseUrl, appToken);
+        const api = createLinearApiClient(baseUrl, appToken, 'archive-closed');
         const includeCanceled = opts.canceled === true;
         const cap = await api.linearCapacity();
         const closed = closedCounts(cap, includeCanceled);
@@ -1003,8 +1053,13 @@ export function registerLinearCommands(
           return;
         }
         if (opts.yes !== true) {
+          // A push-only link never takes Linear's changes, its archive included.
+          const pushOnly = (await api.linearStatus()).direction === 'push';
+          const tasks = pushOnly
+            ? 'Their tasks here stay as they are, since this link only sends changes to Linear; the issues can be restored.'
+            : 'Their tasks here are archived too; both stay searchable and can be restored.';
           const yes = await (ctx.confirm ?? confirmNo)(
-            `Archive ${what} in Linear? Their tasks here are archived too; both stay searchable and can be restored.`
+            `Archive ${what} in Linear? ${tasks}`
           );
           if (!yes)
             throw new CliError(

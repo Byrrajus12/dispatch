@@ -134,7 +134,8 @@ export function regenerateStatuses(
   store: TaskStorePort,
   docs: Map<string, TaskDoc>,
   state: LinearSyncState,
-  teams: readonly WorkflowTeam[]
+  teams: readonly WorkflowTeam[],
+  finishedRuns: ReadonlySet<string> = new Set()
 ): StatusRegeneration {
   const config = loadConfig(rootDir);
   const states = teams.flatMap((t) => t.states);
@@ -211,6 +212,23 @@ export function regenerateStatuses(
       names: generated.names,
     })
   );
+  // A review state split off the shared dispatched one: tasks whose run had
+  // finished were waiting for review there, so they move to it as a finish
+  // would have moved them. A linked one is stamped now so its issue follows;
+  // an unlinked one keeps `updated`, so the move sends nothing on its own.
+  if (
+    before.roles.review === before.roles.dispatched &&
+    roles.review !== roles.dispatched
+  ) {
+    const now = new Date().toISOString();
+    for (const doc of docs.values()) {
+      const { id, status, external, updated } = doc.meta;
+      if (!finishedRuns.has(id) || status !== roles.dispatched) continue;
+      const stamp = parseLinearExternal(external) === null ? updated : now;
+      docs.set(id, store.update(id, { status: roles.review }, stamp));
+      if (!migrated.includes(id)) migrated.push(id);
+    }
+  }
   return { config: next, configChanged: true, migrated };
 }
 

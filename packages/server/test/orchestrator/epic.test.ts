@@ -653,6 +653,50 @@ describe('EpicEngine.start', () => {
     await waitFor(() => harness.epics.progress(epicId).active === false);
   });
 
+  it('completes once its runs finish on a board whose review status is the dispatched one', async () => {
+    const harness = makeHarness();
+    writeFileSync(
+      join(repo, '.dispatch', 'config.yml'),
+      `statuses:
+  - { name: Todo, type: unstarted }
+  - { name: In Progress, type: started }
+  - { name: Done, type: completed }
+  - { name: Canceled, type: canceled }
+statusRoles:
+  ready: Todo
+  dispatched: In Progress
+  review: In Progress
+  landing: null
+  landed: Done
+  dropped: Canceled
+`
+    );
+    const epic = harness.store.create({
+      title: 'Epic',
+      kind: 'epic',
+      status: 'Todo',
+    });
+    const child = harness.store.create({
+      title: 'Only child',
+      parent: epic.meta.id,
+      status: 'Todo',
+      writes: ['a.ts'],
+    });
+    harness.cache.rebuild(harness.store);
+
+    await harness.epics.start(epic.meta.id, {
+      concurrency: 1,
+      executor: 'fake',
+    });
+    await waitFor(() => harness.orchestrator.list().length === 1);
+    const run = harness.orchestrator.list()[0];
+    harness.orchestrator.approve(run.id, 'go', true);
+
+    await waitFor(() => harness.epics.progress(epic.meta.id).active === false);
+    // Up for review, in the status it shares with dispatched.
+    expect(harness.store.get(child.meta.id)?.meta.status).toBe('In Progress');
+  });
+
   it('lets a fully-archived epic notice completion instead of staying active forever', async () => {
     const harness = makeHarness();
     const { epicId: epicA, childIds: childIdsA } = createEpicWithChildren(

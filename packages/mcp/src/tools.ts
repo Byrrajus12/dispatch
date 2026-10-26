@@ -979,7 +979,7 @@ const STATUS_PARAM_DOC =
   'apply: draft | ready | working | review | landing | landed | dropped. On ' +
   'any board those built-in words are also accepted and mapped through ' +
   '`statusRoles` (landed → the landed role, working → dispatched, draft → ' +
-  'the first backlog status).';
+  'the first backlog status, else triage; refused on a board with neither).';
 
 // Registers every dispatch tool against a fixed root. Each call re-resolves the
 // store, config and daemon file, so a later init or daemon start is picked up.

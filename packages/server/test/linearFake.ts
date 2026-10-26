@@ -194,6 +194,9 @@ export class FakeLinearClient implements LinearClient {
   issueLimit: number | null = null;
   /** What capacity() reports the plan as. */
   plan: LinearCapacity['plan'] = 'free';
+  /** The closed counts each capacity() call was given to reuse. */
+  capacityReuse: (Pick<LinearCapacity, 'teams' | 'truncated'> | undefined)[] =
+    [];
   /** Runs inside createIssue, standing in for a local edit landing mid-round-trip. */
   onCreate: (() => void) | null = null;
   /** Runs as any method is called: a local edit landing while a pass waits on Linear. */
@@ -299,23 +302,29 @@ export class FakeLinearClient implements LinearClient {
     );
   }
 
-  /** Live issues per team and in the workspace, closed ones split by type. */
-  capacity(teamIds?: readonly string[]): Promise<LinearResult<LinearCapacity>> {
+  /** Live issues per team and in the workspace, closed ones split by type;
+   *  a team in `reuse` keeps the closed counts given. */
+  capacity(
+    teamIds?: readonly string[],
+    reuse?: Pick<LinearCapacity, 'teams' | 'truncated'>
+  ): Promise<LinearResult<LinearCapacity>> {
+    this.capacityReuse.push(reuse);
     const f = this.fail('capacity');
     if (f !== null) return Promise.resolve(f);
     const live = this.issues.filter((i) => i.archivedAt === null);
     const teams = (teamIds ?? this.teamList.map((t) => t.id)).map((id) => {
       const team = this.teamOf(id);
       const own = live.filter((i) => i.team?.id === id);
-      const typed = (type: string) =>
-        own.filter((i) => i.state?.type === type).length;
+      const typed = (...types: string[]) =>
+        own.filter((i) => types.includes(i.state?.type ?? '')).length;
+      const known = reuse?.teams.find((t) => t.id === id);
       return {
         id,
         key: team.key,
         name: team.name,
         active: own.length,
-        completed: typed('completed'),
-        canceled: typed('canceled'),
+        completed: known?.completed ?? typed('completed'),
+        canceled: known?.canceled ?? typed('canceled', 'duplicate'),
       };
     });
     const free = this.plan === 'free';
@@ -339,7 +348,10 @@ export class FakeLinearClient implements LinearClient {
   ): Promise<LinearResult<LinearPage<LinearIssueRef>>> {
     const f = this.fail('closedIssues');
     if (f !== null) return Promise.resolve(f);
-    const wanted = new Set<string>(types);
+    // Linear's 'duplicate' state type is a canceled one.
+    const wanted = new Set<string>(
+      types.flatMap((t) => (t === 'canceled' ? [t, 'duplicate'] : [t]))
+    );
     return ok({
       nodes: this.issues
         .filter(

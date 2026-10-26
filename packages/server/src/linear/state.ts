@@ -133,6 +133,9 @@ export interface LinearSyncState {
   localOnly?: Record<string, string>;
   /** Task id -> a create still to land, or one that failed. */
   pushQueue: Record<string, PushAttempt>;
+  /** Task id -> the issue an export created to arrive archived, whose
+   *  archive did not land; later passes send it again. */
+  pendingArchives?: Record<string, string>;
   capacity: LinearCapacityState | null;
   lastExport: LinearBulkOutcome | null;
   lastArchive: LinearBulkOutcome | null;

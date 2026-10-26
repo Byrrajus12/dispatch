@@ -11,7 +11,7 @@ import type { StatusModel, TaskListItem } from '@dispatch-foo/core';
 
 import type { FixLoopState } from './fixLoop.js';
 import type { RunMeta } from './types.js';
-import { runKind, TERMINAL_RUN_STATES } from './types.js';
+import { runEndedForReview, runKind, TERMINAL_RUN_STATES } from './types.js';
 
 // The pure half of the epic engine: the per-child phase, wave and spend
 // derivations `EpicEngine.progress()` and its fill gate compute from data
@@ -127,8 +127,7 @@ export function deriveChildPhase(input: ChildPhaseInput): ChildPhase {
   const model = input.statuses ?? DEFAULT_STATUS_MODEL;
   const status = canonicalStatus(task.meta.status);
   const finishedRun =
-    input.finishedRun ??
-    (latestRun !== null && TERMINAL_RUN_STATES.has(latestRun.state));
+    input.finishedRun ?? (latestRun !== null && runEndedForReview(latestRun));
   const inReview = isReviewStatus(status, model, finishedRun);
   const inLanding = hasStatusRole(status, 'landing', model);
   if (isDoneStatus(status, model)) {

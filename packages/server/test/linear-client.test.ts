@@ -778,7 +778,7 @@ describe('HttpLinearClient capacity', () => {
       fetchImpl: byOperation(
         {
           TeamIssueCounts: () => teams,
-          ClosedIssues: closed,
+          ClosedIssueCount: closed,
           OrganizationPlan: () => ({
             data: { organization: { subscription: null } },
           }),
@@ -809,21 +809,74 @@ describe('HttpLinearClient capacity', () => {
     });
     expect(Number.isNaN(Date.parse(result.data.checkedAt))).toBe(false);
     expect(sent[0].query).toContain('issueCount(includeArchived: false)');
-    expect(
-      sent
-        .filter((s) => s.query.includes('ClosedIssues'))
-        .map((s) => s.variables)
-    ).toEqual([
+    // Counted by id alone, Linear's 'duplicate' state type as canceled.
+    const counts = sent.filter((s) => s.query.includes('ClosedIssueCount'));
+    expect(counts.map((s) => s.variables)).toEqual([
       { teamId: 'team-1', types: ['completed'], after: null },
-      { teamId: 'team-1', types: ['canceled'], after: null },
+      { teamId: 'team-1', types: ['canceled', 'duplicate'], after: null },
     ]);
+    expect(counts[0].query).toContain('nodes { id }');
+  });
+
+  it('keeps the closed counts it is given instead of walking them again', async () => {
+    const sent: SentRequest[] = [];
+    const client = new HttpLinearClient(KEY, {
+      fetchImpl: byOperation(
+        {
+          TeamIssueCounts: () => teams,
+          OrganizationPlan: () => ({
+            data: { organization: { subscription: { type: 'standard' } } },
+          }),
+        },
+        sent
+      ),
+    });
+    const result = await client.capacity(['team-1'], {
+      teams: [
+        {
+          id: 'team-1',
+          key: 'HYD',
+          name: 'Hydrogen',
+          active: 170,
+          completed: 9,
+          canceled: 2,
+        },
+      ],
+      truncated: false,
+    });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.data.teams).toEqual([
+      {
+        id: 'team-1',
+        key: 'HYD',
+        name: 'Hydrogen',
+        active: 175,
+        completed: 9,
+        canceled: 2,
+      },
+    ]);
+    expect(sent.some((s) => s.query.includes('ClosedIssue'))).toBe(false);
+  });
+
+  it('fails the measurement when reading the plan times out, rather than calling it unknown', async () => {
+    const client = new HttpLinearClient(KEY, {
+      fetchImpl: byOperation({
+        TeamIssueCounts: () => teams,
+        ClosedIssueCount: closed,
+        OrganizationPlan: () => {
+          throw new Error('socket hang up');
+        },
+      }),
+    });
+    const result = await client.capacity(['team-1']);
+    expect(result.ok).toBe(false);
   });
 
   it('reads a subscription as a paid plan with no fixed cap, every team detailed', async () => {
     const client = new HttpLinearClient(KEY, {
       fetchImpl: byOperation({
         TeamIssueCounts: () => teams,
-        ClosedIssues: closed,
+        ClosedIssueCount: closed,
         OrganizationPlan: () => ({
           data: { organization: { subscription: { type: 'standard' } } },
         }),
@@ -844,7 +897,7 @@ describe('HttpLinearClient capacity', () => {
     const client = new HttpLinearClient(KEY, {
       fetchImpl: byOperation({
         TeamIssueCounts: () => teams,
-        ClosedIssues: closed,
+        ClosedIssueCount: closed,
         OrganizationPlan: () => ({ errors: [{ message: 'Forbidden' }] }),
       }),
     });
@@ -895,9 +948,11 @@ describe('HttpLinearClient closed issues', () => {
       nodes: [ref('i-1'), ref('i-2')],
       truncated: false,
     });
+    // Linear's 'duplicate' state type is a canceled one.
+    const types = ['completed', 'canceled', 'duplicate'];
     expect(sent.map((s) => s.variables)).toEqual([
-      { teamId: 'team-1', types: ['completed', 'canceled'], after: null },
-      { teamId: 'team-1', types: ['completed', 'canceled'], after: 'c-1' },
+      { teamId: 'team-1', types, after: null },
+      { teamId: 'team-1', types, after: 'c-1' },
     ]);
     expect(sent[0].query).not.toContain('includeArchived');
   });

@@ -398,4 +398,21 @@ describe('tasksWithFinishedRun', () => {
     ];
     expect(tasksWithFinishedRun(runs).size).toBe(0);
   });
+
+  test('a cancel and a run force-failed at boot leave the task as it was', () => {
+    const lost =
+      'dispatchd restarted while this run was in flight; the agent process may still be running';
+    const runs = [
+      run({ taskId: 't-a', state: 'cancelled', createdAt: at(1) }),
+      run({ taskId: 't-b', state: 'failed', error: lost, createdAt: at(1) }),
+      run({
+        taskId: 't-c',
+        state: 'interrupted-dirty',
+        error: lost,
+        createdAt: at(1),
+      }),
+      run({ taskId: 't-d', state: 'failed', error: 'boom', createdAt: at(1) }),
+    ];
+    expect([...tasksWithFinishedRun(runs)]).toEqual(['t-d']);
+  });
 });

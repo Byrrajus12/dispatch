@@ -9,7 +9,10 @@ import {
   summarizeWaves,
 } from '../../src/orchestrator/epicPhase.js';
 import type { FixLoopState } from '../../src/orchestrator/fixLoop.js';
-import { tasksWithFinishedRun } from '../../src/orchestrator/types.js';
+import {
+  BOOT_FORCE_FAIL_ERROR,
+  tasksWithFinishedRun,
+} from '../../src/orchestrator/types.js';
 import type { RunMeta, RunState } from '../../src/orchestrator/types.js';
 
 function task(id: string, overrides: Partial<TaskDoc['meta']> = {}): TaskDoc {
@@ -312,6 +315,12 @@ describe('deriveChildPhase', () => {
     expect(
       phase({ latestRun: run('r-7', 'finished'), finishedRun: false })
     ).toBe('draft');
+    // A run lost to a daemon restart is a failure, not work up for review.
+    expect(
+      phase({
+        latestRun: run('r-7', 'failed', { error: BOOT_FORCE_FAIL_ERROR }),
+      })
+    ).toBe('failed');
   });
 
   it('queued when ready and dispatchable, draft otherwise', () => {
@@ -347,6 +356,23 @@ describe('tasksWithFinishedRun', () => {
       run('r-6', 'running', { taskId: 't-d' }),
     ];
     expect([...tasksWithFinishedRun(runs)].sort()).toEqual(['t-a', 't-c']);
+  });
+
+  it('leaves out a cancel and a run force-failed at boot, which leave the task as it is', () => {
+    const runs = [
+      run('r-1', 'cancelled', { taskId: 't-a' }),
+      run('r-2', 'failed', { taskId: 't-b', error: BOOT_FORCE_FAIL_ERROR }),
+      run('r-3', 'interrupted-dirty', {
+        taskId: 't-c',
+        error: BOOT_FORCE_FAIL_ERROR,
+      }),
+      // An executor that died mid-run is moved to review like a finish.
+      run('r-4', 'interrupted-dirty', {
+        taskId: 't-d',
+        error: 'executor no longer alive',
+      }),
+    ];
+    expect([...tasksWithFinishedRun(runs)]).toEqual(['t-d']);
   });
 });
 

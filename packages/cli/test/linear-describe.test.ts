@@ -326,6 +326,19 @@ describe('describeCapacity', () => {
     );
     expect(text).not.toContain('archive-closed');
   });
+
+  test('an unread plan never claims there is no limit', () => {
+    const text = describeCapacity({
+      ...CAPACITY,
+      limit: null,
+      limitSource: null,
+      plan: 'unknown',
+    }).join('\n');
+    expect(text).not.toContain('no issue limit');
+    expect(text).toContain(
+      'Linear did not say whether this workspace has an issue limit (plan unknown)'
+    );
+  });
 });
 
 describe('describeExportPreview', () => {
@@ -346,6 +359,25 @@ describe('describeExportPreview', () => {
     );
     expect(text).toContain('3 of them are projects');
     expect(text).toContain('Room for 10 more issues in Linear');
+  });
+
+  test('archived arrivals keep no slot, so only the open tasks count', () => {
+    // Room for 10: the 9 open tasks fit, and each archived arrival frees its
+    // slot again as it lands.
+    const roomy = { ...preview, open: 9 };
+    const fits = describeExportPreview(
+      roomy,
+      'all-archive-finished',
+      CAPACITY
+    ).join('\n');
+    expect(fits).not.toContain('Room for');
+    // With every slot taken by open tasks, an arrival has none to land in.
+    const full = describeExportPreview(
+      { ...preview, open: 10 },
+      'all-archive-finished',
+      CAPACITY
+    ).join('\n');
+    expect(full).toContain('Room for 10 more issues in Linear');
   });
 
   test('every scope when none is named', () => {

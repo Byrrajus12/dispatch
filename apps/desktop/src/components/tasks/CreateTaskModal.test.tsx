@@ -300,6 +300,32 @@ test('Save as draft files the task under a Linear board’s backlog status', asy
   expect(created[0]?.status).toBe('Backlog');
 });
 
+test('Save as draft is not offered on a board with no backlog or triage status', () => {
+  setActiveStatusModel(
+    statusModelOf({
+      statuses: ['Todo', 'In Progress', 'Done', 'Canceled'],
+      statusDefinitions: [
+        { name: 'Todo', type: 'unstarted', color: null },
+        { name: 'In Progress', type: 'started', color: null },
+        { name: 'Done', type: 'completed', color: null },
+        { name: 'Canceled', type: 'canceled', color: null },
+      ],
+      statusRoles: {
+        ready: 'Todo',
+        dispatched: 'In Progress',
+        review: 'In Progress',
+        landing: null,
+        landed: 'Done',
+        dropped: 'Canceled',
+      },
+    })
+  );
+  mount({ preset: { status: 'Todo' } });
+  fireEvent.change(titleField(), { target: { value: 'Later' } });
+
+  expect(screen.queryByRole('button', { name: 'Save as draft' })).toBeNull();
+});
+
 test('a failed create keeps the dialog open with the title intact and says why', async () => {
   const { closed } = mount({
     onCreate: () => Promise.reject(new Error('daemon said no')),

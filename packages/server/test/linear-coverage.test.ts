@@ -82,14 +82,14 @@ function board(): Record<string, string> {
 describe('exportCandidates', () => {
   it('sends only open, unarchived, unlinked, non-derived work for open', () => {
     const ids = board();
-    const plan = exportCandidates(items(), 'open', model);
+    const plan = exportCandidates(items(), 'open', model, emptyLinearState());
     expect(plan.taskIds.sort()).toEqual([ids.open, ids.project].sort());
     expect(plan.archiveOnArrival).toEqual([]);
   });
 
   it('adds finished tasks for all, still leaving archived ones out', () => {
     const ids = board();
-    const plan = exportCandidates(items(), 'all', model);
+    const plan = exportCandidates(items(), 'all', model, emptyLinearState());
     expect(plan.taskIds.sort()).toEqual(
       [ids.open, ids.done, ids.dropped, ids.project].sort()
     );
@@ -98,7 +98,12 @@ describe('exportCandidates', () => {
 
   it('takes archived tasks too for all-archive-finished, and archives finished and archived ones on arrival', () => {
     const ids = board();
-    const plan = exportCandidates(items(), 'all-archive-finished', model);
+    const plan = exportCandidates(
+      items(),
+      'all-archive-finished',
+      model,
+      emptyLinearState()
+    );
     expect(plan.taskIds.sort()).toEqual(
       [
         ids.open,
@@ -113,12 +118,33 @@ describe('exportCandidates', () => {
       [ids.done, ids.dropped, ids.archivedOpen, ids.archivedDone].sort()
     );
   });
+
+  it('leaves out a task whose issue moved out of the linked teams', () => {
+    const ids = board();
+    const moved = task('Moved away');
+    const state = { movedOut: { 'issue-9': moved } };
+    for (const scope of ['open', 'all', 'all-archive-finished'] as const) {
+      expect(exportCandidates(items(), scope, model, state).taskIds).toContain(
+        ids.open
+      );
+      expect(
+        exportCandidates(items(), scope, model, state).taskIds
+      ).not.toContain(moved);
+    }
+    expect(exportPreview(items(), model, state)).toEqual(
+      exportPreview(
+        items().filter((i) => i.meta.id !== moved),
+        model,
+        emptyLinearState()
+      )
+    );
+  });
 });
 
 describe('exportPreview', () => {
   it('counts each scope from one walk, with archived and derived apart', () => {
     board();
-    expect(exportPreview(items(), model)).toEqual({
+    expect(exportPreview(items(), model, emptyLinearState())).toEqual({
       open: 2,
       all: 4,
       allArchiveFinished: 6,

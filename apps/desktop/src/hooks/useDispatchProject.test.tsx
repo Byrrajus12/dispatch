@@ -2056,3 +2056,32 @@ test('Linear coverage and capacity are fetched only while a view watches them', 
   linearStatusFixture = null;
   taskListFixture = null;
 });
+
+// An export the CLI started reports its progress here before any status
+// refetch: the window's own Export and Archive controls must wait on it.
+test('a bulk action started elsewhere reads as running from its first progress', async () => {
+  linearStatusFixture = { connected: true, teamId: 'team-1', running: null };
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const { result } = renderHook(
+    () => useDispatchProject('/repo', { selectedRunId: null }),
+    { wrapper: wrapper(queryClient) }
+  );
+  await waitFor(() => {
+    expect(result.current.linearStatus).not.toBeNull();
+  });
+
+  act(() => {
+    sink?.onEvent({
+      type: 'linear.progress',
+      progress: { phase: 'creating', done: 0, total: 9, action: 'export' },
+    });
+  });
+
+  await waitFor(() => {
+    expect(result.current.linearStatus?.running?.action).toBe('export');
+  });
+  expect(result.current.linearStatus?.progress?.done).toBe(0);
+  linearStatusFixture = null;
+});

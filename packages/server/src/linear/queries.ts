@@ -265,6 +265,18 @@ export const CLOSED_ISSUES_QUERY = `query ClosedIssues($teamId: ID!, $types: [St
   }
 }`;
 
+// The same filter, ids only: a count reads nothing else.
+export const CLOSED_ISSUE_COUNT_QUERY = `query ClosedIssueCount($teamId: ID!, $types: [String!]!, $after: String) {
+  issues(
+    filter: { team: { id: { eq: $teamId } }, state: { type: { in: $types } } }
+    first: ${LINK_PAGE}
+    after: $after
+  ) {
+    nodes { id }
+    ${PAGE_INFO}
+  }
+}`;
+
 export const COMMENTS_QUERY = `query CommentsUpdatedSince($teamId: ID!, $since: DateTimeOrDuration, $after: String) {
   comments(
     filter: { issue: { team: { id: { eq: $teamId } } }, updatedAt: { gt: $since } }

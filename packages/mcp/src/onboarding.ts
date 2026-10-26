@@ -49,8 +49,9 @@ With no statuses configured, the built-ins apply: \`draft\` (backlog),
 todo, in-progress, in-review, done and cancelled are accepted as aliases. On a
 board with its own names those built-in words still work: each is mapped
 through \`statusRoles\` (\`landed\` to the landed role, \`working\` to the
-dispatched one, \`draft\` to the first backlog status), and a word whose role
-the board leaves unset, such as \`landing\`, is refused.
+dispatched one, \`draft\` to the first backlog or else triage status), and a
+word with nothing to map to, such as \`landing\` when the board leaves its role
+unset, is refused.
 
 ## Creating and updating tasks
 

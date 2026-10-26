@@ -142,6 +142,8 @@ export function dataWith(
     linearCoverage: null,
     linearCapacity: null,
     linearCapacityError: null,
+    linearCoverageError: null,
+    linearExportPreviewError: null,
     linearExportPreview: null,
     watchLinearDetails: () => () => {},
     refreshLinearCapacity: () => Promise.resolve(),

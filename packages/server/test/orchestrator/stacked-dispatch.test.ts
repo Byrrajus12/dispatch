@@ -339,6 +339,36 @@ describe('base selection when review shares the dispatched status', () => {
     expect(meta.stackParents).toEqual([run.branch]);
   });
 
+  it('does not stack on a blocker whose run was cancelled', async () => {
+    const h = makeHarness();
+    h.orchestrator.registerExecutor(
+      'slow',
+      new FakeExecutor({
+        steps: [{ delayMs: 60_000 }],
+        finish: { state: 'finished' },
+      })
+    );
+    writeFileSync(join(repo, '.dispatch', 'config.yml'), SHARED_REVIEW_CONFIG);
+    const blocker = h.store.create({ title: 'A', status: 'Todo' });
+    const run = await h.orchestrator.dispatch(blocker.meta.id, 'slow');
+    await Bun.write(join(run.worktreePath, 'a.txt'), 'a');
+    runGitSync(run.worktreePath, ['add', '-A']);
+    runGitSync(run.worktreePath, ['commit', '-m', 'partial A work']);
+    await h.orchestrator.cancel(run.id);
+    const dependent = h.store.create({
+      title: 'B',
+      status: 'Todo',
+      blockedBy: [blocker.meta.id],
+    });
+    h.cache.rebuild(h.store);
+    // A cancel leaves the blocker where it was: still In Progress.
+    expect(h.store.get(blocker.meta.id)?.meta.status).toBe('In Progress');
+
+    const meta = await h.orchestrator.dispatch(dependent.meta.id, 'fake');
+    expect(meta.baseBranch).toBe('main');
+    expect(meta.stackParents ?? []).toEqual([]);
+  });
+
   it('does not stack on an earlier branch while the blocker runs again', async () => {
     const h = makeHarness();
     h.orchestrator.registerExecutor(

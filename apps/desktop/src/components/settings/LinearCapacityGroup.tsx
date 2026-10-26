@@ -73,9 +73,17 @@ export function LinearCapacityGroup({
   const teamKeys = capacity?.teams.map((t) => t.key).join(', ') ?? '';
   const progress = progressFor(status.progress, 'archive');
   const outcome = describeBulkOutcome(status.lastArchive);
+  // The daemon refuses both: an archive is a write to Linear, and it needs
+  // the link a first sync makes.
+  const pullOnly = status.direction === 'pull';
+  const unlinked = status.bootstrappedAt === null;
+  // A push-only link never takes Linear's changes, its archive included.
+  const pushOnly = status.direction === 'push';
   const archiveDisabled =
     !canDecide ||
     !configured ||
+    pullOnly ||
+    unlinked ||
     running !== null ||
     archiving ||
     archivable === 0;
@@ -164,7 +172,11 @@ export function LinearCapacityGroup({
 
       <SettingsRow
         title="Archive closed issues in Linear"
-        subtitle="Archived issues stop counting toward the limit, and you can restore them from Linear’s archive. Their tasks here are archived too, as when Linear archives on its own."
+        subtitle={`Archived issues stop counting toward the limit, and you can restore them from Linear’s archive. ${
+          pushOnly
+            ? 'Their tasks here stay as they are: this link only sends changes to Linear.'
+            : 'Their tasks here are archived too, as when Linear archives on its own.'
+        }`}
         keywords="archive completed canceled done"
         locked={canDecide ? false : decideReason}
         control={
@@ -193,6 +205,14 @@ export function LinearCapacityGroup({
           </>
         }
       >
+        {configured && pullOnly && (
+          <SettingsHint>
+            Pull only: switch the direction to archive issues in Linear.
+          </SettingsHint>
+        )}
+        {configured && unlinked && (
+          <SettingsHint>Sync once to link the team first.</SettingsHint>
+        )}
         {progress !== null && (
           <SettingsHint>{formatLinearProgress(progress)}</SettingsHint>
         )}
@@ -224,7 +244,11 @@ export function LinearCapacityGroup({
               <AlertDialogDescription>
                 {`Completed${includeCanceled ? ' and canceled' : ''} issues${
                   teamKeys === '' ? ' in the linked teams' : ` in ${teamKeys}`
-                } are archived in Linear, and the tasks here linked to them are archived too. You can restore issues from Linear’s archive.`}
+                } are archived in Linear${
+                  pushOnly
+                    ? '. The tasks here linked to them stay as they are, since this link only sends changes to Linear.'
+                    : ', and the tasks here linked to them are archived too.'
+                } You can restore issues from Linear’s archive.`}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>

@@ -222,19 +222,23 @@ export interface ExportCandidates {
 }
 
 /**
- * The unlinked tasks an export scope sends. None is derived. 'open' leaves
- * out finished tasks; only 'all-archive-finished' takes archived ones, and
- * there finished and archived tasks arrive archived.
+ * The unlinked tasks an export scope sends. None is derived, and none whose
+ * issue moved out of the linked teams (it would be created twice). 'open'
+ * leaves out finished tasks; only 'all-archive-finished' takes archived ones,
+ * and there finished and archived tasks arrive archived.
  */
 export function exportCandidates(
   items: readonly TaskListItem[],
   scope: LinearExportScope,
-  model: StatusModel
+  model: StatusModel,
+  state: Pick<LinearSyncState, 'movedOut'>
 ): ExportCandidates {
   const out: ExportCandidates = { taskIds: [], archiveOnArrival: [] };
+  const movedOut = new Set(Object.values(state.movedOut));
   for (const { meta } of items) {
     if (meta.derivedFrom !== undefined) continue;
     if (parseLinearExternal(meta.external) !== null) continue;
+    if (movedOut.has(meta.id)) continue;
     const archived = meta.archivedAt !== undefined;
     const finished = isDoneStatus(meta.status, model);
     if (archived && scope !== 'all-archive-finished') continue;
@@ -250,8 +254,10 @@ export function exportCandidates(
 /** Each export scope's size, from one walk over the board. */
 export function exportPreview(
   items: readonly TaskListItem[],
-  model: StatusModel
+  model: StatusModel,
+  state: Pick<LinearSyncState, 'movedOut'>
 ): LinearExportPreview {
+  const movedOut = new Set(Object.values(state.movedOut));
   const out: LinearExportPreview = {
     open: 0,
     all: 0,
@@ -267,6 +273,7 @@ export function exportPreview(
       out.derived++;
       continue;
     }
+    if (movedOut.has(meta.id)) continue;
     out.allArchiveFinished++;
     if (meta.archivedAt !== undefined) {
       out.archived++;

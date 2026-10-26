@@ -26,6 +26,7 @@ import type {
   StatusModel,
   TaskDoc,
   TaskListItem,
+  TaskMeta,
   TaskStorePort,
 } from '@dispatch-foo/core';
 import { randomBytes } from 'node:crypto';
@@ -52,7 +53,7 @@ import type {
   LinearResult,
   LinearWorkspace,
 } from './client.js';
-import { HttpLinearClient } from './client.js';
+import { FREE_PLAN_ISSUE_LIMIT, HttpLinearClient } from './client.js';
 import { CommentSync } from './comments.js';
 import type {
   LinearCoverage,
@@ -197,6 +198,9 @@ export interface LinearSyncDeps {
   webhookDebounceMs?: number;
   /** Linear documents; absent, documents are not synced. */
   documents?: LinearDocsBinding;
+  /** Tasks whose newest execute run has ended (tasksWithFinishedRun), for
+   *  moving them when a review state splits off the dispatched one. */
+  finishedRuns?: () => ReadonlySet<string>;
 }
 
 /** How the pass reaches the docs side: an adapter over a mapping it builds. */
@@ -326,6 +330,11 @@ const WEBHOOK_RETRY_MS = 60 * 60_000;
 const APPLY_SLICE_MS = 10;
 // How long GET /capacity reuses its last measurement.
 const CAPACITY_CACHE_MS = 60_000;
+// How long a paid plan's closed counts are reused between measurements.
+const CLOSED_COUNTS_MS = 15 * 60_000;
+// Archive failures in a row that end an archive pass: a key that cannot
+// archive fails every issue alike.
+const ARCHIVE_FAILURE_RUN = 5;
 // A queued create's retry delay doubles per attempt from here, up to the cap.
 const QUEUE_RETRY_BASE_MS = 5 * 60_000;
 const QUEUE_RETRY_MAX_MS = 6 * 60 * 60_000;
@@ -516,6 +525,27 @@ function clearPause(state: LinearSyncState): void {
   state.capacity = { ...capacity, retryAt: null, message: null };
 }
 
+// Whether a measurement shows room under `limit` that ends the pause. It
+// must have begun after Linear refused the create; and since it counts only
+// the teams the key can see, it must also be lower than the count measured
+// before, unless that one showed no room (or there was none).
+function measuredRoom(
+  prior: LinearCapacityState | null,
+  active: number | null,
+  limit: number | null,
+  startedAt: number
+): boolean {
+  if (active === null || limit === null || active >= limit) return false;
+  const limitedAt = prior?.limitedAt ?? null;
+  if (limitedAt !== null && Date.parse(limitedAt) >= startedAt) return false;
+  const before = prior?.active ?? null;
+  const priorLimit = prior?.limit ?? null;
+  if (before === null || priorLimit === null || before >= priorLimit) {
+    return true;
+  }
+  return active < before;
+}
+
 function retryReady(entry: PushAttempt, now: number): boolean {
   return entry.retryAt === null || Date.parse(entry.retryAt) <= now;
 }
@@ -532,6 +562,37 @@ function retryDelay(attempts: number): number {
 function forcedEntries(state: LinearSyncState): number {
   return Object.values(state.pushQueue).filter((e) => e.origin !== 'auto')
     .length;
+}
+
+// Queues each task still without its record for a create, keeping what an
+// entry it already has says; an automatic entry takes `origin`.
+function queueCreates(
+  state: LinearSyncState,
+  metas: Iterable<
+    Pick<TaskMeta, 'id' | 'derivedFrom' | 'external'> | undefined
+  >,
+  origin: 'explicit' | 'export',
+  archive: ReadonlySet<string>,
+  at: string
+): void {
+  for (const meta of metas) {
+    if (meta === undefined || meta.derivedFrom !== undefined) continue;
+    if (parseLinearExternal(meta.external) !== null) continue;
+    const id = meta.id;
+    const prior = state.pushQueue[id];
+    const archived = archive.has(id) || prior?.archive === true;
+    state.pushQueue[id] = {
+      origin:
+        prior === undefined || prior.origin === 'auto' ? origin : prior.origin,
+      queuedAt: prior?.queuedAt ?? at,
+      attempts: prior?.attempts ?? 0,
+      lastAttemptAt: prior?.lastAttemptAt ?? null,
+      lastError: prior?.lastError ?? null,
+      lastErrorKind: prior?.lastErrorKind ?? null,
+      retryAt: prior?.retryAt ?? null,
+      ...(archived ? { archive: true as const } : {}),
+    };
+  }
 }
 
 // Records an unlinked task as deliberately not sent at this version. One
@@ -616,8 +677,19 @@ export class LinearSync {
   } | null = null;
   // The export, archive or retry a start* method began, until its pass ends.
   private running: { action: BulkAction; startedAt: string } | null = null;
-  // GET /capacity's last measurement, reused for CAPACITY_CACHE_MS.
-  private capacityCache: { at: number; data: LinearCapacity } | null = null;
+  // GET /capacity's last measurement, reused for CAPACITY_CACHE_MS; `closedAt`
+  // is when its closed counts were walked.
+  private capacityCache: {
+    at: number;
+    closedAt: number;
+    data: LinearCapacity;
+  } | null = null;
+  private capacityInFlight: Promise<LinearResult<LinearCapacity>> | null = null;
+  // Labels found blocked in Linear, kept across passes (see PassDeps).
+  private readonly blockedLabels = new Map<
+    string,
+    { reason: string; until: number }
+  >();
   // State changes made outside a pass. A pass in flight re-applies them as it
   // writes, so its own write of the state it read earlier keeps them.
   private stateEdits: ((state: LinearSyncState) => unknown)[] = [];
@@ -747,6 +819,7 @@ export class LinearSync {
   start(): void {
     this.stopTimers();
     this.workspaceCache = null;
+    this.blockedLabels.clear();
     const config = this.safeConfig();
     this.enabled = config?.linear.enabled ?? false;
     if (config === null) return;
@@ -844,6 +917,7 @@ export class LinearSync {
       t.documents.add(id);
     } else if (type === 'IssueLabel' || type === 'Cycle') {
       this.workspaceCache = null;
+      this.blockedLabels.clear();
     } else return;
     if (this.webhookTimer !== null) clearTimeout(this.webhookTimer);
     this.webhookTimer = setTimeout(() => {
@@ -964,7 +1038,11 @@ export class LinearSync {
 
   /** How many tasks each export scope would send. Reads only the task cache. */
   exportPreview(): LinearExportPreview {
-    return exportPreview(this.deps.cache.allItems(), this.statusModel());
+    return exportPreview(
+      this.deps.cache.allItems(),
+      this.statusModel(),
+      readLinearState(this.deps.rootDir)
+    );
   }
 
   /**
@@ -977,13 +1055,27 @@ export class LinearSync {
     const refused = this.bulkRefusal('export');
     if (refused !== null) return { ok: false, status: 409, error: refused };
     const startedAt = new Date().toISOString();
+    const items = this.deps.cache.allItems();
     const plan = exportCandidates(
-      this.deps.cache.allItems(),
+      items,
       scope,
-      this.statusModel()
+      this.statusModel(),
+      readLinearState(this.deps.rootDir)
     );
     const candidates = plan.taskIds.length;
     if (candidates === 0) return { ok: true, candidates, startedAt };
+    // Queued now, so a pass that stops before its creates (a throttle, a
+    // failed session) still leaves every one for later passes to send.
+    const metas = new Map(items.map((i) => [i.meta.id, i.meta]));
+    this.editState((state) =>
+      queueCreates(
+        state,
+        plan.taskIds.map((id) => metas.get(id)),
+        'export',
+        new Set(plan.archiveOnArrival),
+        startedAt
+      )
+    );
     this.startBulk({
       mode: 'export',
       taskIds: plan.taskIds,
@@ -1020,7 +1112,18 @@ export class LinearSync {
         taskIds ?? Object.keys(readLinearState(this.deps.rootDir).pushQueue)
       ),
     ];
+    const metas = new Map(
+      this.deps.cache.allItems().map((i) => [i.meta.id, i.meta])
+    );
     this.editState((state) => {
+      // A named task not queued yet is queued, as an export's are.
+      queueCreates(
+        state,
+        ids.map((id) => metas.get(id)),
+        'explicit',
+        new Set(),
+        startedAt
+      );
       for (const id of ids) {
         const entry = state.pushQueue[id];
         if (entry !== undefined) {
@@ -1065,8 +1168,9 @@ export class LinearSync {
 
   /**
    * Issue counts against the workspace's plan cap, measured live at most
-   * once a minute unless `refresh`. A measurement with room under the limit
-   * ends the usage-limit pause.
+   * once a minute unless `refresh`; concurrent callers share a measurement.
+   * One with room under the limit ends the usage-limit pause (see
+   * measuredRoom).
    */
   async capacity(refresh = false): Promise<LinearResult<LinearCapacity>> {
     const cached = this.capacityCache;
@@ -1074,6 +1178,16 @@ export class LinearSync {
     if (cached !== null && fresh && !refresh) {
       return { ok: true, data: cached.data };
     }
+    this.capacityInFlight ??= this.measureCapacity(refresh).finally(() => {
+      this.capacityInFlight = null;
+    });
+    return this.capacityInFlight;
+  }
+
+  private async measureCapacity(
+    refresh: boolean
+  ): Promise<LinearResult<LinearCapacity>> {
+    const cached = this.capacityCache;
     const client = this.client();
     if (client === null) {
       return { ok: false, kind: 'auth', error: 'no Linear API key configured' };
@@ -1088,31 +1202,57 @@ export class LinearSync {
       };
     }
     const teamIds = this.safeConfig()?.linear.teamIds ?? [];
+    // A paid plan has no cap, so its closed counts (which only the archive
+    // action reads) are walked again at most every CLOSED_COUNTS_MS.
+    const reuse =
+      !refresh &&
+      cached !== null &&
+      cached.data.plan === 'paid' &&
+      Date.now() - cached.closedAt < CLOSED_COUNTS_MS
+        ? cached
+        : null;
+    const startedAt = Date.now();
     const measured = await client.capacity(
-      teamIds.length > 0 ? teamIds : undefined
+      teamIds.length > 0 ? teamIds : undefined,
+      reuse?.data
     );
     if (!measured.ok) {
       this.note(measured);
       return measured;
     }
-    const limitHitAt = this.editState((state) => {
+    const counted = this.editState((state) => {
       const m = measured.data;
       const prior = state.capacity;
-      const room = m.active !== null && m.limit !== null && m.active < m.limit;
+      const limitedAt = prior?.limitedAt ?? null;
+      // Linear refused a create while the plan could not be read: the only
+      // issue limit it has is the Free plan's.
+      const observed =
+        m.limit === null && m.plan === 'unknown' && limitedAt !== null;
+      const limit = observed ? FREE_PLAN_ISSUE_LIMIT : m.limit;
+      const room = measuredRoom(prior, m.active, limit, startedAt);
       state.capacity = {
-        limitedAt: prior?.limitedAt ?? null,
+        limitedAt,
         retryAt: room ? null : (prior?.retryAt ?? null),
         message: room ? null : (prior?.message ?? null),
         active: m.active,
-        limit: m.limit,
-        limitSource: m.limitSource,
+        limit,
+        limitSource: observed ? 'observed' : m.limitSource,
         plan: m.plan,
         checkedAt: m.checkedAt,
       };
-      return state.capacity.limitedAt;
+      return state.capacity;
     });
-    const data: LinearCapacity = { ...measured.data, limitHitAt };
-    this.capacityCache = { at: Date.now(), data };
+    const data: LinearCapacity = {
+      ...measured.data,
+      limit: counted.limit,
+      limitSource: counted.limitSource,
+      limitHitAt: counted.limitedAt,
+    };
+    this.capacityCache = {
+      at: Date.now(),
+      closedAt: reuse?.closedAt ?? Date.now(),
+      data,
+    };
     return { ok: true, data };
   }
 
@@ -1538,7 +1678,8 @@ export class LinearSync {
         id: t.team.id,
         key: t.team.key,
         states: t.states,
-      }))
+      })),
+      this.deps.finishedRuns?.()
     );
     for (const id of regenerated.migrated) batch.add(id);
     summary.migrated = regenerated.migrated.length;
@@ -1588,6 +1729,7 @@ export class LinearSync {
       batch,
       note: (failure) => this.note(failure),
       onLabel: (label) => this.cacheLabel(session, label),
+      blockedLabels: this.blockedLabels,
     });
     // A color write that did not land keeps its old base, so it retries.
     for (const id of await pass.pushLabelColors(labels.push)) {
@@ -1697,6 +1839,8 @@ export class LinearSync {
       this.accountForAll(state, docs);
       state.bootstrappedAt = new Date().toISOString();
     }
+    // A create a throttle stopped after its record landed is linked now.
+    this.pruneQueue(state, docs);
     summary.queued = forcedEntries(state);
     // Archiving freed room, so creates queued behind the limit go next.
     if (archiving && summary.archivedIssues > 0 && this.retryDue(state)) {
@@ -2473,6 +2617,8 @@ export class LinearSync {
       });
     }
 
+    await this.retryArrivalArchives(run);
+
     const order = pass.creationOrder(unlinked);
     const bulk = run.bulk;
     const report = (done: number): void => {
@@ -2534,6 +2680,19 @@ export class LinearSync {
     }
   }
 
+  // Archives the issues an export meant to land archived whose archive
+  // failed then, while each task is still linked to its issue.
+  private async retryArrivalArchives(run: Run): Promise<void> {
+    const { pass, state, docs } = run;
+    const pending = state.pendingArchives ?? {};
+    for (const [taskId, issueId] of Object.entries(pending)) {
+      const ref = parseLinearExternal(docs.get(taskId)?.meta.external);
+      const linked = ref?.entity === 'issue' && ref.id === issueId;
+      if (linked && !(await pass.archiveOnArrival(taskId, issueId))) continue;
+      delete pending[taskId];
+    }
+  }
+
   // Drops queue entries whose task is gone, now derived, or has its record.
   private pruneQueue(
     state: LinearSyncState,
@@ -2556,26 +2715,13 @@ export class LinearSync {
   private queueNamed(run: Run, named: ReadonlySet<string>, at: string): void {
     const { state, docs } = run;
     const origin = run.bulk?.action === 'export' ? 'export' : 'explicit';
-    for (const id of named) {
-      const doc = docs.get(id);
-      if (doc === undefined || doc.meta.derivedFrom !== undefined) continue;
-      if (parseLinearExternal(doc.meta.external) !== null) continue;
-      const prior = state.pushQueue[id];
-      const archive = run.archiveOnArrival.has(id) || prior?.archive === true;
-      state.pushQueue[id] = {
-        origin:
-          prior === undefined || prior.origin === 'auto'
-            ? origin
-            : prior.origin,
-        queuedAt: prior?.queuedAt ?? at,
-        attempts: prior?.attempts ?? 0,
-        lastAttemptAt: prior?.lastAttemptAt ?? null,
-        lastError: prior?.lastError ?? null,
-        lastErrorKind: prior?.lastErrorKind ?? null,
-        retryAt: prior?.retryAt ?? null,
-        ...(archive ? { archive: true as const } : {}),
-      };
-    }
+    queueCreates(
+      state,
+      [...named].map((id) => docs.get(id)?.meta),
+      origin,
+      run.archiveOnArrival,
+      at
+    );
   }
 
   /**
@@ -2601,13 +2747,23 @@ export class LinearSync {
     run.found = total;
     const archived: LinearIssue[] = [];
     this.setProgress({ phase: 'archiving', done: 0, total, action: 'archive' });
+    let failedInRow = 0;
     for (const [i, ref] of closed.nodes.entries()) {
       const issue = pass.take(await session.client.archiveIssue(ref.id));
       if (issue !== null) {
+        failedInRow = 0;
         archived.push(issue);
         pass.summary.archivedIssues++;
         // Room under the cap again, so queued creates may go.
         clearPause(state);
+      } else if (
+        pass.lastFailureKind === 'auth' ||
+        ++failedInRow >= ARCHIVE_FAILURE_RUN
+      ) {
+        pass.recordFailure(
+          `stopped archiving after ${i + 1} of ${total}: Linear refused the archive`
+        );
+        break;
       }
       this.setProgress({
         phase: 'archiving',

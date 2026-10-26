@@ -414,7 +414,8 @@ test('offers an export when tasks predate the link and none has run', () => {
     <LinearPanel data={linked({}, { coverage: COUNTS, lastExport: null })} />
   );
   const offer = screen.getByTestId('linear-export-offer');
-  expect(offer.textContent).toContain('299 tasks here aren’t in Linear yet');
+  // The two failed creates have Retry under Coverage instead.
+  expect(offer.textContent).toContain('297 tasks here aren’t in Linear yet');
   expect(
     within(offer).getByRole('button', { name: 'Export to Linear…' })
   ).toBeDefined();
@@ -444,6 +445,21 @@ test('offers an export when tasks predate the link and none has run', () => {
   );
   expect(screen.queryByTestId('linear-export-offer')).toBeNull();
   expect(screen.getByText('Exported 47 of 47')).toBeDefined();
+});
+
+test('makes no export offer for tasks made after the link, waiting or failed', () => {
+  render(
+    <LinearPanel
+      data={linked(
+        {},
+        {
+          coverage: { ...COUNTS, notLinked: 3, heldBack: 0, failed: 2 },
+          lastExport: null,
+        }
+      )}
+    />
+  );
+  expect(screen.queryByTestId('linear-export-offer')).toBeNull();
 });
 
 test('Export to Linear lists three scopes with counts and sends the chosen one', async () => {
@@ -701,7 +717,29 @@ test('Coverage counts linked tasks and lists the rest with their reason', async 
   expect(within(rows[1]).getByText('Left team')).toBeDefined();
   expect(within(rows[1]).queryByRole('button')).toBeNull();
   expect(within(rows[2]).getByText('Held back')).toBeDefined();
-  expect(within(rows[2]).getByRole('button', { name: 'Send' })).toBeDefined();
+  // Each row's actions are named for their task, not just "Send".
+  expect(
+    within(rows[2]).getByRole('button', { name: 'Send Old work' })
+  ).toBeDefined();
+  expect(
+    within(rows[0]).getByRole('button', { name: 'Retry Fix checkout' })
+  ).toBeDefined();
+});
+
+test('Coverage says why it cannot count instead of counting forever', () => {
+  render(
+    <LinearPanel
+      data={linked(
+        { linearCoverageError: new Error('not found: /api/linear/coverage') },
+        { coverage: undefined }
+      )}
+    />
+  );
+  expect(
+    within(row('In Linear')).getByText(
+      'Couldn’t count: not found: /api/linear/coverage'
+    )
+  ).toBeDefined();
 });
 
 test('a failed row retries or stops retrying exactly that task', async () => {
@@ -726,11 +764,15 @@ test('a failed row retries or stops retrying exactly that task', async () => {
 
   fireEvent.click(screen.getByRole('button', { name: 'Show 3 tasks' }));
   const [failed] = await screen.findAllByTestId('linear-unlinked-row');
-  fireEvent.click(within(failed).getByRole('button', { name: 'Retry' }));
+  fireEvent.click(
+    within(failed).getByRole('button', { name: 'Retry Fix checkout' })
+  );
   await waitFor(() => expect(handleRetryLinear).toHaveBeenCalledTimes(2));
   expect(handleRetryLinear.mock.calls[1]).toEqual([['t-abc']]);
   fireEvent.click(
-    within(failed).getByRole('button', { name: 'Stop retrying' })
+    within(failed).getByRole('button', {
+      name: 'Stop retrying Fix checkout',
+    })
   );
   await waitFor(() => expect(handleForgetLinear).toHaveBeenCalledTimes(1));
   expect(handleForgetLinear.mock.calls[0]).toEqual([['t-abc']]);
@@ -873,6 +915,87 @@ test('archiving closed issues confirms first, then sends includeCanceled', async
   expect(handleArchiveClosedLinear.mock.calls[0]).toEqual([
     { includeCanceled: true },
   ]);
+});
+
+test('on a push-only link the archive says the tasks here stay as they are', async () => {
+  const config = {
+    ...testConfig,
+    linear: {
+      ...testConfig.linear,
+      teamId: 'team-1',
+      teamIds: ['team-1'],
+      direction: 'push' as const,
+    },
+  };
+  render(
+    <LinearPanel
+      data={linked({ config, linearCapacity: CAPACITY }, { direction: 'push' })}
+    />
+  );
+  expect(
+    within(row('Archive closed issues in Linear')).getByText(
+      /Their tasks here stay as they are/
+    )
+  ).toBeDefined();
+  fireEvent.click(screen.getByRole('button', { name: 'Archive 120…' }));
+  const dialog = await screen.findByRole('alertdialog');
+  expect(dialog.textContent).toContain(
+    'The tasks here linked to them stay as they are'
+  );
+  expect(dialog.textContent).not.toContain('are archived too');
+});
+
+test('archiving is off on a pull-only link and before the first sync', () => {
+  const config = {
+    ...testConfig,
+    linear: {
+      ...testConfig.linear,
+      teamId: 'team-1',
+      teamIds: ['team-1'],
+      direction: 'pull' as const,
+    },
+  };
+  const { unmount } = render(
+    <LinearPanel
+      data={linked({ config, linearCapacity: CAPACITY }, { direction: 'pull' })}
+    />
+  );
+  const archive = () =>
+    screen.getByRole<HTMLButtonElement>('button', { name: 'Archive 120…' });
+  expect(archive().disabled).toBe(true);
+  expect(
+    screen.getByText(
+      'Pull only: switch the direction to archive issues in Linear.'
+    )
+  ).toBeDefined();
+  unmount();
+
+  render(
+    <LinearPanel
+      data={linked({ linearCapacity: CAPACITY }, { bootstrappedAt: null })}
+    />
+  );
+  expect(archive().disabled).toBe(true);
+  expect(screen.getByText('Sync once to link the team first.')).toBeDefined();
+});
+
+test('the export dialog says why it cannot count instead of counting forever', async () => {
+  render(
+    <LinearPanel
+      data={linked({
+        linearExportPreviewError: new Error('not found: /api/linear/export'),
+      })}
+    />
+  );
+  fireEvent.click(
+    within(row('Export to Linear')).getByRole('button', {
+      name: 'Export to Linear…',
+    })
+  );
+  const dialog = await screen.findByRole('dialog');
+  expect(
+    within(dialog).getAllByText('Couldn’t count: not found: /api/linear/export')
+  ).toHaveLength(3);
 });
 
 test('below the decide tier, archiving locks but capacity still shows', () => {

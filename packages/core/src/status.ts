@@ -319,12 +319,15 @@ export function isSatisfiedForDispatchStatus(
 }
 
 /** Where a captured-but-unspecified task goes: the first backlog status,
- *  else triage, else ready. */
-export function draftStatus(model: StatusModel = DEFAULT_STATUS_MODEL): string {
+ *  else triage. Null on a board with neither: the ready status would queue
+ *  it for dispatch, which a draft must never be. */
+export function draftStatus(
+  model: StatusModel = DEFAULT_STATUS_MODEL
+): string | null {
   return (
     statusesOfType('backlog', model)[0] ??
     statusesOfType('triage', model)[0] ??
-    model.roles.ready
+    null
   );
 }
 
@@ -354,7 +357,7 @@ function builtInRoleStatus(word: string, model: StatusModel): string | null {
  * A caller's status as one of `names`: exact, then a unique case-insensitive
  * match, then a legacy alias, then a built-in word read as its role (landed ->
  * roles.landed, working -> roles.dispatched, draft -> draftStatus). Null when
- * none fits.
+ * none fits, `draft` included on a board with no backlog or triage status.
  */
 export function resolveStatusName(
   raw: string,
