@@ -30,7 +30,7 @@ afterEach(() => {
   act(() => setActiveStatusModel(null));
 });
 
-function epic(id: string, title: string, kind = 'milestone'): TaskDoc {
+function milestone(id: string, title: string, kind = 'milestone'): TaskDoc {
   return { meta: { id, title, kind }, body: '' } as unknown as TaskDoc;
 }
 
@@ -85,10 +85,10 @@ function mount({
       <ShellActionsProvider value={shellActions(preset)}>
         <CreateTaskModal
           statuses={STATUSES}
-          epics={[
-            epic('e-1', 'Search index'),
-            epic('p-1', 'Platform', 'project'),
-            epic('t-9', 'Parent issue', 'task'),
+          milestones={[
+            milestone('e-1', 'Search index'),
+            milestone('p-1', 'Platform', 'project'),
+            milestone('t-9', 'Parent issue', 'task'),
           ]}
           projectName={projectName}
           labels={labels}
@@ -155,7 +155,7 @@ test('renders the crumb header, borderless fields and property chips', () => {
 });
 
 test('reads the status and the parent container from the shell createPreset', async () => {
-  const { created } = mount({ preset: { status: 'review', epic: 'e-1' } });
+  const { created } = mount({ preset: { status: 'review', milestone: 'e-1' } });
   expect(screen.getByLabelText('Status').textContent).toBe('Review');
   expect(screen.getByLabelText('Parent').textContent).toBe('Search index');
   // The free-text milestone is gone: a task's container is its parent.
@@ -175,7 +175,7 @@ test('reads the status and the parent container from the shell createPreset', as
 });
 
 test('the Parent picker lists where this kind can live, and clears to no parent', async () => {
-  const { created } = mount({ preset: { epic: 'e-1' } });
+  const { created } = mount({ preset: { milestone: 'e-1' } });
   fireEvent.click(screen.getByLabelText('Parent'));
   const options = screen.getAllByRole('option').map((o) => o.textContent ?? '');
   expect(options).toEqual([
@@ -203,7 +203,7 @@ test('a kind preset starts the Kind chip there and creates that kind', async () 
 });
 
 test('switching to a broader kind drops a parent that cannot hold it', () => {
-  mount({ preset: { epic: 'e-1' } });
+  mount({ preset: { milestone: 'e-1' } });
   fireEvent.click(screen.getByLabelText('Kind'));
   fireEvent.click(screen.getByRole('menuitem', { name: /Project/ }));
   expect(screen.getByLabelText('Parent').textContent).toBe('Parent');

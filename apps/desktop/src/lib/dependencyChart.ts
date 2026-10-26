@@ -26,7 +26,7 @@ export interface ChartTask {
   title: string;
   status: string;
   doc: TaskListItem;
-  /** The milestone group's epicId, or null for the 'No milestone' group. */
+  /** The milestone group's milestoneId, or null for the 'No milestone' group. */
   milestoneId: string | null;
   /** That group's label ('No milestone' for loose tasks). */
   milestoneTitle: string;
@@ -189,7 +189,7 @@ export function dependencyChart(
         title,
         status,
         doc,
-        milestoneId: group.epicId,
+        milestoneId: group.milestoneId,
         milestoneTitle: group.label,
         state: chartStateOf(doc, ctx.bucketOf(doc), model),
       });

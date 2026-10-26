@@ -1,5 +1,5 @@
 import type { TaskListItem } from '@dispatch-foo/core/browser';
-import { canonicalKind, isContainerKind } from '@dispatch-foo/core/browser';
+import { isContainerKind } from '@dispatch-foo/core/browser';
 import {
   Box,
   ChevronRight,
@@ -31,7 +31,7 @@ import {
   readCollapsedGroups,
   toggleCollapsedGroup,
   writeCollapsedGroups,
-} from '../lib/collapsedEpics';
+} from '../lib/collapsedMilestones';
 import {
   buildProjectTree,
   type ContainerHealth,
@@ -302,13 +302,13 @@ const ProjectTreeRow = memo(function ProjectTreeRow({
   if (doc === undefined) return null;
   const { meta } = doc;
   const container = isContainerKind(meta.kind);
-  const Icon = KIND_ICON[canonicalKind(meta.kind)] ?? CircleDot;
+  const Icon = KIND_ICON[meta.kind] ?? CircleDot;
   const rollup = tree.rollups.get(row.id);
   return (
     <ListRow
       domId={rowDomId(row.key)}
       data-row-key={row.key}
-      data-kind={canonicalKind(meta.kind)}
+      data-kind={meta.kind}
       aria-level={row.depth + 1}
       aria-expanded={row.expandable ? row.expanded : undefined}
       tabIndex={-1}

@@ -133,11 +133,11 @@ export interface OverseerToolContext {
   ownerRef: string;
   /**
    * Starts a milestone's agents wave by wave, as Send agents does. Absent where
-   * no epic engine is wired; create_plan then only files the work.
+   * no milestone engine is wired; create_plan then only files the work.
    */
-  epics?: {
+  milestones?: {
     start(
-      epicId: string,
+      milestoneId: string,
       opts: { operator?: string; startedBy?: string }
     ): Promise<unknown>;
   };
@@ -492,11 +492,11 @@ const openQuestionsTool: OverseerStatusTool<
 };
 
 const ledgerInput = z.object({
-  epicId: z
+  milestoneId: z
     .string()
     .optional()
     .describe(
-      "An epic id (e-…) to scope to that epic's entries. Omit for every entry in the project."
+      "A milestone id (e-…) to scope to that milestone's entries. Omit for every entry in the project."
     ),
   limit: z
     .number()
@@ -524,7 +524,11 @@ const ledgerTool: OverseerStatusTool<z.infer<typeof ledgerInput>> = {
   inputSchema: ledgerInput,
   read(ctx, input) {
     const entries = ctx.ledgerStore
-      .list(input.epicId === undefined ? {} : { epicId: input.epicId })
+      .list(
+        input.milestoneId === undefined
+          ? {}
+          : { milestoneId: input.milestoneId }
+      )
       .filter((e) => classifyLedgerEntry(e).to === 'audit');
     const limited =
       input.limit === undefined ? entries : entries.slice(0, input.limit);
@@ -932,7 +936,7 @@ const dispatchTask: OverseerMutatingTool<z.infer<typeof dispatchInput>> = {
     // `actor` is deliberately omitted here: the orchestrator's default credits
     // the daemon's human, and a human confirming the action is precisely who
     // caused it. The explicit 'none' actor is for callers with no human behind
-    // them at all (EpicEngine's auto-fill), which the overseer never is.
+    // them at all (MilestoneEngine's auto-fill), which the overseer never is.
     // The run, fresh or resumed, acts for whoever confirmed it.
     // dispatchOrResume, not dispatch: a task whose last run a daemon restart
     // left recoverable is picked back up rather than started over. `executor`
@@ -1453,7 +1457,7 @@ const createPlan: OverseerMutatingTool<z.infer<typeof createPlanInput>> = {
     // The approved card promised agents; start them the way Send agents does,
     // acting for the human who approved it.
     if (milestone !== null && sendsAgents(ctx, input)) {
-      await ctx.epics?.start(milestone.meta.id, {
+      await ctx.milestones?.start(milestone.meta.id, {
         operator: ctx.ownerRef,
         startedBy: ctx.ownerRef,
       });
@@ -1470,7 +1474,7 @@ function sendsAgents(
   return (
     input.milestone !== undefined &&
     input.send !== false &&
-    ctx.epics !== undefined
+    ctx.milestones !== undefined
   );
 }
 

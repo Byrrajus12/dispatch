@@ -256,7 +256,7 @@ export interface RunMeta {
   pushedToOrigin?: boolean;
   // Present on finished runs that are unreviewed or merged: 'origin' when
   // Land pushes to the remote's base (the project has a remote), 'local' when
-  // it merges into the local base only (no remote, or an epic branch).
+  // it merges into the local base only (no remote, or a milestone branch).
   landsOn?: 'origin' | 'local';
   // Present on merged runs that reached origin, when the repo has `v*` tags:
   // the newest tag and whether it contains this run's merge commit.
@@ -281,14 +281,14 @@ export interface RunMeta {
 // 'active' = a live run is writing here (read-only); 'reviewable' = a terminal
 // run nobody reviewed, so nothing cleaned it up; 'leftover' = a reviewed run
 // whose ref somehow survived (a silently-failed cleanup); 'orphan' = no run
-// claims this ref at all; 'epic' = an epic's integration branch (`epic/<id>`),
-// owned by the epic rather than any single run.
+// claims this ref at all; 'milestone' = a milestone's integration branch (`milestone/<id>`),
+// owned by the milestone rather than any single run.
 export type BranchEntryStatus =
   | 'active'
   | 'reviewable'
   | 'leftover'
   | 'orphan'
-  | 'epic';
+  | 'milestone';
 
 // Mirrors BranchEntry in packages/server/src/orchestrator/types.ts — one row
 // of the Branches surface, joining what git knows about a `dispatch/*` ref
@@ -322,7 +322,7 @@ export interface BranchEntry {
   ahead: number;
   /** Commits the base gained since this branch diverged — how far the branch
    * has fallen behind. Absent on merged branches, where the count no longer
-   * means anything. For 'epic' entries it is the drift signal: dispatch never
+   * means anything. For 'milestone' entries it is the drift signal: dispatch never
    * updates an integration branch on its own, a human should. */
   behindBase?: number;
   mergedIntoBase: boolean;
@@ -815,7 +815,7 @@ export interface MemoryEntryView {
   title: string;
   body: string;
   refs: Ref[];
-  epic: string | null;
+  milestone: string | null;
   appliesTo: string[];
   projectKey: string | null;
   author: string;
@@ -962,7 +962,7 @@ export interface MemoryProposalView {
     title: string;
     body: string;
     refs: Ref[];
-    epic: string | null;
+    milestone: string | null;
     appliesTo: string[];
   } | null;
   reason: string | null;
@@ -1264,18 +1264,18 @@ export type ServerEvent =
       reason: FixLoopStop;
       message?: string;
     }
-  // An epic's dispatch session changed: started, paused, resumed, stopped,
+  // A milestone's dispatch session changed: started, paused, resumed, stopped,
   // completed, or a fill dispatched a batch. Same "go refetch, no payload
   // beyond the id" contract as `plan.changed`. Mirrors
   // packages/server/src/events.ts.
-  | { type: 'epic.changed'; epicId: string }
-  // An epic's session paused on its own (a ceiling or a fill that kept
+  | { type: 'milestone.changed'; milestoneId: string }
+  // A milestone's session paused on its own (a ceiling or a fill that kept
   // failing — never a human's pause). Carries the spend numbers like
   // `fixloop.capped` so a client can toast the reason without a fetch.
   | {
-      type: 'epic.paused';
-      epicId: string;
-      reason: EpicPauseReason;
+      type: 'milestone.paused';
+      milestoneId: string;
+      reason: MilestonePauseReason;
       settledUsd: number;
       estimatedLiveUsd: number;
       maxSpendUsd: number | null;
@@ -1503,7 +1503,7 @@ export interface PlannedTask {
 
 // Mirrors PlanProposal in packages/server/src/orchestrator/planner.ts.
 export interface PlanProposal {
-  epic?: { title: string; description: string };
+  milestone?: { title: string; description: string };
   tasks: PlannedTask[];
 }
 
@@ -1583,9 +1583,9 @@ export interface PlanRecord {
   createdAt: string;
   updatedAt: string;
   confirmedAt?: string;
-  /** The epic `confirmPlan` minted for this plan, when the proposal carried
+  /** The milestone `confirmPlan` minted for this plan, when the proposal carried
    * one, so a row can link straight to its milestone. Absent on a flat plan. */
-  epicId?: string;
+  milestoneId?: string;
   /** Set when the plan was started from a note via `enrichNote` — the note
    * whose one-liner the planner was asked to expand into a task. Confirming
    * such a plan links that note to the task it creates. */
@@ -1597,7 +1597,7 @@ export interface PlanRecord {
 
 // The body of `POST /api/plan/:id/confirm`.
 export interface ConfirmResult {
-  epicId?: string;
+  milestoneId?: string;
   taskIds: string[];
 }
 
@@ -1611,7 +1611,7 @@ export interface PlanSummary {
   createdAt: string;
   updatedAt: string;
   confirmedAt?: string;
-  epicId?: string;
+  milestoneId?: string;
 }
 
 // Mirrors DraftRecord in packages/server/src/orchestrator/plan.ts — the body
@@ -1870,20 +1870,24 @@ export interface ExecutorsResponse {
   default: string;
 }
 
-// Mirrors EpicSessionState / EpicPauseReason in
-// packages/server/src/orchestrator/epic.ts.
-export type EpicSessionState = 'active' | 'paused' | 'stopped' | 'complete';
-export type EpicPauseReason = 'human' | 'budget' | 'runs' | 'fill-failed';
+// Mirrors MilestoneSessionState / MilestonePauseReason in
+// packages/server/src/orchestrator/milestone.ts.
+export type MilestoneSessionState =
+  | 'active'
+  | 'paused'
+  | 'stopped'
+  | 'complete';
+export type MilestonePauseReason = 'human' | 'budget' | 'runs' | 'fill-failed';
 
-// Mirrors EpicSession in packages/server/src/orchestrator/epic.ts — the body
-// of `POST /api/epics/:id/dispatch`, `/pause`, `/resume` and `/stop`.
-export interface EpicSession {
-  epicId: string;
+// Mirrors MilestoneSession in packages/server/src/orchestrator/milestone.ts — the body
+// of `POST /api/milestones/:id/dispatch`, `/pause`, `/resume` and `/stop`.
+export interface MilestoneSession {
+  milestoneId: string;
   concurrency: number;
   executor: string;
-  state: EpicSessionState;
+  state: MilestoneSessionState;
   /** Set while paused, cleared on resume. */
-  pausedReason?: EpicPauseReason;
+  pausedReason?: MilestonePauseReason;
   /** The message behind a `fill-failed` pause. */
   pausedDetail?: string;
   /** `null` = no spend ceiling. */
@@ -1903,13 +1907,13 @@ export interface EpicSession {
   /** The human its auto-fill runs act for; absent when the shared agentToken
    *  started it. */
   operator?: string;
-  /** `state === 'active'` — kept for `formatEpicProgress` and `--watch`. */
+  /** `state === 'active'` — kept for `formatMilestoneProgress` and `--watch`. */
   active: boolean;
 }
 
-// Mirrors EpicSpend in packages/server/src/orchestrator/epicPhase.ts: what
+// Mirrors MilestoneSpend in packages/server/src/orchestrator/milestonePhase.ts: what
 // one session has spent and started, against its ceilings.
-export interface EpicSpend {
+export interface MilestoneSpend {
   /** Σ `RunMeta.costUsd` over the session's runs (stamped at finish). */
   settledUsd: number;
   /** Non-terminal session runs, any kind. */
@@ -1922,10 +1926,10 @@ export interface EpicSpend {
   maxRuns: number | null;
 }
 
-// Mirrors EpicChildPhase in packages/server/src/orchestrator/epicPhase.ts:
-// where a child stands inside its epic's fan-out, derived server-side so the
+// Mirrors MilestoneChildPhase in packages/server/src/orchestrator/milestonePhase.ts:
+// where a child stands inside its milestone's fan-out, derived server-side so the
 // CLI and desktop agree.
-export type EpicChildPhase =
+export type MilestoneChildPhase =
   | 'draft'
   | 'waiting'
   | 'queued'
@@ -1941,13 +1945,13 @@ export type EpicChildPhase =
   | 'landed'
   | 'dropped';
 
-// Mirrors EpicProgressChild in packages/server/src/orchestrator/epicPhase.ts.
-export interface EpicProgressChild {
+// Mirrors MilestoneProgressChild in packages/server/src/orchestrator/milestonePhase.ts.
+export interface MilestoneProgressChild {
   id: string;
   title: string;
   status: string;
-  phase: EpicChildPhase;
-  /** Depth along `blockedBy` edges inside the epic, 1-based. */
+  phase: MilestoneChildPhase;
+  /** Depth along `blockedBy` edges inside the milestone, 1-based. */
   wave: number;
   reason?: string;
   /** The live run, else the latest one. */
@@ -1957,32 +1961,32 @@ export interface EpicProgressChild {
   openFindings: number;
 }
 
-// Mirrors EpicWave in packages/server/src/orchestrator/epicPhase.ts.
-export interface EpicWave {
+// Mirrors MilestoneWave in packages/server/src/orchestrator/milestonePhase.ts.
+export interface MilestoneWave {
   index: number;
   total: number;
-  byPhase: Partial<Record<EpicChildPhase, number>>;
+  byPhase: Partial<Record<MilestoneChildPhase, number>>;
 }
 
-// Mirrors EpicProgress in packages/server/src/orchestrator/epic.ts — the
-// body of `GET /api/epics/:id/progress` (and one row of `GET
-// /api/epics/progress`).
-export interface EpicProgress {
-  epicId: string;
+// Mirrors MilestoneProgress in packages/server/src/orchestrator/milestone.ts — the
+// body of `GET /api/milestones/:id/progress` (and one row of `GET
+// /api/milestones/progress`).
+export interface MilestoneProgress {
+  milestoneId: string;
   active: boolean;
   concurrency?: number;
-  /** `null` until the epic's first `startEpic`. */
-  session: EpicSession | null;
+  /** `null` until the milestone's first `startMilestone`. */
+  session: MilestoneSession | null;
   /** For the session's runs, or for every child run when there is none. */
-  spend: EpicSpend;
-  children: EpicProgressChild[];
-  waves: EpicWave[];
+  spend: MilestoneSpend;
+  children: MilestoneProgressChild[];
+  waves: MilestoneWave[];
   liveRuns: RunMeta[];
 }
 
-/** The optional body `startEpic` and `resumeEpic` take. `null` lifts a
+/** The optional body `startMilestone` and `resumeMilestone` take. `null` lifts a
  * ceiling; the server ranges every value and 400s out of range. */
-export interface EpicSessionOptions {
+export interface MilestoneSessionOptions {
   concurrency?: number;
   executor?: string;
   maxSpendUsd?: number | null;
@@ -1990,15 +1994,15 @@ export interface EpicSessionOptions {
 }
 
 /**
- * The body of `POST /api/epics/:id/land`. `pr`: a landing PR was opened and
- * the server's poller will flip the epic to done once GitHub reports it
- * merged. `merge`: the epic landed locally right now — `mergeCommit` is the
+ * The body of `POST /api/milestones/:id/land`. `pr`: a landing PR was opened and
+ * the server's poller will flip the milestone to done once GitHub reports it
+ * merged. `merge`: the milestone landed locally right now — `mergeCommit` is the
  * merge commit's sha, absent only when the branch carried no commits and
- * landing just closed the epic out. Not exported until a consumer needs it
+ * landing just closed the milestone out. Not exported until a consumer needs it
  * by name (knip gates unused exports at zero); reach it via
- * `Awaited<ReturnType<ApiClient['landEpic']>>` meanwhile.
+ * `Awaited<ReturnType<ApiClient['landMilestone']>>` meanwhile.
  */
-type EpicLandResult =
+type MilestoneLandResult =
   | { mode: 'pr'; prUrl: string }
   | { mode: 'merge'; mergeCommit?: string };
 
@@ -2145,11 +2149,11 @@ export interface InboxTriage {
   /** The judged kind; `noise` means it is not about the project at all. */
   kind: InboxKind | 'noise';
   kindConfidence: number;
-  /** The open epic this belongs to, or null when none won with confidence. */
-  epicId: string | null;
-  /** That epic's title at triage time, so a row can name it without a lookup. */
-  epicTitle: string | null;
-  epicConfidence: number;
+  /** The open milestone this belongs to, or null when none won with confidence. */
+  milestoneId: string | null;
+  /** That milestone's title at triage time, so a row can name it without a lookup. */
+  milestoneTitle: string | null;
+  milestoneConfidence: number;
   /** Tasks or other captures this looks like a duplicate of, strongest first. */
   duplicates: { id: string; probability: number }[];
 }
@@ -3945,28 +3949,31 @@ export interface ApiClient {
     conversationId: string,
     key: string
   ): Promise<{ revoked: boolean }>;
-  // Phase 5 P2: epic-level concurrent dispatch. `concurrency` defaults
-  // server-side to the project's `orchestrator.epicConcurrency` config;
+  // Phase 5 P2: milestone-level concurrent dispatch. `concurrency` defaults
+  // server-side to the project's `orchestrator.milestoneConcurrency` config;
   // `maxSpendUsd`/`maxRuns` are ceilings that pause the session when reached.
-  startEpic(epicId: string, opts?: EpicSessionOptions): Promise<EpicSession>;
+  startMilestone(
+    milestoneId: string,
+    opts?: MilestoneSessionOptions
+  ): Promise<MilestoneSession>;
   /** Halts new dispatches; live runs continue. 409 unless the session is active. */
-  pauseEpic(epicId: string): Promise<EpicSession>;
+  pauseMilestone(milestoneId: string): Promise<MilestoneSession>;
   /** Fills again, optionally with new ceilings or concurrency. 409 unless paused. */
-  resumeEpic(
-    epicId: string,
-    opts?: Omit<EpicSessionOptions, 'executor'>
-  ): Promise<EpicSession>;
-  stopEpic(epicId: string): Promise<EpicSession>;
-  fetchEpicProgress(epicId: string): Promise<EpicProgress>;
-  /** Progress for every non-archived epic, `session: null` where never started. */
-  fetchAllEpicProgress(): Promise<EpicProgress[]>;
-  // Lands a finished epic branch on the default base — one PR (when the
+  resumeMilestone(
+    milestoneId: string,
+    opts?: Omit<MilestoneSessionOptions, 'executor'>
+  ): Promise<MilestoneSession>;
+  stopMilestone(milestoneId: string): Promise<MilestoneSession>;
+  fetchMilestoneProgress(milestoneId: string): Promise<MilestoneProgress>;
+  /** Progress for every non-archived milestone, `session: null` where never started. */
+  fetchAllMilestoneProgress(): Promise<MilestoneProgress[]>;
+  // Lands a finished milestone branch on the default base — one PR (when the
   // project has the `pr` capability) or one local merge. 409s with the
-  // server's reason when the epic is only partially done.
-  landEpic(epicId: string): Promise<EpicLandResult>;
-  /** The epic branch's diff against the default base, in `fetchRunDiff`'s shape —
+  // server's reason when the milestone is only partially done.
+  landMilestone(milestoneId: string): Promise<MilestoneLandResult>;
+  /** The milestone branch's diff against the default base, in `fetchRunDiff`'s shape —
    * served from the land-time snapshot once the branch is gone. */
-  fetchEpicDiff(epicId: string): Promise<DiffResult>;
+  fetchMilestoneDiff(milestoneId: string): Promise<DiffResult>;
   // The merge queue: serialized rebase -> verify -> merge over
   // reviewed-and-approved runs. `enqueueMergeQueue` 404/409s the same way
   // the server's MergeQueue.enqueue does (unknown run, non-terminal, already
@@ -4042,10 +4049,10 @@ export interface ApiClient {
     findingId: string,
     input: AdjudicateFindingInput
   ): Promise<AdjudicateFindingResult>;
-  // `epicId: null` asks for project-wide entries only; omit it for every entry.
+  // `milestoneId: null` asks for project-wide entries only; omit it for every entry.
   // `class: 'audit'` keeps only receipts; the lessons live in memory.
   fetchLedger(filter?: {
-    epicId?: string | null;
+    milestoneId?: string | null;
     class?: 'audit';
   }): Promise<LedgerEntry[]>;
   /** Every message on a subject. `subject` is `run:…`, `worktree:…` or `pr:…`. */
@@ -4170,7 +4177,7 @@ export interface ApiClient {
       title: string;
       body: string;
       refs?: Ref[];
-      epic?: string | null;
+      milestone?: string | null;
       appliesTo?: string[];
       supersedes?: string;
       projectOnly?: boolean;
@@ -4926,26 +4933,34 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
         `/api/overseer/${conversationId}/grants/${encodeURIComponent(key)}`,
         { method: 'DELETE' }
       ),
-    startEpic: (epicId, opts = {}) =>
-      request(target, `/api/epics/${epicId}/dispatch`, {
+    startMilestone: (milestoneId, opts = {}) =>
+      request(target, `/api/milestones/${milestoneId}/dispatch`, {
         method: 'POST',
         ...jsonBody(opts),
       }),
-    pauseEpic: (epicId) =>
-      request(target, `/api/epics/${epicId}/pause`, { method: 'POST' }),
-    resumeEpic: (epicId, opts = {}) =>
-      request(target, `/api/epics/${epicId}/resume`, {
+    pauseMilestone: (milestoneId) =>
+      request(target, `/api/milestones/${milestoneId}/pause`, {
+        method: 'POST',
+      }),
+    resumeMilestone: (milestoneId, opts = {}) =>
+      request(target, `/api/milestones/${milestoneId}/resume`, {
         method: 'POST',
         ...jsonBody(opts),
       }),
-    stopEpic: (epicId) =>
-      request(target, `/api/epics/${epicId}/stop`, { method: 'POST' }),
-    fetchEpicProgress: (epicId) =>
-      request(target, `/api/epics/${epicId}/progress`),
-    fetchAllEpicProgress: () => request(target, '/api/epics/progress'),
-    landEpic: (epicId) =>
-      request(target, `/api/epics/${epicId}/land`, { method: 'POST' }),
-    fetchEpicDiff: (epicId) => request(target, `/api/epics/${epicId}/diff`),
+    stopMilestone: (milestoneId) =>
+      request(target, `/api/milestones/${milestoneId}/stop`, {
+        method: 'POST',
+      }),
+    fetchMilestoneProgress: (milestoneId) =>
+      request(target, `/api/milestones/${milestoneId}/progress`),
+    fetchAllMilestoneProgress: () =>
+      request(target, '/api/milestones/progress'),
+    landMilestone: (milestoneId) =>
+      request(target, `/api/milestones/${milestoneId}/land`, {
+        method: 'POST',
+      }),
+    fetchMilestoneDiff: (milestoneId) =>
+      request(target, `/api/milestones/${milestoneId}/diff`),
     fetchMergeQueue: () => request(target, '/api/merge-queue'),
     getLanding: () => request(target, '/api/landing'),
     createPrWorktree: (number, opts = {}) =>
@@ -5045,8 +5060,8 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
       ),
     fetchLedger: (filter = {}) => {
       const params = new URLSearchParams();
-      if (filter.epicId !== undefined) {
-        params.set('epicId', filter.epicId ?? '');
+      if (filter.milestoneId !== undefined) {
+        params.set('milestoneId', filter.milestoneId ?? '');
       }
       if (filter.class !== undefined) params.set('class', filter.class);
       const query = params.size > 0 ? `?${params.toString()}` : '';

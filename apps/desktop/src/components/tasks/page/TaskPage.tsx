@@ -181,7 +181,6 @@ const PICKER_FOR_KEY: Partial<Record<ListKeyCommand, RailPicker>> = {
   'list-set-priority': 'priority',
   'list-set-assignee': 'assignee',
   'list-set-labels': 'labels',
-  'list-set-epic': 'parent',
   'list-set-milestone': 'parent',
 };
 

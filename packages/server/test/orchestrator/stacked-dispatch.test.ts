@@ -401,7 +401,7 @@ describe('base selection with two or more unmerged blockers', () => {
   // NEITHER blocker's work, and a run with no recorded stackParents is
   // afterwards invisible to the merge queue: never restacked, never flagged.
   // The refusal is an OrchestratorConflictError specifically so that
-  // EpicEngine.fillQueue's existing `continue` skips the task and retries it
+  // MilestoneEngine.fillQueue's existing `continue` skips the task and retries it
   // on the next pass, and a manual dispatch 409s with a readable reason.
   it('refuses to dispatch when jj is unavailable, so the task waits, and says so on the task', async () => {
     const f = fakeJj({
@@ -545,7 +545,7 @@ describe('base selection with two or more unmerged blockers', () => {
   // The Activity write in that failure path is itself a task-file write, and
   // it can fail too (an unwritable file). Reporting a problem must not replace
   // the real, actionable reason with an opaque filesystem error — same
-  // swallow-and-log rule EpicEngine.recordFillFailure applies.
+  // swallow-and-log rule MilestoneEngine.recordFillFailure applies.
   it('still refuses with the real reason when recording it on the task fails', async () => {
     const f = fakeJj({
       'jj --version': { ok: false, stdout: '', stderr: 'command not found' },

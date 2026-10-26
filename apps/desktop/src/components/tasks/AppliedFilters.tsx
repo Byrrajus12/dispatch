@@ -23,7 +23,7 @@ import {
 export interface AppliedFiltersProps {
   filters: TaskFilterSet;
   onChange: (filters: TaskFilterSet) => void;
-  /** Epic titles for the chip labels. */
+  /** Milestone titles for the chip labels. */
   context?: FilterContext;
   className?: string;
 }

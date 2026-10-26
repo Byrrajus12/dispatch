@@ -6,8 +6,8 @@ import { join } from 'node:path';
 
 import { TaskCache } from '../../src/cache.js';
 import { EventBus } from '../../src/events.js';
-import { EpicEngine } from '../../src/orchestrator/epic.js';
 import { FakeExecutor } from '../../src/orchestrator/executors/fake.js';
+import { MilestoneEngine } from '../../src/orchestrator/milestone.js';
 import { Orchestrator } from '../../src/orchestrator/orchestrator.js';
 import {
   OrchestratorClientError,
@@ -19,13 +19,13 @@ import { initGitRepo, WatchedTaskStore, withBrokenRepo } from './helpers.js';
 let fakeHome: string;
 let repo: string;
 // Shut down in afterEach: an engine's retry timers outlive its test otherwise.
-const engines: EpicEngine[] = [];
+const engines: MilestoneEngine[] = [];
 const originalDispatchHome = process.env.DISPATCH_HOME;
 
 beforeEach(() => {
   fakeHome = mkdtempSync(join(tmpdir(), 'dispatch-home-'));
   process.env.DISPATCH_HOME = fakeHome;
-  repo = initGitRepo('dispatch-epic-');
+  repo = initGitRepo('dispatch-milestone-');
 });
 
 afterEach(() => {
@@ -51,7 +51,7 @@ function sleep(ms: number): Promise<void> {
 
 interface Harness {
   orchestrator: Orchestrator;
-  epics: EpicEngine;
+  milestones: MilestoneEngine;
   store: TaskStore;
   cache: TaskCache;
   events: EventBus;
@@ -62,7 +62,7 @@ interface Harness {
 // immediately and stays there until the test calls orchestrator.approve(),
 // which is exactly the timing control the concurrency tests below need: the
 // number of runs sitting in `awaiting-approval` at any moment IS the number
-// of live slots the epic engine currently has open.
+// of live slots the milestone engine currently has open.
 function makeHarness(): Harness {
   const store = TaskStore.init(repo);
   const cache = new TaskCache();
@@ -81,33 +81,36 @@ function makeHarness(): Harness {
       finish: { state: 'finished', costUsd: 0, turns: 1 },
     })
   );
-  const epics = new EpicEngine({
+  const milestones = new MilestoneEngine({
     rootDir: repo,
     store,
     cache,
     events,
     orchestrator,
   });
-  engines.push(epics);
+  engines.push(milestones);
   // The test's own writes, seen the way a hand edit is: through a refresh.
   const watched = new WatchedTaskStore(repo, cache);
-  return { orchestrator, epics, store: watched, cache, events };
+  return { orchestrator, milestones, store: watched, cache, events };
 }
 
 // Each child gets a distinct `writes` entry — an empty write-set conflicts
 // with everything, which would otherwise serialize these generic tests.
-function createEpicWithChildren(
+function createMilestoneWithChildren(
   store: TaskStore,
   count: number,
   blockedBy: (i: number, ids: string[]) => string[] = () => []
-): { epicId: string; childIds: string[] } {
-  const epic = store.create({ title: 'Test epic', kind: 'epic' });
+): { milestoneId: string; childIds: string[] } {
+  const milestone = store.create({
+    title: 'Test milestone',
+    kind: 'milestone',
+  });
   const childIds: string[] = [];
   for (let i = 0; i < count; i++) {
     const doc = store.create({
       title: `Child ${i}`,
       kind: 'task',
-      parent: epic.meta.id,
+      parent: milestone.meta.id,
       writes: [`child-${i}.ts`],
     });
     childIds.push(doc.meta.id);
@@ -116,17 +119,17 @@ function createEpicWithChildren(
     const deps = blockedBy(i, childIds);
     if (deps.length > 0) store.update(id, { blockedBy: deps });
   });
-  return { epicId: epic.meta.id, childIds };
+  return { milestoneId: milestone.meta.id, childIds };
 }
 
 // 2026-09-08: every run in a 35-run fleet executed on the CLI's default model
 // instead of the project's configured `models.execute`, because only the HTTP
-// dispatch route resolved that fallback — the epic engine's auto-fill (and the
+// dispatch route resolved that fallback — the milestone engine's auto-fill (and the
 // overseer's dispatch tool) passed no `defaults` at all. It surfaced as a whole
-// epic dying on one model's usage limit while the config named another.
+// milestone dying on one model's usage limit while the config named another.
 describe('dispatch model default', () => {
-  it('records the project-configured models.execute on an epic auto-fill', async () => {
-    const { epics, store, orchestrator } = makeHarness();
+  it('records the project-configured models.execute on a milestone auto-fill', async () => {
+    const { milestones, store, orchestrator } = makeHarness();
     orchestrator.registerExecutor(
       'claude',
       new FakeExecutor({
@@ -139,63 +142,63 @@ describe('dispatch model default', () => {
       join(repo, '.dispatch', 'config.yml'),
       'models:\n  execute: claude-sonnet-5\n'
     );
-    const { epicId } = createEpicWithChildren(store, 1);
+    const { milestoneId } = createMilestoneWithChildren(store, 1);
 
-    await epics.start(epicId, { executor: 'claude', concurrency: 1 });
+    await milestones.start(milestoneId, { executor: 'claude', concurrency: 1 });
     await waitFor(() => orchestrator.list().length > 0);
 
     expect(orchestrator.list()[0]?.model).toBe('claude-sonnet-5');
   });
 });
 
-describe('EpicEngine.start', () => {
-  it('404s starting an unknown epic', async () => {
-    const { epics } = makeHarness();
-    await expect(epics.start('e-000000')).rejects.toThrow(
+describe('MilestoneEngine.start', () => {
+  it('404s starting an unknown milestone', async () => {
+    const { milestones } = makeHarness();
+    await expect(milestones.start('e-000000')).rejects.toThrow(
       OrchestratorNotFoundError
     );
   });
 
-  it('400s starting a task id that is not an epic', async () => {
-    const { epics, store } = makeHarness();
-    const task = store.create({ title: 'Not an epic', kind: 'task' });
-    await expect(epics.start(task.meta.id)).rejects.toThrow(
+  it('400s starting a task id that is not a milestone', async () => {
+    const { milestones, store } = makeHarness();
+    const task = store.create({ title: 'Not a milestone', kind: 'task' });
+    await expect(milestones.start(task.meta.id)).rejects.toThrow(
       OrchestratorClientError
     );
   });
 
   it('400s an invalid explicit concurrency', async () => {
-    const { epics, store } = makeHarness();
-    const epic = store.create({ title: 'Epic', kind: 'epic' });
-    await expect(epics.start(epic.meta.id, { concurrency: 0 })).rejects.toThrow(
-      OrchestratorClientError
-    );
+    const { milestones, store } = makeHarness();
+    const milestone = store.create({ title: 'Milestone', kind: 'milestone' });
+    await expect(
+      milestones.start(milestone.meta.id, { concurrency: 0 })
+    ).rejects.toThrow(OrchestratorClientError);
   });
 
   // The ceiling is `orchestrator.maxConcurrency` (default 16), read off
   // config at start() — the error names it so a dialog can say why.
   it('400s a concurrency above the configured maxConcurrency, naming the cap', async () => {
-    const { epics, store } = makeHarness();
-    const epic = store.create({ title: 'Epic', kind: 'epic' });
+    const { milestones, store } = makeHarness();
+    const milestone = store.create({ title: 'Milestone', kind: 'milestone' });
     await expect(
-      epics.start(epic.meta.id, { executor: 'fake', concurrency: 33 })
+      milestones.start(milestone.meta.id, { executor: 'fake', concurrency: 33 })
     ).rejects.toThrow(/between 1 and 16/);
-    expect(epics.progress(epic.meta.id).session).toBeNull();
+    expect(milestones.progress(milestone.meta.id).session).toBeNull();
   });
 
-  it('409s starting an epic that already has an active or paused session', async () => {
-    const { epics, store } = makeHarness();
-    const epic = store.create({ title: 'Epic', kind: 'epic' });
-    await epics.start(epic.meta.id, { executor: 'fake' });
+  it('409s starting a milestone that already has an active or paused session', async () => {
+    const { milestones, store } = makeHarness();
+    const milestone = store.create({ title: 'Milestone', kind: 'milestone' });
+    await milestones.start(milestone.meta.id, { executor: 'fake' });
     await expect(
-      epics.start(epic.meta.id, { executor: 'fake' })
+      milestones.start(milestone.meta.id, { executor: 'fake' })
     ).rejects.toThrow(/already has an active dispatch session/);
-    epics.pause(epic.meta.id);
+    milestones.pause(milestone.meta.id);
     await expect(
-      epics.start(epic.meta.id, { executor: 'fake' })
+      milestones.start(milestone.meta.id, { executor: 'fake' })
     ).rejects.toThrow(OrchestratorConflictError);
     await expect(
-      epics.start(epic.meta.id, { executor: 'fake' })
+      milestones.start(milestone.meta.id, { executor: 'fake' })
     ).rejects.toThrow(/\(paused\) — resume or stop it first/);
   });
 
@@ -203,14 +206,16 @@ describe('EpicEngine.start', () => {
   // and, critically, must NOT leave a half-created session wedged in place
   // that would 409 a subsequent, correctly-specified retry.
   it('400s a bogus executor without wedging the session for a later valid retry', async () => {
-    const { epics, store } = makeHarness();
-    const epic = store.create({ title: 'Epic', kind: 'epic' });
+    const { milestones, store } = makeHarness();
+    const milestone = store.create({ title: 'Milestone', kind: 'milestone' });
     await expect(
-      epics.start(epic.meta.id, { executor: 'not-a-real-executor' })
+      milestones.start(milestone.meta.id, { executor: 'not-a-real-executor' })
     ).rejects.toThrow(OrchestratorClientError);
 
     // No wedge: retrying with a real executor must succeed, not 409.
-    const session = await epics.start(epic.meta.id, { executor: 'fake' });
+    const session = await milestones.start(milestone.meta.id, {
+      executor: 'fake',
+    });
     expect(session.active).toBe(true);
   });
 
@@ -222,22 +227,30 @@ describe('EpicEngine.start', () => {
   // Error out of WorktreeManager, uncaught by fillQueue's own (narrower)
   // OrchestratorConflictError catch.
   it('rolls back the session when the initial fillQueue throws, so a retry can succeed', async () => {
-    const { epics, store } = makeHarness();
-    const { epicId } = createEpicWithChildren(store, 1);
+    const { milestones, store } = makeHarness();
+    const { milestoneId } = createMilestoneWithChildren(store, 1);
     await withBrokenRepo(repo, async () => {
-      await expect(epics.start(epicId, { executor: 'fake' })).rejects.toThrow();
+      await expect(
+        milestones.start(milestoneId, { executor: 'fake' })
+      ).rejects.toThrow();
     });
 
-    const session = await epics.start(epicId, { executor: 'fake' });
+    const session = await milestones.start(milestoneId, { executor: 'fake' });
     expect(session.active).toBe(true);
   });
 
   it('dispatches up to the concurrency cap and never exceeds it across 5 ready children with limit 2', async () => {
     const harness = makeHarness();
-    const { epicId, childIds } = createEpicWithChildren(harness.store, 5);
+    const { milestoneId, childIds } = createMilestoneWithChildren(
+      harness.store,
+      5
+    );
     const childSet = new Set(childIds);
 
-    await harness.epics.start(epicId, { concurrency: 2, executor: 'fake' });
+    await harness.milestones.start(milestoneId, {
+      concurrency: 2,
+      executor: 'fake',
+    });
 
     await waitFor(
       () =>
@@ -249,7 +262,7 @@ describe('EpicEngine.start', () => {
     );
 
     // Sample repeatedly while approving runs one at a time — at no point
-    // should more than 2 of this epic's children have a live (non-terminal)
+    // should more than 2 of this milestone's children have a live (non-terminal)
     // run at once.
     let maxObserved = 0;
     let finished = 0;
@@ -287,15 +300,21 @@ describe('EpicEngine.start', () => {
   });
 
   // The autonomy ladder caps critical-risk work at rung 1 (a publish, a
-  // release): the epic's own auto-fill is an auto-decision, so such a child
+  // release): the milestone's own auto-fill is an auto-decision, so such a child
   // waits for a human to dispatch it by hand, and the hold is noted once.
-  it('holds a critical-risk child for explicit human dispatch, noted once on the epic', async () => {
+  it('holds a critical-risk child for explicit human dispatch, noted once on the milestone', async () => {
     const harness = makeHarness();
-    const { epicId, childIds } = createEpicWithChildren(harness.store, 2);
+    const { milestoneId, childIds } = createMilestoneWithChildren(
+      harness.store,
+      2
+    );
     harness.store.update(childIds[1], { risk: 'critical' });
     harness.cache.rebuild(harness.store);
 
-    await harness.epics.start(epicId, { concurrency: 2, executor: 'fake' });
+    await harness.milestones.start(milestoneId, {
+      concurrency: 2,
+      executor: 'fake',
+    });
     await waitFor(
       () =>
         harness.orchestrator.list().filter((r) => r.taskId === childIds[0])
@@ -318,7 +337,7 @@ describe('EpicEngine.start', () => {
     expect(
       harness.orchestrator.list().filter((r) => r.taskId === childIds[1])
     ).toEqual([]);
-    const body = harness.store.get(epicId)?.body ?? '';
+    const body = harness.store.get(milestoneId)?.body ?? '';
     const holdLines = body
       .split('\n')
       .filter((line) => line.includes(`holding ${childIds[1]}`));
@@ -330,14 +349,17 @@ describe('EpicEngine.start', () => {
 
   it('dispatches a newly-unblocked child once its blocker finishes (unblock cascade)', async () => {
     const harness = makeHarness();
-    const { epicId, childIds } = createEpicWithChildren(
+    const { milestoneId, childIds } = createMilestoneWithChildren(
       harness.store,
       2,
       (i, ids) => (i === 1 ? [ids[0]] : [])
     );
     const [blockerId, blockedId] = childIds;
 
-    await harness.epics.start(epicId, { concurrency: 1, executor: 'fake' });
+    await harness.milestones.start(milestoneId, {
+      concurrency: 1,
+      executor: 'fake',
+    });
 
     // Only the blocker is ready at first — the blocked sibling must not be
     // dispatched yet.
@@ -387,21 +409,27 @@ describe('EpicEngine.start', () => {
   // stays in the ready queue for a human or a future session to explicitly
   // pick up again. Uses two independent children under concurrency 2 so the
   // session stays active (child B still live) at the moment child A is
-  // discarded — a single-child epic would otherwise auto-complete (and
+  // discarded — a single-child milestone would otherwise auto-complete (and
   // deactivate) the instant its one run finishes, before discard ever runs,
   // masking whether the *discard-specific* cascade gate actually works.
   it('does not auto-re-dispatch a discarded child while the session is active', async () => {
     const harness = makeHarness();
-    const { epicId, childIds } = createEpicWithChildren(harness.store, 2);
+    const { milestoneId, childIds } = createMilestoneWithChildren(
+      harness.store,
+      2
+    );
     const [aId] = childIds;
 
-    await harness.epics.start(epicId, { concurrency: 2, executor: 'fake' });
+    await harness.milestones.start(milestoneId, {
+      concurrency: 2,
+      executor: 'fake',
+    });
     await waitFor(() => harness.orchestrator.list().length === 2);
     const runA = harness.orchestrator.list().find((r) => r.taskId === aId)!;
     harness.orchestrator.approve(runA.id, 'go', true);
     await waitFor(() => harness.store.get(aId)?.meta.status === 'review');
 
-    expect(harness.epics.progress(epicId).active).toBe(true);
+    expect(harness.milestones.progress(milestoneId).active).toBe(true);
     harness.orchestrator.review(runA.id, 'discard');
 
     // Give the (buggy, pre-fix) synchronous cascade a moment to land before
@@ -423,11 +451,11 @@ describe('EpicEngine.start', () => {
   // doc comment) — which would silently ignore a blocker that genuinely
   // exists elsewhere in the project (just not as a sibling child) and let
   // the dependent dispatch immediately. Readiness must be computed over the
-  // FULL task set and only then intersected with the epic's children — the
+  // FULL task set and only then intersected with the milestone's children — the
   // initial "still todo after start()" assertion below is what actually
   // catches a regression back to computing readiness over `children` only.
   //
-  // No review/merge call happens in this test on purpose: EpicEngine now
+  // No review/merge call happens in this test on purpose: MilestoneEngine now
   // dispatches on dispatchableTasks (isSatisfiedForDispatch), so the outside
   // blocker only needs to reach `in-review` to unblock the child, and the
   // dispatch assertion below fires strictly before any merge could — that's
@@ -436,19 +464,22 @@ describe('EpicEngine.start', () => {
   it('dispatches a child blocked by an outside (non-sibling) task once that task reaches in-review, without a merge', async () => {
     const harness = makeHarness();
     const outside = harness.store.create({ title: 'Outside blocker' });
-    const { epicId, childIds } = createEpicWithChildren(
+    const { milestoneId, childIds } = createMilestoneWithChildren(
       harness.store,
       1,
       () => [outside.meta.id]
     );
     harness.cache.rebuild(harness.store);
 
-    await harness.epics.start(epicId, { concurrency: 1, executor: 'fake' });
+    await harness.milestones.start(milestoneId, {
+      concurrency: 1,
+      executor: 'fake',
+    });
     await sleep(60);
     expect(harness.orchestrator.list()).toHaveLength(0);
     expect(harness.store.get(childIds[0])?.meta.status).toBe('ready');
 
-    // Drive the outside blocker (unrelated to any epic) to a terminal run
+    // Drive the outside blocker (unrelated to any milestone) to a terminal run
     // state -> its task becomes `in-review`. That alone must cascade-dispatch
     // the now-unblocked child.
     const outsideRun = await harness.orchestrator.dispatch(
@@ -477,21 +508,24 @@ describe('EpicEngine.start', () => {
   // The behavioral fix under test: a dependent must dispatch as soon as its
   // blocker's run finishes and the blocker lands at `in-review` — it must
   // NOT wait for a human to merge the blocker all the way to `done`. This
-  // exercises EpicEngine.fillQueue's switch from readyTasks (gates on
+  // exercises MilestoneEngine.fillQueue's switch from readyTasks (gates on
   // isDone) to dispatchableTasks (gates on isSatisfiedForDispatch, which
   // also accepts `in-review`).
   it('dispatches a child whose blocker is only in-review, not yet done', async () => {
     const h = makeHarness();
-    const epic = h.store.create({ title: 'Epic', kind: 'epic' });
-    const blocker = h.store.create({ title: 'A', parent: epic.meta.id });
+    const milestone = h.store.create({ title: 'Milestone', kind: 'milestone' });
+    const blocker = h.store.create({ title: 'A', parent: milestone.meta.id });
     const dependent = h.store.create({
       title: 'B',
-      parent: epic.meta.id,
+      parent: milestone.meta.id,
       blockedBy: [blocker.meta.id],
     });
     h.cache.rebuild(h.store);
 
-    await h.epics.start(epic.meta.id, { concurrency: 2, executor: 'fake' });
+    await h.milestones.start(milestone.meta.id, {
+      concurrency: 2,
+      executor: 'fake',
+    });
 
     // Only the blocker is dispatchable at first.
     await waitFor(() => h.orchestrator.list().length === 1);
@@ -514,16 +548,19 @@ describe('EpicEngine.start', () => {
   // satisfy dispatch-readiness — only in-review/done/cancelled do.
   it('does not dispatch a child whose blocker is still in-progress', async () => {
     const h = makeHarness();
-    const epic = h.store.create({ title: 'Epic', kind: 'epic' });
-    const blocker = h.store.create({ title: 'A', parent: epic.meta.id });
+    const milestone = h.store.create({ title: 'Milestone', kind: 'milestone' });
+    const blocker = h.store.create({ title: 'A', parent: milestone.meta.id });
     const dependent = h.store.create({
       title: 'B',
-      parent: epic.meta.id,
+      parent: milestone.meta.id,
       blockedBy: [blocker.meta.id],
     });
     h.cache.rebuild(h.store);
 
-    await h.epics.start(epic.meta.id, { concurrency: 2, executor: 'fake' });
+    await h.milestones.start(milestone.meta.id, {
+      concurrency: 2,
+      executor: 'fake',
+    });
     await waitFor(() => h.orchestrator.list().length === 1);
     await sleep(50); // give a wrong implementation time to dispatch the dependent
 
@@ -535,13 +572,19 @@ describe('EpicEngine.start', () => {
 
   it('stop halts new dispatches while letting the live run finish', async () => {
     const harness = makeHarness();
-    const { epicId, childIds } = createEpicWithChildren(harness.store, 2);
+    const { milestoneId, childIds } = createMilestoneWithChildren(
+      harness.store,
+      2
+    );
     const [firstId, secondId] = childIds;
 
-    await harness.epics.start(epicId, { concurrency: 1, executor: 'fake' });
+    await harness.milestones.start(milestoneId, {
+      concurrency: 1,
+      executor: 'fake',
+    });
     await waitFor(() => harness.orchestrator.list().length === 1);
 
-    const stopped = harness.epics.stop(epicId);
+    const stopped = harness.milestones.stop(milestoneId);
     expect(stopped.active).toBe(false);
 
     const runningRun = harness.orchestrator.list()[0];
@@ -558,51 +601,65 @@ describe('EpicEngine.start', () => {
     expect(harness.store.get(untouchedId)?.meta.status).toBe('ready');
   });
 
-  it('409s stopping an epic with no active session', () => {
-    const { epics, store } = makeHarness();
-    const epic = store.create({ title: 'Epic', kind: 'epic' });
-    expect(() => epics.stop(epic.meta.id)).toThrow(OrchestratorConflictError);
+  it('409s stopping a milestone with no active session', () => {
+    const { milestones, store } = makeHarness();
+    const milestone = store.create({ title: 'Milestone', kind: 'milestone' });
+    expect(() => milestones.stop(milestone.meta.id)).toThrow(
+      OrchestratorConflictError
+    );
   });
 
   it('records a completion Activity line once every child has left todo/in-progress', async () => {
     const harness = makeHarness();
-    const { epicId, childIds } = createEpicWithChildren(harness.store, 1);
+    const { milestoneId, childIds } = createMilestoneWithChildren(
+      harness.store,
+      1
+    );
 
-    await harness.epics.start(epicId, { concurrency: 1, executor: 'fake' });
+    await harness.milestones.start(milestoneId, {
+      concurrency: 1,
+      executor: 'fake',
+    });
     await waitFor(() => harness.orchestrator.list().length === 1);
     const run = harness.orchestrator.list()[0];
     harness.orchestrator.approve(run.id, 'go', true);
 
     // The run finishing flips its task from in-progress to in-review, which
-    // is enough for the epic engine to consider its dispatch work complete
-    // (no human review action required — see isEpicComplete's doc comment).
+    // is enough for the milestone engine to consider its dispatch work complete
+    // (no human review action required — see isMilestoneComplete's doc comment).
     await waitFor(
       () => harness.store.get(childIds[0])?.meta.status === 'review'
     );
     await waitFor(() => {
-      const body = harness.store.get(epicId)?.body ?? '';
-      return body.includes('epic dispatch session ended');
+      const body = harness.store.get(milestoneId)?.body ?? '';
+      return body.includes('milestone dispatch session ended');
     });
-    const epicDoc = harness.store.get(epicId);
-    expect(epicDoc?.body).toContain('epic dispatch started');
-    expect(epicDoc?.body).toContain('epic dispatch session ended');
-    expect(harness.epics.progress(epicId).active).toBe(false);
+    const milestoneDoc = harness.store.get(milestoneId);
+    expect(milestoneDoc?.body).toContain('milestone dispatch started');
+    expect(milestoneDoc?.body).toContain('milestone dispatch session ended');
+    expect(harness.milestones.progress(milestoneId).active).toBe(false);
   });
 
   it('progress reports the session, its spend, each child with phase and wave, and the live runs', async () => {
     const harness = makeHarness();
-    const { epicId, childIds } = createEpicWithChildren(harness.store, 2);
+    const { milestoneId, childIds } = createMilestoneWithChildren(
+      harness.store,
+      2
+    );
 
-    await harness.epics.start(epicId, { concurrency: 1, executor: 'fake' });
+    await harness.milestones.start(milestoneId, {
+      concurrency: 1,
+      executor: 'fake',
+    });
     await waitFor(() => harness.orchestrator.list().length === 1);
 
-    const progress = harness.epics.progress(epicId);
+    const progress = harness.milestones.progress(milestoneId);
     expect(progress.children).toHaveLength(2);
     expect(progress.liveRuns).toHaveLength(1);
     expect(progress.active).toBe(true);
     expect(progress.concurrency).toBe(1);
     expect(progress.session).toMatchObject({
-      epicId,
+      milestoneId,
       state: 'active',
       active: true,
       concurrency: 1,
@@ -635,7 +692,10 @@ describe('EpicEngine.start', () => {
 
   it('counts an archived child in progress() and completes once its sibling also finishes', async () => {
     const harness = makeHarness();
-    const { epicId, childIds } = createEpicWithChildren(harness.store, 2);
+    const { milestoneId, childIds } = createMilestoneWithChildren(
+      harness.store,
+      2
+    );
     // Simulate a reconciler having already archived one child (done + pushed).
     harness.store.update(childIds[0], {
       status: 'landed',
@@ -643,14 +703,19 @@ describe('EpicEngine.start', () => {
     });
     harness.cache.rebuild(harness.store);
 
-    await harness.epics.start(epicId, { concurrency: 2, executor: 'fake' });
+    await harness.milestones.start(milestoneId, {
+      concurrency: 2,
+      executor: 'fake',
+    });
     await waitFor(() => harness.orchestrator.list().length === 1);
     // Archived child must still be counted, not dropped from progress().
-    expect(harness.epics.progress(epicId).children).toHaveLength(2);
+    expect(harness.milestones.progress(milestoneId).children).toHaveLength(2);
 
     const run = harness.orchestrator.list()[0];
     harness.orchestrator.approve(run.id, 'go', true);
-    await waitFor(() => harness.epics.progress(epicId).active === false);
+    await waitFor(
+      () => harness.milestones.progress(milestoneId).active === false
+    );
   });
 
   it('completes once its runs finish on a board whose review status is the dispatched one', async () => {
@@ -671,20 +736,20 @@ statusRoles:
   dropped: Canceled
 `
     );
-    const epic = harness.store.create({
-      title: 'Epic',
-      kind: 'epic',
+    const milestone = harness.store.create({
+      title: 'Milestone',
+      kind: 'milestone',
       status: 'Todo',
     });
     const child = harness.store.create({
       title: 'Only child',
-      parent: epic.meta.id,
+      parent: milestone.meta.id,
       status: 'Todo',
       writes: ['a.ts'],
     });
     harness.cache.rebuild(harness.store);
 
-    await harness.epics.start(epic.meta.id, {
+    await harness.milestones.start(milestone.meta.id, {
       concurrency: 1,
       executor: 'fake',
     });
@@ -692,18 +757,18 @@ statusRoles:
     const run = harness.orchestrator.list()[0];
     harness.orchestrator.approve(run.id, 'go', true);
 
-    await waitFor(() => harness.epics.progress(epic.meta.id).active === false);
+    await waitFor(
+      () => harness.milestones.progress(milestone.meta.id).active === false
+    );
     // Up for review, in the status it shares with dispatched.
     expect(harness.store.get(child.meta.id)?.meta.status).toBe('In Progress');
   });
 
-  it('lets a fully-archived epic notice completion instead of staying active forever', async () => {
+  it('lets a fully-archived milestone notice completion instead of staying active forever', async () => {
     const harness = makeHarness();
-    const { epicId: epicA, childIds: childIdsA } = createEpicWithChildren(
-      harness.store,
-      1
-    );
-    // Both the child and (later) the epic are already fully done+archived
+    const { milestoneId: milestoneA, childIds: childIdsA } =
+      createMilestoneWithChildren(harness.store, 1);
+    // Both the child and (later) the milestone are already fully done+archived
     // before the session even starts — nothing left to dispatch.
     harness.store.update(childIdsA[0], {
       status: 'landed',
@@ -711,42 +776,56 @@ statusRoles:
     });
     harness.cache.rebuild(harness.store);
 
-    await harness.epics.start(epicA, { concurrency: 1, executor: 'fake' });
+    await harness.milestones.start(milestoneA, {
+      concurrency: 1,
+      executor: 'fake',
+    });
     expect(harness.orchestrator.list()).toHaveLength(0);
 
     // reactAcrossSessions re-checks EVERY active session on any run's
-    // terminal event, not just runs belonging to that session's own epic —
-    // this is epicA's first chance to notice its archived-only child set
+    // terminal event, not just runs belonging to that session's own milestone —
+    // this is milestoneA's first chance to notice its archived-only child set
     // means it's actually done.
-    const { epicId: epicB } = createEpicWithChildren(harness.store, 1);
-    await harness.epics.start(epicB, { concurrency: 1, executor: 'fake' });
+    const { milestoneId: milestoneB } = createMilestoneWithChildren(
+      harness.store,
+      1
+    );
+    await harness.milestones.start(milestoneB, {
+      concurrency: 1,
+      executor: 'fake',
+    });
     await waitFor(() => harness.orchestrator.list().length === 1);
     const runB = harness.orchestrator.list()[0];
     harness.orchestrator.approve(runB.id, 'go', true);
 
-    await waitFor(() => harness.epics.progress(epicA).active === false);
-    expect(harness.epics.progress(epicA).children).toHaveLength(1);
+    await waitFor(
+      () => harness.milestones.progress(milestoneA).active === false
+    );
+    expect(harness.milestones.progress(milestoneA).children).toHaveLength(1);
   });
 });
 
-describe('EpicEngine write-set conflicts', () => {
+describe('MilestoneEngine write-set conflicts', () => {
   // schedulableBatch keeps overlapping-`writes` children out of one batch,
   // even under a concurrency cap that would otherwise allow both.
   it('never dispatches two children with overlapping writes at once', async () => {
     const harness = makeHarness();
-    const epic = harness.store.create({ title: 'Epic', kind: 'epic' });
+    const milestone = harness.store.create({
+      title: 'Milestone',
+      kind: 'milestone',
+    });
     harness.store.create({
       title: 'A',
-      parent: epic.meta.id,
+      parent: milestone.meta.id,
       writes: ['shared.ts'],
     });
     harness.store.create({
       title: 'B',
-      parent: epic.meta.id,
+      parent: milestone.meta.id,
       writes: ['shared.ts'],
     });
 
-    await harness.epics.start(epic.meta.id, {
+    await harness.milestones.start(milestone.meta.id, {
       concurrency: 2,
       executor: 'fake',
     });
@@ -770,19 +849,22 @@ describe('EpicEngine write-set conflicts', () => {
 
   it('dispatches two children with disjoint writes concurrently', async () => {
     const harness = makeHarness();
-    const epic = harness.store.create({ title: 'Epic', kind: 'epic' });
+    const milestone = harness.store.create({
+      title: 'Milestone',
+      kind: 'milestone',
+    });
     harness.store.create({
       title: 'A',
-      parent: epic.meta.id,
+      parent: milestone.meta.id,
       writes: ['a.ts'],
     });
     harness.store.create({
       title: 'B',
-      parent: epic.meta.id,
+      parent: milestone.meta.id,
       writes: ['b.ts'],
     });
 
-    await harness.epics.start(epic.meta.id, {
+    await harness.milestones.start(milestone.meta.id, {
       concurrency: 2,
       executor: 'fake',
     });
@@ -798,7 +880,7 @@ describe('EpicEngine write-set conflicts', () => {
   // scheduler must catch that too, not just the declared write-sets above.
   it("does not dispatch a child whose writes overlap a live run's grown claims", async () => {
     const harness = makeHarness();
-    // Dispatched standalone (no epic), writes outside its declared writes
+    // Dispatched standalone (no milestone), writes outside its declared writes
     // before pausing, so only refreshClaims knows about the overlap below.
     harness.orchestrator.registerExecutor(
       'fake-writer',
@@ -831,13 +913,16 @@ describe('EpicEngine write-set conflicts', () => {
       harness.orchestrator.list().find((r) => r.id === blockerRun.id)?.claims
     ).toContain('shared-scope.ts');
 
-    const epic = harness.store.create({ title: 'Epic', kind: 'epic' });
+    const milestone = harness.store.create({
+      title: 'Milestone',
+      kind: 'milestone',
+    });
     const child = harness.store.create({
       title: 'Overlaps the grown claim, not the declared one',
-      parent: epic.meta.id,
+      parent: milestone.meta.id,
       writes: ['shared-scope.ts'],
     });
-    await harness.epics.start(epic.meta.id, {
+    await harness.milestones.start(milestone.meta.id, {
       concurrency: 2,
       executor: 'fake',
     });
@@ -874,13 +959,16 @@ describe('EpicEngine write-set conflicts', () => {
       harness.orchestrator.list().find((r) => r.id === unrelatedRun.id)?.claims
     ).toEqual([]);
 
-    const epic = harness.store.create({ title: 'Epic', kind: 'epic' });
+    const milestone = harness.store.create({
+      title: 'Milestone',
+      kind: 'milestone',
+    });
     const child = harness.store.create({
       title: 'Disjoint from the empty-claim run',
-      parent: epic.meta.id,
+      parent: milestone.meta.id,
       writes: ['own.ts'],
     });
-    await harness.epics.start(epic.meta.id, {
+    await harness.milestones.start(milestone.meta.id, {
       concurrency: 2,
       executor: 'fake',
     });
@@ -909,12 +997,15 @@ describe('EpicEngine write-set conflicts', () => {
           ?.state === 'awaiting-approval'
     );
 
-    const epic = harness.store.create({ title: 'Epic', kind: 'epic' });
+    const milestone = harness.store.create({
+      title: 'Milestone',
+      kind: 'milestone',
+    });
     const undeclared = harness.store.create({
       title: 'No declared writes',
-      parent: epic.meta.id,
+      parent: milestone.meta.id,
     });
-    await harness.epics.start(epic.meta.id, {
+    await harness.milestones.start(milestone.meta.id, {
       concurrency: 2,
       executor: 'fake',
     });
@@ -933,7 +1024,7 @@ describe('EpicEngine write-set conflicts', () => {
   });
 });
 
-describe('EpicEngine fill serialization', () => {
+describe('MilestoneEngine fill serialization', () => {
   // Regression guard for the concurrency window the async dispatch conversion
   // opened. Orchestrator.dispatch now `await`s base resolution BEFORE it
   // registers the run, so a fill sitting in that await has a dispatch in
@@ -989,20 +1080,20 @@ describe('EpicEngine fill serialization', () => {
       },
     });
 
-    const epics = new EpicEngine({
+    const milestones = new MilestoneEngine({
       rootDir: repo,
       store,
       cache,
       events,
       orchestrator,
     });
-    engines.push(epics);
-    const { epicId } = createEpicWithChildren(
+    engines.push(milestones);
+    const { milestoneId } = createMilestoneWithChildren(
       new WatchedTaskStore(repo, cache),
       6
     );
 
-    await epics.start(epicId, { concurrency: 2, executor: 'fake' });
+    await milestones.start(milestoneId, { concurrency: 2, executor: 'fake' });
     // Let every chained fill drain.
     await waitFor(() => orchestrator.list().length >= 3);
     await sleep(50);
@@ -1013,10 +1104,13 @@ describe('EpicEngine fill serialization', () => {
 
   // Fix 5: an auto-dispatch failure must leave a durable trail, not just a
   // console line — invokeHooksSafely's rule for a throwing subscriber.
-  it('records a failed hook-driven fill on the epic Activity', async () => {
+  it('records a failed hook-driven fill on the milestone Activity', async () => {
     const harness = makeHarness();
-    const { epicId } = createEpicWithChildren(harness.store, 2);
-    await harness.epics.start(epicId, { concurrency: 1, executor: 'fake' });
+    const { milestoneId } = createMilestoneWithChildren(harness.store, 2);
+    await harness.milestones.start(milestoneId, {
+      concurrency: 1,
+      executor: 'fake',
+    });
     await waitFor(() => harness.orchestrator.list().length === 1);
 
     // Break the next fill: dispatching the second child now fails inside
@@ -1025,12 +1119,12 @@ describe('EpicEngine fill serialization', () => {
     await withBrokenRepo(repo, async () => {
       harness.orchestrator.approve(runId, 'go', true);
       await waitFor(() => {
-        const body = harness.store.get(epicId)?.body ?? '';
+        const body = harness.store.get(milestoneId)?.body ?? '';
         return body.includes('[hook error] auto-dispatch failed');
       });
     });
 
-    expect(harness.store.get(epicId)?.body).toContain(
+    expect(harness.store.get(milestoneId)?.body).toContain(
       '[hook error] auto-dispatch failed'
     );
   });

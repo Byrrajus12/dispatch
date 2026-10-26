@@ -1,8 +1,8 @@
 import type { TaskListItem, UpdatePatch } from '@dispatch-foo/core/browser';
 import type {
-  EpicProgressChild,
   FixLoopState,
   MergeQueueEntryState,
+  MilestoneProgressChild,
   RunMeta,
 } from '@dispatch/client';
 import { Milestone, Play } from 'lucide-react';
@@ -14,18 +14,12 @@ import { LandingBadge } from '../components/tasks/LandingBadge';
 import { PriorityIcon } from '../components/tasks/PriorityIcon';
 import {
   AssigneeControl,
-  EpicControl,
   LabelsControl,
+  MilestoneControl,
   PriorityControl,
   StatusControl,
 } from '../components/tasks/PropertyControls';
 import { StatusIcon } from '../components/tasks/StatusIcon';
-import {
-  formatUsd,
-  PHASE_LABEL,
-  phaseTint,
-  showsPhasePill,
-} from '../lib/epicSession';
 import { fixLoopStatusLabel } from '../lib/fixLoopStatus';
 import {
   isInteractiveControlTagName,
@@ -33,6 +27,12 @@ import {
   resolveListKeyCommand,
 } from '../lib/keyboard';
 import { colorForLabel } from '../lib/labelColor';
+import {
+  formatUsd,
+  PHASE_LABEL,
+  phaseTint,
+  showsPhasePill,
+} from '../lib/milestoneSession';
 import { formatShortDate } from '../lib/taskDates';
 import type { TaskProperty, TasksDisplayPrefs } from '../lib/tasksPrefs';
 import { cn } from '@/lib/utils';
@@ -45,7 +45,12 @@ import { CountChip } from '@/ui/chrome/CountChip';
 // task reads and edits identically under a status header and under a milestone header.
 
 /** Which picker the `s`/`p`/`a`/`l`/`e` keys have opened, and on which row. */
-export type PickerKind = 'status' | 'priority' | 'assignee' | 'labels' | 'epic';
+export type PickerKind =
+  | 'status'
+  | 'priority'
+  | 'assignee'
+  | 'labels'
+  | 'milestone';
 
 export interface OpenPicker {
   taskId: string;
@@ -95,8 +100,8 @@ export interface TaskListRowProps {
   fixLoop?: FixLoopState;
   /** The project's configured statuses, for the status picker. */
   statuses: string[];
-  /** Every epic, for the `e` picker. */
-  epics: TaskListItem[];
+  /** Every milestone, for the `e` picker. */
+  milestones: TaskListItem[];
   /** The label vocabulary — only passed while this row's labels picker is open. */
   labelCandidates?: string[];
   onUpdate: (id: string, patch: UpdatePatch) => Promise<void>;
@@ -104,16 +109,16 @@ export interface TaskListRowProps {
   indent?: 0 | 1;
   /** Read-only: glyphs instead of pickers, no checkbox, dimmed. */
   archived?: boolean;
-  /** The parent epic, resolved by the caller. */
-  epic?: TaskListItem;
-  /** How many tasks sit under this row's task (an epic's `▶ N` pill). */
+  /** The parent milestone, resolved by the caller. */
+  milestone?: TaskListItem;
+  /** How many tasks sit under this row's task (a milestone's `▶ N` pill). */
   childCount?: number;
-  /** Hide the ` › epic` chip — under an epic/milestone header it is redundant. */
-  showEpicChip?: boolean;
+  /** Hide the ` › milestone` chip — under a milestone/milestone header it is redundant. */
+  showMilestoneChip?: boolean;
   /** Where this task stands in its milestone's fan-out, when the milestone has a session:
    * a phase pill (only where the phase says more than the status glyph), the run's cost
    * and the open findings count. */
-  phase?: EpicProgressChild;
+  phase?: MilestoneProgressChild;
   /** The open picker; callers pass it only to the row it belongs to, so opening one
    * re-renders that row alone. */
   picker: OpenPicker | null;
@@ -132,7 +137,7 @@ export interface TaskListRowProps {
 // A capped child reads its fix loop's own line (`Stopped at 3/3: rounds exhausted`) when
 // the loop state is known; every other phase prints its label.
 function phasePillLabel(
-  phase: EpicProgressChild,
+  phase: MilestoneProgressChild,
   loop: FixLoopState | undefined
 ): string {
   if (phase.phase === 'capped' && loop !== undefined) {
@@ -142,7 +147,7 @@ function phasePillLabel(
 }
 
 /** One 36px task row: priority picker, sans id, status picker, title, then the right-aligned
- * label pills, epic chip, sub-task count, `Needs you`, `Landing`, live run mark and assignee,
+ * label pills, milestone chip, sub-task count, `Needs you`, `Landing`, live run mark and assignee,
  * and the absolute date. Which of those show comes from `prefs.properties`. */
 export const TaskListRow = memo(function TaskListRow({
   doc,
@@ -154,15 +159,15 @@ export const TaskListRow = memo(function TaskListRow({
   landing,
   fixLoop,
   statuses,
-  epics,
+  milestones,
   labelCandidates,
   onUpdate,
   onMoveStatus,
   indent = 0,
   archived = false,
-  epic,
+  milestone,
   childCount = 0,
-  showEpicChip = true,
+  showMilestoneChip = true,
   phase,
   picker,
   onPickerChange,
@@ -204,21 +209,21 @@ export const TaskListRow = memo(function TaskListRow({
           {...pickerProps('labels')}
         />
       )}
-      {has('epic') && showEpicChip && epic !== undefined && (
-        <Pill title={epic.meta.title}>
+      {has('milestone') && showMilestoneChip && milestone !== undefined && (
+        <Pill title={milestone.meta.title}>
           <Milestone className="text-muted-foreground" />
-          <span className="max-w-40 truncate">{epic.meta.title}</span>
+          <span className="max-w-40 truncate">{milestone.meta.title}</span>
         </Pill>
       )}
-      {/* The epic picker only mounts while the `e` key has it open — the chip above is the
+      {/* The milestone picker only mounts while the `e` key has it open — the chip above is the
           row's resting face for the same property. */}
-      {picker?.taskId === id && picker.kind === 'epic' && (
-        <EpicControl
+      {picker?.taskId === id && picker.kind === 'milestone' && (
+        <MilestoneControl
           value={doc.meta.parent}
-          epics={epics}
+          milestones={milestones}
           variant="inline"
           onChange={(parent) => void onUpdate(id, { parent })}
-          {...pickerProps('epic')}
+          {...pickerProps('milestone')}
         />
       )}
       {childCount > 0 && (
@@ -475,10 +480,8 @@ export function handleTaskListKeyDown(
     case 'list-set-labels':
       h.setPicker({ taskId: id, kind: 'labels' });
       return;
-    case 'list-set-epic':
     case 'list-set-milestone':
-      // Milestone = epic today (e-be4827), so both keys open the epic picker.
-      h.setPicker({ taskId: id, kind: 'epic' });
+      h.setPicker({ taskId: id, kind: 'milestone' });
       return;
     case 'list-dispatch':
       h.onDispatch?.(id);

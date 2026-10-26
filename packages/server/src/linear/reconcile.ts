@@ -2,7 +2,6 @@
 // field, new records created on either side, and every write recorded (merge
 // base, echo, chip link) so the next pass sees exactly what changed since.
 import {
-  canonicalKind,
   containerCreate,
   fieldHash,
   getSection,
@@ -56,7 +55,6 @@ import type {
   LinearProject,
   LinearProjectMilestone,
   TaskDoc,
-  TaskKind,
   TaskStorePort,
   UpdatePatch,
 } from '@dispatch-foo/core';
@@ -312,7 +310,7 @@ function entityForNewTask(doc: TaskDoc, ctx: PassContext): LinearEntity {
   if (kind === 'initiative' || kind === 'project') return kind;
   if (kind === 'milestone') {
     // A milestone under a linked project is a project milestone; a legacy
-    // epic with no project is a parent issue its tasks hang under.
+    // milestone with no project is a parent issue its tasks hang under.
     return projectAbove(doc, ctx) === null ? 'issue' : 'milestone';
   }
   return 'issue';
@@ -979,7 +977,7 @@ export class LinearPass {
     const ops = OPS_BY_ENTITY[entity];
     const blank = newTaskDoc(
       't-new',
-      canonicalKind(base.kind ?? 'task') as TaskKind,
+      base.kind ?? 'task',
       base,
       remote.createdAt
     );

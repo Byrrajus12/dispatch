@@ -7,10 +7,10 @@ import { join } from 'node:path';
 
 import { TaskCache } from '../../src/cache.js';
 import { EventBus } from '../../src/events.js';
-import { EpicEngine } from '../../src/orchestrator/epic.js';
 import { FakeExecutor } from '../../src/orchestrator/executors/fake.js';
+import { MilestoneEngine } from '../../src/orchestrator/milestone.js';
 import { Orchestrator } from '../../src/orchestrator/orchestrator.js';
-import { epicSessionsPath } from '../../src/orchestrator/paths.js';
+import { milestoneSessionsPath } from '../../src/orchestrator/paths.js';
 import { OrchestratorConflictError } from '../../src/orchestrator/types.js';
 import { initGitRepo, runGitSync, WatchedTaskStore } from './helpers.js';
 
@@ -24,7 +24,7 @@ const originalDispatchHome = process.env.DISPATCH_HOME;
 beforeEach(() => {
   fakeHome = mkdtempSync(join(tmpdir(), 'dispatch-home-'));
   process.env.DISPATCH_HOME = fakeHome;
-  repo = initGitRepo('dispatch-epic-scope-');
+  repo = initGitRepo('dispatch-milestone-scope-');
 });
 
 afterEach(() => {
@@ -72,7 +72,7 @@ function makeHarness() {
       finish: { state: 'finished', costUsd: 0, turns: 1 },
     })
   );
-  const epics = new EpicEngine({
+  const milestones = new MilestoneEngine({
     rootDir: repo,
     store,
     cache,
@@ -90,7 +90,7 @@ function makeHarness() {
     new Set(orchestrator.list().map((run) => run.taskId));
   return {
     orchestrator,
-    epics,
+    milestones,
     store: watched,
     cache,
     events,
@@ -118,7 +118,7 @@ describe('a fan-out never picks up a teammate’s task', () => {
     };
     const samBefore = h.store.get(ids.samTask);
 
-    const session = await h.epics.start(m, {
+    const session = await h.milestones.start(m, {
       executor: 'fake',
       concurrency: 8,
     });
@@ -139,7 +139,9 @@ describe('a fan-out never picks up a teammate’s task', () => {
     expect(samAfter?.meta.updated).toBe(samBefore?.meta.updated);
     expect(samAfter?.body).toBe(samBefore?.body);
 
-    const phases = new Map(h.epics.progress(m).children.map((c) => [c.id, c]));
+    const phases = new Map(
+      h.milestones.progress(m).children.map((c) => [c.id, c])
+    );
     expect(phases.get(ids.samTask)).toMatchObject({
       phase: 'held',
       reason: 'assigned to human:sam',
@@ -160,7 +162,7 @@ describe('a fan-out never picks up a teammate’s task', () => {
       bare: h.task('bare', { parent: m, assignee: 'human' }),
     };
 
-    const session = await h.epics.start(m, {
+    const session = await h.milestones.start(m, {
       executor: 'fake',
       concurrency: 8,
       startedBy: 'human:ada',
@@ -175,7 +177,9 @@ describe('a fan-out never picks up a teammate’s task', () => {
     expect(new Set(h.orchestrator.list().map((r) => r.dispatchedBy))).toEqual(
       new Set(['human:ada'])
     );
-    const phases = new Map(h.epics.progress(m).children.map((c) => [c.id, c]));
+    const phases = new Map(
+      h.milestones.progress(m).children.map((c) => [c.id, c])
+    );
     expect(phases.get(ids.operator)?.reason).toBe('assigned to human:test');
     expect(phases.get(ids.bare)?.reason).toBe('assigned to human:test');
   });
@@ -186,10 +190,10 @@ describe('a fan-out never picks up a teammate’s task', () => {
     const samTask = h.task('samTask', { parent: m, assignee: 'human:sam' });
     const dependent = h.task('dependent', { parent: m, blockedBy: [samTask] });
 
-    await h.epics.start(m, { executor: 'fake', concurrency: 4 });
+    await h.milestones.start(m, { executor: 'fake', concurrency: 4 });
     await sleep(50);
     expect(h.orchestrator.list()).toHaveLength(0);
-    expect(h.epics.progress(m).session?.state).toBe('active');
+    expect(h.milestones.progress(m).session?.state).toBe('active');
 
     // Sam's issue moves on in Linear; the sync writes it and says so.
     h.store.update(samTask, { status: 'working' });
@@ -216,7 +220,7 @@ describe('a fan-out never picks up a teammate’s task', () => {
     });
     h.store.update(handMoved, { status: 'review' });
 
-    await h.epics.start(m, { executor: 'fake', concurrency: 4 });
+    await h.milestones.start(m, { executor: 'fake', concurrency: 4 });
     await sleep(50);
     expect(h.orchestrator.list()).toHaveLength(0);
 
@@ -225,7 +229,9 @@ describe('a fan-out never picks up a teammate’s task', () => {
     h.events.broadcast({ type: 'task.changed', ids: [samTask] });
     await sleep(100);
     expect(h.orchestrator.list()).toHaveLength(0);
-    const phases = new Map(h.epics.progress(m).children.map((c) => [c.id, c]));
+    const phases = new Map(
+      h.milestones.progress(m).children.map((c) => [c.id, c])
+    );
     expect(phases.get(dependent)).toMatchObject({
       phase: 'waiting',
       reason: `waiting on ${samTask}`,
@@ -245,7 +251,7 @@ describe('a fan-out never picks up a teammate’s task', () => {
     const samTask = h.task('samTask', { parent: m, assignee: 'human:sam' });
     const dependent = h.task('dependent', { parent: m, blockedBy: [samTask] });
 
-    await h.epics.start(m, { executor: 'fake', concurrency: 4 });
+    await h.milestones.start(m, { executor: 'fake', concurrency: 4 });
     await sleep(50);
     expect(h.orchestrator.list()).toHaveLength(0);
 
@@ -277,7 +283,7 @@ describe('a fan-out never picks up a teammate’s task', () => {
       return pending;
     };
 
-    await h.epics.start(m, { executor: 'fake', concurrency: 4 });
+    await h.milestones.start(m, { executor: 'fake', concurrency: 4 });
     await waitFor(() => h.dispatched().has(first));
     await sleep(50);
     expect(h.dispatched()).toEqual(new Set([first]));
@@ -298,7 +304,7 @@ describe('a fan-out never picks up a teammate’s task', () => {
       return pending;
     };
 
-    await h.epics.start(m, { executor: 'fake', concurrency: 4 });
+    await h.milestones.start(m, { executor: 'fake', concurrency: 4 });
     await sleep(50);
     expect(h.orchestrator.list()).toHaveLength(0);
     expect(h.store.get(only)?.meta.status).toBe('ready');
@@ -310,12 +316,12 @@ describe('a fan-out never picks up a teammate’s task', () => {
     const mine = h.task('mine', { parent: m });
     h.task('samTask', { parent: m, assignee: 'human:sam' });
 
-    await h.epics.start(m, { executor: 'fake', concurrency: 4 });
+    await h.milestones.start(m, { executor: 'fake', concurrency: 4 });
     await waitFor(() => h.dispatched().has(mine));
     const run = h.orchestrator.list()[0];
     if (run === undefined) throw new Error('no run');
     h.orchestrator.approve(run.id, 'go', true);
-    await waitFor(() => h.epics.progress(m).session?.state === 'complete');
+    await waitFor(() => h.milestones.progress(m).session?.state === 'complete');
   });
 });
 
@@ -344,18 +350,18 @@ describe('a project fans out what its Flight Plan draws', () => {
     expect(new Set(planned)).toEqual(
       new Set([t.a1, t.parentIssue, t.b1, t.direct])
     );
-    expect(new Set(h.epics.progress(t.p).children.map((c) => c.id))).toEqual(
-      new Set(planned)
-    );
+    expect(
+      new Set(h.milestones.progress(t.p).children.map((c) => c.id))
+    ).toEqual(new Set(planned));
 
-    await h.epics.start(t.p, { executor: 'fake', concurrency: 8 });
+    await h.milestones.start(t.p, { executor: 'fake', concurrency: 8 });
     await waitFor(() => h.orchestrator.list().length === 2);
     await sleep(50);
     // b1 waits on a1 across milestones; the parent issue is a container.
     expect(h.dispatched()).toEqual(new Set([t.a1, t.direct]));
     const baseOf = (taskId: string) =>
       h.orchestrator.list().find((r) => r.taskId === taskId)?.baseBranch;
-    expect(baseOf(t.a1)).toBe(`epic/${t.m1}`);
+    expect(baseOf(t.a1)).toBe(`milestone/${t.m1}`);
     expect(baseOf(t.direct)).toBe('main');
 
     const a1Run = h.orchestrator.list().find((r) => r.taskId === t.a1);
@@ -366,24 +372,27 @@ describe('a project fans out what its Flight Plan draws', () => {
     expect(h.dispatched().has(t.sub)).toBe(false);
     expect(h.dispatched().has(t.parentIssue)).toBe(false);
     // Only milestones and parent issues get integration branches.
-    expect(runGitSync(repo, ['branch', '--list', `epic/${t.p}`])).toBe('');
+    expect(runGitSync(repo, ['branch', '--list', `milestone/${t.p}`])).toBe('');
   });
 
   it('refuses a fan-out that overlaps a live one, either way round', async () => {
     const h = makeHarness();
     const t = project(h);
-    await h.epics.start(t.p, { executor: 'fake', concurrency: 1 });
+    await h.milestones.start(t.p, { executor: 'fake', concurrency: 1 });
     await expect(
-      h.epics.start(t.m1, { executor: 'fake', concurrency: 1 })
+      h.milestones.start(t.m1, { executor: 'fake', concurrency: 1 })
     ).rejects.toThrow(OrchestratorConflictError);
     // A parent issue's sub-issues are outside the project's scope.
-    await h.epics.start(t.parentIssue, { executor: 'fake', concurrency: 1 });
+    await h.milestones.start(t.parentIssue, {
+      executor: 'fake',
+      concurrency: 1,
+    });
 
-    h.epics.stop(t.p);
-    await h.epics.start(t.m1, { executor: 'fake', concurrency: 1 });
-    h.epics.pause(t.m1);
+    h.milestones.stop(t.p);
+    await h.milestones.start(t.m1, { executor: 'fake', concurrency: 1 });
+    h.milestones.pause(t.m1);
     await expect(
-      h.epics.start(t.p, { executor: 'fake', concurrency: 1 })
+      h.milestones.start(t.p, { executor: 'fake', concurrency: 1 })
     ).rejects.toThrow(/overlap .*paused session on 2 task/);
   });
 });
@@ -402,9 +411,9 @@ const LEGACY_SESSION = {
 
 // A daemon booting on `sessions` as persisted, whose sessions arm at once.
 function bootWith(sessions: Record<string, unknown>) {
-  mkdirSync(join(epicSessionsPath(repo), '..'), { recursive: true });
+  mkdirSync(join(milestoneSessionsPath(repo), '..'), { recursive: true });
   writeFileSync(
-    epicSessionsPath(repo),
+    milestoneSessionsPath(repo),
     JSON.stringify({ version: 1, sessions })
   );
   const store = TaskStore.init(repo);
@@ -426,7 +435,7 @@ function bootWith(sessions: Record<string, unknown>) {
       finish: { state: 'finished', costUsd: 0, turns: 1 },
     })
   );
-  const epics = new EpicEngine({
+  const milestones = new MilestoneEngine({
     rootDir: repo,
     store,
     cache,
@@ -436,7 +445,7 @@ function bootWith(sessions: Record<string, unknown>) {
     resumeDelayMs: 0,
     eventDebounceMs: 0,
   });
-  return { orchestrator, epics };
+  return { orchestrator, milestones };
 }
 
 it('a session persisted without a starter works for the local human', async () => {
@@ -444,9 +453,9 @@ it('a session persisted without a starter works for the local human', async () =
   const m = h0.store.create({ title: 'Milestone', kind: 'milestone' }).meta.id;
   const mine = h0.task('mine', { parent: m, assignee: 'human:test' });
   h0.task('samTask', { parent: m, assignee: 'human:sam' });
-  const { orchestrator, epics } = bootWith({ [m]: LEGACY_SESSION });
-  expect(epics.progress(m).session?.startedBy).toBeNull();
-  expect(epics.resumeOnBoot()).toBe(1);
+  const { orchestrator, milestones } = bootWith({ [m]: LEGACY_SESSION });
+  expect(milestones.progress(m).session?.startedBy).toBeNull();
+  expect(milestones.resumeOnBoot()).toBe(1);
   await waitFor(() => orchestrator.list().length === 1);
   await sleep(50);
   expect(orchestrator.list().map((r) => r.taskId)).toEqual([mine]);
@@ -460,28 +469,28 @@ it('a project session persisted before plan-wide fan-outs keeps to its direct is
     .id;
   const direct = h0.task('direct', { parent: p });
   const underM = h0.task('underM', { parent: m });
-  const { orchestrator, epics } = bootWith({ [p]: LEGACY_SESSION });
-  expect(epics.progress(p).session?.scope).toBe('direct');
-  expect(epics.progress(p).children.map((c) => c.id)).toEqual([direct]);
+  const { orchestrator, milestones } = bootWith({ [p]: LEGACY_SESSION });
+  expect(milestones.progress(p).session?.scope).toBe('direct');
+  expect(milestones.progress(p).children.map((c) => c.id)).toEqual([direct]);
 
-  epics.resumeOnBoot();
+  milestones.resumeOnBoot();
   await waitFor(() => orchestrator.list().length === 1);
   await sleep(100);
   expect(orchestrator.list().map((r) => r.taskId)).toEqual([direct]);
 
   // The milestone shares no task with it, so it may fan out beside it, and
   // its run is no part of the project session's spend.
-  await epics.start(m, { executor: 'fake', concurrency: 1 });
-  expect(epics.progress(m).session?.scope).toBe('plan');
+  await milestones.start(m, { executor: 'fake', concurrency: 1 });
+  expect(milestones.progress(m).session?.scope).toBe('plan');
   await waitFor(() => orchestrator.list().length === 2);
   expect(orchestrator.list().some((r) => r.taskId === underM)).toBe(true);
-  expect(epics.progress(p).spend.runsStarted).toBe(1);
+  expect(milestones.progress(p).spend.runsStarted).toBe(1);
 
   // Stopped, the project's next fan-out covers its whole plan again.
-  epics.stop(p);
-  epics.stop(m);
-  expect(new Set(epics.progress(p).children.map((c) => c.id))).toEqual(
+  milestones.stop(p);
+  milestones.stop(m);
+  expect(new Set(milestones.progress(p).children.map((c) => c.id))).toEqual(
     new Set([direct, underM])
   );
-  expect((await epics.start(p, { executor: 'fake' })).scope).toBe('plan');
+  expect((await milestones.start(p, { executor: 'fake' })).scope).toBe('plan');
 });

@@ -234,7 +234,7 @@ const MID_FLIGHT_STATES: ReadonlySet<MergeQueueEntryState> = new Set([
 /**
  * The merge queue (spec §2): strictly serial rebase -> verify -> merge over
  * reviewed-and-approved runs, so stacked/concurrent agent branches always
- * land on a fresh base. Event-driven like EpicEngine — enqueueing and the
+ * land on a fresh base. Event-driven like MilestoneEngine — enqueueing and the
  * orchestrator's onRunReviewed hook both nudge the pump; there is no polling
  * loop. Persisted to `mergeQueuePath` (see persist()/hydrate()) so a daemon
  * restart reloads the queue instead of silently dropping it.
@@ -242,8 +242,8 @@ const MID_FLIGHT_STATES: ReadonlySet<MergeQueueEntryState> = new Set([
  * `verifyCommand` is read fresh via `loadConfig(ctx.rootDir)` at the moment
  * each entry is verified (not cached at construction or per-enqueue), so a
  * user editing config.yml between merges takes effect on the very next entry
- * the queue processes. Unlike EpicEngine, which reads
- * `orchestrator.epicConcurrency` once at `start()` and holds it for the
+ * the queue processes. Unlike MilestoneEngine, which reads
+ * `orchestrator.milestoneConcurrency` once at `start()` and holds it for the
  * session's life.
  */
 export class MergeQueue {
@@ -1711,19 +1711,21 @@ export class MergeQueue {
       return;
     }
     const newBase = parent.baseBranch;
-    // A dependent whose task lives under an epic belongs on that epic's
+    // A dependent whose task lives under a milestone belongs on that milestone's
     // integration branch. When its blocker landed somewhere ELSE (the default
-    // branch, or another epic's branch — the cross-epic blocker case),
-    // restacking it onto `newBase` would silently carry the epic's work away
-    // from the epic branch, and restacking it onto the epic branch instead
-    // would silently drop the blocker's content, which the epic branch does
+    // branch, or another milestone's branch — the cross-milestone blocker case),
+    // restacking it onto `newBase` would silently carry the milestone's work away
+    // from the milestone branch, and restacking it onto the milestone branch instead
+    // would silently drop the blocker's content, which the milestone branch does
     // not contain. Neither guess is safe, so this mirrors the baseDiscarded
     // treatment: flag it and let a human decide.
-    const epicHome = this.ctx.orchestrator.epicBranchForRun(dependent.id);
-    if (epicHome !== null && epicHome !== newBase) {
+    const milestoneHome = this.ctx.orchestrator.milestoneBranchForRun(
+      dependent.id
+    );
+    if (milestoneHome !== null && milestoneHome !== newBase) {
       this.flagDependent(
         dependent,
-        `cannot restack automatically: this run belongs on epic branch ${epicHome}, but its blocker ${parent.branch} landed on ${newBase} — merge ${newBase} into ${epicHome} (or re-dispatch) so the blocker's work reaches the epic branch first`
+        `cannot restack automatically: this run belongs on milestone branch ${milestoneHome}, but its blocker ${parent.branch} landed on ${newBase} — merge ${newBase} into ${milestoneHome} (or re-dispatch) so the blocker's work reaches the milestone branch first`
       );
       return;
     }

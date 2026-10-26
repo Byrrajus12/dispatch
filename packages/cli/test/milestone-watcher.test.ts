@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 
-import type { EpicProgress, ServerEvent } from '../src/apiClient.js';
-import { createEpicWatcher } from '../src/commands/plan.js';
+import type { MilestoneProgress, ServerEvent } from '../src/apiClient.js';
+import { createMilestoneWatcher } from '../src/commands/plan.js';
 import { CliError } from '../src/context.js';
-import { formatEpicProgress } from '../src/orchestrateFormat.js';
+import { formatMilestoneProgress } from '../src/orchestrateFormat.js';
 import type { SocketLike } from '../src/watch.js';
 
 function sleep(ms: number): Promise<void> {
@@ -52,9 +52,11 @@ class FakeSocket implements SocketLike {
   }
 }
 
-function makeProgress(overrides: Partial<EpicProgress> = {}): EpicProgress {
+function makeProgress(
+  overrides: Partial<MilestoneProgress> = {}
+): MilestoneProgress {
   return {
-    epicId: 'e-1',
+    milestoneId: 'e-1',
     active: true,
     session: null,
     spend: {
@@ -74,11 +76,11 @@ function makeProgress(overrides: Partial<EpicProgress> = {}): EpicProgress {
 
 // A snapshot the daemon reports once a spend ceiling paused the session:
 // `active` is false, so the watch ends on it, and the render says why.
-function makePausedProgress(): EpicProgress {
+function makePausedProgress(): MilestoneProgress {
   return makeProgress({
     active: false,
     session: {
-      epicId: 'e-1',
+      milestoneId: 'e-1',
       concurrency: 4,
       executor: 'fake',
       state: 'paused',
@@ -100,11 +102,11 @@ function makePausedProgress(): EpicProgress {
   });
 }
 
-describe('createEpicWatcher', () => {
+describe('createMilestoneWatcher', () => {
   it('reports each fetched progress snapshot via onProgress', async () => {
     const created: FakeSocket[] = [];
-    const seen: EpicProgress[] = [];
-    const watcher = createEpicWatcher(
+    const seen: MilestoneProgress[] = [];
+    const watcher = createMilestoneWatcher(
       'http://127.0.0.1:1',
       () => Promise.resolve(makeProgress()),
       (progress) => seen.push(progress),
@@ -128,8 +130,8 @@ describe('createEpicWatcher', () => {
   it('collapses overlapping events into a single in-flight fetch (single-flight, not a race-prone boolean)', async () => {
     const created: FakeSocket[] = [];
     let fetches = 0;
-    let resolveFetch!: (p: EpicProgress) => void;
-    const watcher = createEpicWatcher(
+    let resolveFetch!: (p: MilestoneProgress) => void;
+    const watcher = createMilestoneWatcher(
       'http://127.0.0.1:1',
       () => {
         fetches++;
@@ -164,7 +166,7 @@ describe('createEpicWatcher', () => {
   it('resolves waitForExit once a fetched progress reports active: false', async () => {
     const created: FakeSocket[] = [];
     let active = true;
-    const watcher = createEpicWatcher(
+    const watcher = createMilestoneWatcher(
       'http://127.0.0.1:1',
       () => Promise.resolve(makeProgress({ active })),
       () => {},
@@ -190,10 +192,10 @@ describe('createEpicWatcher', () => {
     const created: FakeSocket[] = [];
     const rendered: string[] = [];
     let paused = false;
-    const watcher = createEpicWatcher(
+    const watcher = createMilestoneWatcher(
       'http://127.0.0.1:1',
       () => Promise.resolve(paused ? makePausedProgress() : makeProgress()),
-      (progress) => rendered.push(formatEpicProgress(progress)),
+      (progress) => rendered.push(formatMilestoneProgress(progress)),
       {
         createSocket: () => {
           const s = new FakeSocket();
@@ -204,28 +206,28 @@ describe('createEpicWatcher', () => {
     );
     created[0].emitOpen();
     await sleep(5);
-    expect(rendered.at(-1)).toContain('epic e-1: active');
+    expect(rendered.at(-1)).toContain('milestone e-1: active');
 
     paused = true;
     created[0].emitMessage({
-      type: 'epic.paused',
-      epicId: 'e-1',
+      type: 'milestone.paused',
+      milestoneId: 'e-1',
       reason: 'budget',
     });
 
     await watcher.waitForExit();
     watcher.dispose();
-    expect(rendered.at(-1)).toContain('epic e-1: paused (concurrency 4)');
+    expect(rendered.at(-1)).toContain('milestone e-1: paused (concurrency 4)');
     expect(rendered.at(-1)).toContain('paused — spend ceiling reached');
     expect(rendered.at(-1)).toContain(
       'spend $55.00 settled + ~$10.00 in flight of $60.00 · 6 runs'
     );
   });
 
-  it('refetches on epic.changed, not only task/run events', async () => {
+  it('refetches on milestone.changed, not only task/run events', async () => {
     const created: FakeSocket[] = [];
     let fetches = 0;
-    const watcher = createEpicWatcher(
+    const watcher = createMilestoneWatcher(
       'http://127.0.0.1:1',
       () => {
         fetches++;
@@ -243,7 +245,7 @@ describe('createEpicWatcher', () => {
     created[0].emitOpen();
     await sleep(5);
     expect(fetches).toBe(1);
-    created[0].emitMessage({ type: 'epic.changed', epicId: 'e-1' });
+    created[0].emitMessage({ type: 'milestone.changed', milestoneId: 'e-1' });
     await sleep(5);
     expect(fetches).toBe(2);
     watcher.dispose();
@@ -255,7 +257,7 @@ describe('createEpicWatcher', () => {
   it('detects completion that happened during a simulated disconnect, via the reconnect refetch', async () => {
     const created: FakeSocket[] = [];
     let active = true;
-    const watcher = createEpicWatcher(
+    const watcher = createMilestoneWatcher(
       'http://127.0.0.1:1',
       () => Promise.resolve(makeProgress({ active })),
       () => {},
@@ -284,7 +286,7 @@ describe('createEpicWatcher', () => {
   // crash the process with an unhandled rejection.
   it('rejects waitForExit if fetchProgress itself fails', async () => {
     const created: FakeSocket[] = [];
-    const watcher = createEpicWatcher(
+    const watcher = createMilestoneWatcher(
       'http://127.0.0.1:1',
       () => Promise.reject(new Error('daemon unreachable')),
       () => {},
@@ -304,7 +306,7 @@ describe('createEpicWatcher', () => {
 
   it('rejects waitForExit with a CliError once the connection is given up on', async () => {
     const created: FakeSocket[] = [];
-    const watcher = createEpicWatcher(
+    const watcher = createMilestoneWatcher(
       'http://127.0.0.1:1',
       () => Promise.resolve(makeProgress()),
       () => {},

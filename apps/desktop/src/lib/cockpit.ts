@@ -13,8 +13,8 @@ import {
   readyTasks,
 } from '@dispatch-foo/core/browser';
 import type {
-  EpicProgress,
   MergeQueueEntry,
+  MilestoneProgress,
   ReadinessReading,
   RunMeta,
 } from '@dispatch/client';
@@ -78,7 +78,7 @@ export type CockpitItem =
   | (ItemBase & {
       kind: 'fanout';
       container: TaskListItem | undefined;
-      progress: EpicProgress;
+      progress: MilestoneProgress;
     })
   /** A person's started task with no live run — a teammate at work by hand. */
   | (ItemBase & { kind: 'started'; task: TaskListItem })
@@ -129,7 +129,7 @@ export interface CockpitInput {
   latestRunByTaskId: ReadonlyMap<string, RunMeta>;
   attentionByTaskId: ReadonlyMap<string, TaskAttention>;
   /** Containers with an active or paused fan-out session. */
-  liveEpicSessions: readonly EpicProgress[];
+  liveMilestoneSessions: readonly MilestoneProgress[];
   readinessById: ReadonlyMap<string, ReadinessReading>;
   /** This window's own ref; null until the daemon says. */
   me: string | null;
@@ -283,8 +283,8 @@ export function buildCockpit(input: CockpitInput): CockpitLanes {
     return owner;
   };
   // Each live fan-out, by the tasks it covers: a run it started carries no signature.
-  const sessionOf = new Map<string, EpicProgress>();
-  for (const progress of input.liveEpicSessions) {
+  const sessionOf = new Map<string, MilestoneProgress>();
+  for (const progress of input.liveMilestoneSessions) {
     for (const child of progress.children) {
       if (!sessionOf.has(child.id)) sessionOf.set(child.id, progress);
     }
@@ -293,7 +293,7 @@ export function buildCockpit(input: CockpitInput): CockpitLanes {
   // single-user daemon, or an older one that names none); elsewhere it is nobody's.
   const unsigned = input.local === null || input.local === me ? me : null;
   // A fan-out belongs to whoever started it; one that names nobody, to the daemon's human.
-  const starterOf = (progress: EpicProgress): string | null => {
+  const starterOf = (progress: MilestoneProgress): string | null => {
     const starter = progress.session?.startedBy ?? input.local;
     return starter === null ? unsigned : ownerOf(starter);
   };
@@ -394,19 +394,19 @@ export function buildCockpit(input: CockpitInput): CockpitLanes {
       startedAt,
     });
   }
-  for (const progress of input.liveEpicSessions) {
+  for (const progress of input.liveMilestoneSessions) {
     const nestedRuns = liveRuns.filter(
       (run) =>
         sessionOf.get(run.taskId) === progress &&
         inScope(runOwner(run), scope, me)
     );
-    const container = taskById.get(progress.epicId);
+    const container = taskById.get(progress.milestoneId);
     const owner = ownerOf(container?.meta.assignee) ?? starterOf(progress);
     if (nestedRuns.length === 0 && !inScope(owner, scope, me)) continue;
     flight.push({
       kind: 'fanout',
-      key: `fanout:${progress.epicId}`,
-      taskId: progress.epicId,
+      key: `fanout:${progress.milestoneId}`,
+      taskId: progress.milestoneId,
       owner,
       container,
       progress,

@@ -249,7 +249,7 @@ export const QUEUE_FACTOR_KEYS: readonly ScoreFactorKey[] = FACTORS.map(
 
 // Whether finishing something would free *this* task — i.e. whether it counts
 // as work released. Mirrors the filters readyTasks/dispatchableTasks apply to
-// their own candidates: an epic is a container the orchestrator never starts,
+// their own candidates: a milestone is a container the orchestrator never starts,
 // and a derived task only anchors a review of someone else's artifact. Counting
 // either as freed work would inflate a blocker's unblocking value with tasks
 // nobody will ever be handed.

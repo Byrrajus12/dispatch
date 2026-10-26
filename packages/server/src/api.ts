@@ -1,5 +1,4 @@
 import {
-  ACCEPTED_KINDS,
   ASSIGNEES,
   canonicalStatus,
   ConfigError,
@@ -10,6 +9,7 @@ import {
   isDoneStatus,
   isEffortLevel,
   isValidAssignee,
+  KINDS,
   loadConfig,
   PRIORITIES,
   resolveStatusName,
@@ -250,9 +250,9 @@ import type { Messaging } from './messaging/service.js';
 import type { Note, NoteKind } from './notes.js';
 import { NOTE_KINDS, type NoteStore } from './notes.js';
 import { buildAgentSessions } from './orchestrator/agentSessions.js';
-import type { EpicEngine } from './orchestrator/epic.js';
 import type { FixLoop } from './orchestrator/fixLoop.js';
 import type { MergeQueue } from './orchestrator/mergeQueue.js';
+import type { MilestoneEngine } from './orchestrator/milestone.js';
 import type { Orchestrator } from './orchestrator/orchestrator.js';
 import type { OverseerManager } from './orchestrator/overseer.js';
 import { boardSyncDir } from './orchestrator/paths.js';
@@ -355,7 +355,7 @@ export interface ApiContext {
   // The project-assistant chat (see orchestrator/overseer.ts) — assembled
   // alongside PlanManager in index.ts against the same shared peers.
   overseerManager: OverseerManager;
-  epicEngine: EpicEngine;
+  milestoneEngine: MilestoneEngine;
   /** Who created and last wrote each task; absent in hand-built test contexts. */
   taskAuthorship?: TaskAuthorship;
   // dispatchd's own messaging engine host — messaging routes read/write
@@ -675,9 +675,7 @@ function validateTaskFields(
   { includeKind, includeBody }: { includeKind: boolean; includeBody: boolean }
 ): string | null {
   if (includeKind) {
-    // ACCEPTED_KINDS keeps the legacy `epic` valid; the store reads it as a
-    // milestone.
-    const kindError = validateEnumField(value.kind, ACCEPTED_KINDS, 'kind');
+    const kindError = validateEnumField(value.kind, KINDS, 'kind');
     if (kindError) return kindError;
   }
   if (includeBody) {
@@ -1253,7 +1251,7 @@ async function patchConfig(req: Request, ctx: ApiContext): Promise<Response> {
     patch.autoCommit = body.autoCommit;
   }
   for (const key of [
-    'epicConcurrency',
+    'milestoneConcurrency',
     'verifyTimeoutSec',
     'maxConcurrency',
     'runCostEstimateUsd',
@@ -3525,7 +3523,7 @@ async function confirmPlan(
   const sourceNoteId = ctx.planManager.get(planId).sourceNoteId;
   const result = ctx.planManager.confirm(planId, body.proposal);
   // The confirm body is the human's own text, so they wrote these tasks.
-  for (const id of [result.epicId, ...result.taskIds]) {
+  for (const id of [result.milestoneId, ...result.taskIds]) {
     const doc = id === undefined ? null : ctx.store.get(id);
     if (doc !== null) ctx.taskAuthorship?.created(doc, humanOperator(ctx));
   }
@@ -3676,19 +3674,21 @@ function overseerSpeaker(
   };
 }
 
-// The optional session body POST /api/epics/:id/dispatch and /resume share.
+// The optional session body POST /api/milestones/:id/dispatch and /resume share.
 // Only the shapes are checked here; the engine ranges the values (400 via
 // OrchestratorClientError) so the CLI and desktop see one wording.
-type EpicSessionBody = {
+type MilestoneSessionBody = {
   concurrency?: number;
   executor?: string;
   maxSpendUsd?: number | null;
   maxRuns?: number | null;
 };
 
-function parseEpicSessionBody(
+function parseMilestoneSessionBody(
   value: unknown
-): { ok: true; body: EpicSessionBody } | { ok: false; response: Response } {
+):
+  | { ok: true; body: MilestoneSessionBody }
+  | { ok: false; response: Response } {
   const raw = value as {
     concurrency?: unknown;
     executor?: unknown;
@@ -3731,20 +3731,20 @@ function parseEpicSessionBody(
   };
 }
 
-async function startEpic(
+async function startMilestone(
   req: Request,
   ctx: ApiContext,
-  epicId: string
+  milestoneId: string
 ): Promise<Response> {
   const parsed = await readJsonBodyOptional(req);
   if (!parsed.ok) return parsed.response;
-  const checked = parseEpicSessionBody(parsed.value);
+  const checked = parseMilestoneSessionBody(parsed.value);
   if (!checked.ok) return checked.response;
   // The caller, never the body: their teammates' tasks stay theirs. Only a
   // human credential (the owner's only as the app token) gives the auto-fill
   // runs someone to act for.
   const operator = humanOperator(ctx);
-  const session = await ctx.epicEngine.start(epicId, {
+  const session = await ctx.milestoneEngine.start(milestoneId, {
     ...checked.body,
     startedBy: requestActor(ctx),
     ...(operator === null ? {} : { operator }),
@@ -3752,26 +3752,26 @@ async function startEpic(
   return jsonResponse(session, 201);
 }
 
-// POST /api/epics/:id/pause — bodyless; live runs keep going, no new ones
+// POST /api/milestones/:id/pause — bodyless; live runs keep going, no new ones
 // start until /resume.
-function pauseEpic(ctx: ApiContext, epicId: string): Response {
-  return jsonResponse(ctx.epicEngine.pause(epicId));
+function pauseMilestone(ctx: ApiContext, milestoneId: string): Response {
+  return jsonResponse(ctx.milestoneEngine.pause(milestoneId));
 }
 
-// POST /api/epics/:id/resume — optionally re-ceilings the session on the way
+// POST /api/milestones/:id/resume — optionally re-ceilings the session on the way
 // back to `active`; `executor` is fixed for the session's life so it is
 // dropped here even when sent. The session now acts for whoever resumed it.
-async function resumeEpic(
+async function resumeMilestone(
   req: Request,
   ctx: ApiContext,
-  epicId: string
+  milestoneId: string
 ): Promise<Response> {
   const parsed = await readJsonBodyOptional(req);
   if (!parsed.ok) return parsed.response;
-  const checked = parseEpicSessionBody(parsed.value);
+  const checked = parseMilestoneSessionBody(parsed.value);
   if (!checked.ok) return checked.response;
   const { concurrency, maxSpendUsd, maxRuns } = checked.body;
-  const session = await ctx.epicEngine.resume(epicId, {
+  const session = await ctx.milestoneEngine.resume(milestoneId, {
     concurrency,
     maxSpendUsd,
     maxRuns,
@@ -3780,21 +3780,24 @@ async function resumeEpic(
   return jsonResponse(session);
 }
 
-// POST /api/epics/:id/land — the one action that takes a finished epic
+// POST /api/milestones/:id/land — the one action that takes a finished milestone
 // branch to the default base: a PR through PrManager when the project has
 // the `pr` capability (and the branch actually carries commits to PR),
 // a local merge otherwise. All readiness validation — the partially-done
-// refusal above all — lives in Orchestrator.epicLandStatus, which both
+// refusal above all — lives in Orchestrator.milestoneLandStatus, which both
 // paths run; its typed errors map through handleApi's outer catch.
-async function landEpic(ctx: ApiContext, epicId: string): Promise<Response> {
-  const status = ctx.orchestrator.epicLandStatus(epicId);
+async function landMilestone(
+  ctx: ApiContext,
+  milestoneId: string
+): Promise<Response> {
+  const status = ctx.orchestrator.milestoneLandStatus(milestoneId);
   if (ctx.prCapability && status.hasChanges) {
-    const prUrl = await ctx.prManager.openEpicPr(epicId);
+    const prUrl = await ctx.prManager.openMilestonePr(milestoneId);
     return jsonResponse({ mode: 'pr', prUrl }, 201);
   }
-  // No remote/gh — or nothing to PR at all (a no-commits epic still needs
+  // No remote/gh — or nothing to PR at all (a no-commits milestone still needs
   // closing out, which the local path handles without a merge).
-  const result = ctx.orchestrator.landEpicLocally(epicId);
+  const result = ctx.orchestrator.landMilestoneLocally(milestoneId);
   return jsonResponse({ mode: 'merge', mergeCommit: result.mergeCommit });
 }
 
@@ -3999,7 +4002,7 @@ async function addInbox(req: Request, ctx: ApiContext): Promise<Response> {
     return errorResponse(400, 'text contained no capturable lines');
   }
   ctx.events.broadcast({ type: 'inbox.changed' });
-  // The kind, epic and duplicate reading lands a moment later, off the
+  // The kind, milestone and duplicate reading lands a moment later, off the
   // request: the row must appear the instant it is typed.
   ctx.inboxTriage.request();
   return jsonResponse(created, 201);
@@ -4039,7 +4042,7 @@ async function convertInbox(req: Request, ctx: ApiContext): Promise<Response> {
   if (ids.length === 0) return errorResponse(400, 'ids is required');
 
   const items = new Map(ctx.inboxStore.list().map((i) => [i.id, i]));
-  // The triage's reading of each item, when it has one: a confident epic
+  // The triage's reading of each item, when it has one: a confident milestone
   // becomes the new task's parent, and the strongest duplicate that is a
   // real task is reported back — never a refusal, a person asked for this.
   const triage = new InboxTriageSnapshotStore(ctx.rootDir).load();
@@ -4070,8 +4073,9 @@ async function convertInbox(req: Request, ctx: ApiContext): Promise<Response> {
       const description = restLines.join('\n').trim();
       const reading = triage?.items[id];
       const parent =
-        reading?.epicId != null && ctx.cache.isContainer(reading.epicId)
-          ? reading.epicId
+        reading?.milestoneId != null &&
+        ctx.cache.isContainer(reading.milestoneId)
+          ? reading.milestoneId
           : null;
       const duplicateOf = reading?.duplicates.find(
         (d) => ctx.cache.get(d.id) !== null
@@ -4116,7 +4120,7 @@ async function convertInbox(req: Request, ctx: ApiContext): Promise<Response> {
 // context — which files it touches, what the code does today, what "done"
 // means — so this asks the planner to go read the repo and spend that
 // research on ONE task that keeps the note's original intent, rather than the
-// epic-plus-breakdown a free-form plan prompt invites. The surrounding
+// milestone-plus-breakdown a free-form plan prompt invites. The surrounding
 // planner wrapper (planners/claude.ts) supplies the read-only framing and the
 // output schema; this only supplies the request.
 function buildNoteEnrichPrompt(note: Note): string {
@@ -4128,7 +4132,7 @@ function buildNoteEnrichPrompt(note: Note): string {
     note.body.trim() === '' ? null : `Notes: ${note.body.trim()}`,
     'Read enough of this repository to ground it: which files and functions ' +
       'are actually involved, what the code does today, and what would have ' +
-      'to change. Then propose exactly ONE task, and no epic. Keep the ' +
+      'to change. Then propose exactly ONE task, and no milestone. Keep the ' +
       "original intent — sharpen the title, don't replace the request — and " +
       'write a description that gives an implementing agent the context this ' +
       'one-liner is missing, naming concrete paths where you found them. ' +
@@ -4222,7 +4226,7 @@ export function buildTaskEnrichPrompt(task: TaskDoc, a2a = false): string {
       : `Its current description and criteria:\n\n${a2a ? untrustedFenced('an A2A client wrote this', existing) : existing}`,
     'Read enough of this repository to ground it: which files and functions are actually ' +
       'involved, what the code does today, and what would have to change. Then propose exactly ' +
-      "ONE task, and no epic, keeping this task's title and intent. " +
+      "ONE task, and no milestone, keeping this task's title and intent. " +
       'PRESERVE everything already written that is still correct — you are adding the context ' +
       "this task is missing, not rewriting someone else's specification. Name concrete paths " +
       'where you found them. Acceptance criteria should be checkable statements about the ' +
@@ -6662,62 +6666,62 @@ export async function handleApi(
       }
     }
 
-    if (segments[0] === 'epics') {
-      // Bulk progress sits at /api/epics/progress, so it must be matched
-      // before the /:id/... branches would read `progress` as an epic id.
+    if (segments[0] === 'milestones') {
+      // Bulk progress sits at /api/milestones/progress, so it must be matched
+      // before the /:id/... branches would read `progress` as a milestone id.
       if (
         segments.length === 2 &&
         segments[1] === 'progress' &&
         method === 'GET'
       ) {
-        return jsonResponse(ctx.epicEngine.progressAll());
+        return jsonResponse(ctx.milestoneEngine.progressAll());
       }
       if (
         segments.length === 3 &&
         segments[2] === 'dispatch' &&
         method === 'POST'
       ) {
-        return await startEpic(req, ctx, segments[1]);
+        return await startMilestone(req, ctx, segments[1]);
       }
       if (
         segments.length === 3 &&
         segments[2] === 'pause' &&
         method === 'POST'
       ) {
-        return pauseEpic(ctx, segments[1]);
+        return pauseMilestone(ctx, segments[1]);
       }
       if (
         segments.length === 3 &&
         segments[2] === 'resume' &&
         method === 'POST'
       ) {
-        return await resumeEpic(req, ctx, segments[1]);
+        return await resumeMilestone(req, ctx, segments[1]);
       }
       if (
         segments.length === 3 &&
         segments[2] === 'stop' &&
         method === 'POST'
       ) {
-        return jsonResponse(ctx.epicEngine.stop(segments[1]));
+        return jsonResponse(ctx.milestoneEngine.stop(segments[1]));
       }
       if (
         segments.length === 3 &&
         segments[2] === 'progress' &&
         method === 'GET'
       ) {
-        return jsonResponse(ctx.epicEngine.progress(segments[1]));
+        return jsonResponse(ctx.milestoneEngine.progress(segments[1]));
       }
       if (
         segments.length === 3 &&
         segments[2] === 'land' &&
         method === 'POST'
       ) {
-        return await landEpic(ctx, segments[1]);
+        return await landMilestone(ctx, segments[1]);
       }
-      // The epic branch's diff against the default base — served from the
+      // The milestone branch's diff against the default base — served from the
       // land-time snapshot once the branch itself is gone.
       if (segments.length === 3 && segments[2] === 'diff' && method === 'GET') {
-        return jsonResponse(ctx.orchestrator.epicDiff(segments[1]));
+        return jsonResponse(ctx.orchestrator.milestoneDiff(segments[1]));
       }
     }
 

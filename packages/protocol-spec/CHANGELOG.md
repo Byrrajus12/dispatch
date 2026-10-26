@@ -6,6 +6,12 @@ vector ids (see §14.2).
 
 ## Unreleased
 
+- [breaking] The Dispatch profile calls its grouping work item a milestone, not
+  an epic: the implicit channel is `channel:milestone/<id>`, its members the
+  work items whose parent is that milestone, and `memory_save` takes `milestone`
+  where it took `epic` (App. B, App. C). Vectors:
+  `env.address.dispatch-grammar-admits-milestone-ids`, renamed from its epic
+  name.
 - [editorial] Appendix F lists a draft op type, `a2a`, for teammate links: a
   sealed, prunable A2A payload on a link's own log, which a replica drops when
   it finds one on a team's log (§F.1). The appendix is informative, so no vector

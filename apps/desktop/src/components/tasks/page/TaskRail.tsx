@@ -314,14 +314,15 @@ export function TaskRail({
       liveTaskIds,
       model: page.statusModel,
       concurrency:
-        project.epicProgressById.get(meta.id)?.session?.concurrency ?? null,
+        project.milestoneProgressById.get(meta.id)?.session?.concurrency ??
+        null,
       withFinishedRun: tasksWithFinishedRun(project.runs),
     });
   }, [
     page.children,
     page.statusModel,
     project.runs,
-    project.epicProgressById,
+    project.milestoneProgressById,
     meta.id,
   ]);
 

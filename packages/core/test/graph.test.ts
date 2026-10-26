@@ -68,10 +68,10 @@ describe('readyTasks', () => {
     expect(ids).not.toContain('t-b00000');
     expect(ids).not.toContain('t-o00000'); // not todo
   });
-  it('excludes epics and non-todo statuses', () => {
-    const epic = make({ id: 'e-100000', kind: 'milestone' });
+  it('excludes milestones and non-todo statuses', () => {
+    const milestone = make({ id: 'e-100000', kind: 'milestone' });
     const review = make({ id: 't-200000', status: 'review' });
-    expect(readyTasks([epic, review])).toEqual([]);
+    expect(readyTasks([milestone, review])).toEqual([]);
   });
   it('excludes any task with children, whatever its kind', () => {
     const parent = make({ id: 't-300000' });

@@ -19,9 +19,9 @@ export interface OrchestratorConfig {
   verifyTimeoutSec: number;
   maxBudgetUsd?: number;
   permissionMode: string;
-  epicConcurrency: number;
-  /** Hard ceiling on concurrent runs any one epic session may hold, capped at
-   *  `MAX_CONCURRENCY_HARD_CAP`. `epicConcurrency` must not exceed it. */
+  milestoneConcurrency: number;
+  /** Hard ceiling on concurrent runs any one milestone session may hold, capped at
+   *  `MAX_CONCURRENCY_HARD_CAP`. `milestoneConcurrency` must not exceed it. */
   maxConcurrency: number;
   /** What the spend gate charges for a run still in flight, before its real
    *  cost is known. */
@@ -808,7 +808,7 @@ export function executorModels(
 export interface ConfigPatch {
   verifyCommand?: string | null;
   autoCommit?: boolean;
-  epicConcurrency?: number;
+  milestoneConcurrency?: number;
   verifyTimeoutSec?: number;
   maxConcurrency?: number;
   runCostEstimateUsd?: number;

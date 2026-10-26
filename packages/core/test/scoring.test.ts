@@ -62,10 +62,10 @@ describe('rankTasks candidate set', () => {
     const blocker = make({ id: 't-aaaaaa', status: 'working' });
     const blocked = make({ id: 't-bbbbbb', blockedBy: ['t-aaaaaa'] });
     const free = make({ id: 't-cccccc' });
-    const epic = make({ id: 'e-dddddd', kind: 'milestone' });
+    const milestone = make({ id: 'e-dddddd', kind: 'milestone' });
     const backlog = make({ id: 't-eeeeee', status: 'draft' });
 
-    const ranked = rankTasks([blocker, blocked, free, epic, backlog], {
+    const ranked = rankTasks([blocker, blocked, free, milestone, backlog], {
       weights: DEFAULT_QUEUE_WEIGHTS,
       now: NOW,
     });
@@ -248,12 +248,12 @@ describe('unblocking factor', () => {
       'unblocks 1 of 1 downstream task'
     );
   });
-  // An epic is a container the orchestrator never starts, and a derived task
+  // A milestone is a container the orchestrator never starts, and a derived task
   // only anchors a review of someone else's artifact. Counting either as freed
   // work inflates a blocker with tasks nobody will ever be handed.
-  it('does not count epics or derived tasks as freed work', () => {
+  it('does not count milestones or derived tasks as freed work', () => {
     const root = make({ id: 't-aaaaaa' });
-    const epic = make({
+    const milestone = make({
       id: 'e-bbbbbb',
       kind: 'milestone',
       blockedBy: ['t-aaaaaa'],
@@ -264,7 +264,7 @@ describe('unblocking factor', () => {
       blockedBy: ['t-aaaaaa'],
     });
 
-    const [entry] = rankTasks([root, epic, derived], {
+    const [entry] = rankTasks([root, milestone, derived], {
       weights: only('unblocking'),
       now: NOW,
     });

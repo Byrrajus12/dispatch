@@ -26,7 +26,6 @@ import type {
   ApiClient,
   AuthTier,
   DraftRecord,
-  EpicProgress,
   ExecutorsResponse,
   FixLoopState,
   HealthPayload,
@@ -43,6 +42,7 @@ import type {
   LinearViewer,
   MergeQueueSnapshot,
   Message,
+  MilestoneProgress,
   PlanRecord,
   PresenceEntry,
   ReadinessReading,
@@ -99,8 +99,6 @@ import {
 import type { DecisionItem } from '../lib/decisionFeed';
 import { fetchDecisions, isDecisionsChanged } from '../lib/decisionFeed';
 import { isFakeExecutorDevToolEnabled } from '../lib/devTools';
-import type { WorkEpicOptions } from '../lib/epicSession';
-import { epicPausedNotice } from '../lib/epicSession';
 import { fixLoopCappedNotice } from '../lib/fixLoopStatus';
 import type { RunQuestion, RunScopeRequest } from '../lib/gates';
 import {
@@ -124,6 +122,8 @@ import {
 } from '../lib/inbox';
 import { applyLabelColors } from '../lib/labelColor';
 import { memoryQueryRootKey } from '../lib/memory';
+import type { WorkMilestoneOptions } from '../lib/milestoneSession';
+import { milestonePausedNotice } from '../lib/milestoneSession';
 import { resolveExecuteModel } from '../lib/models';
 import { notify, setNotificationKinds } from '../lib/notifications';
 import {
@@ -185,8 +185,8 @@ const NO_GATES: Message[] = [];
 const MAX_PATCHED_TASKS = 20;
 // Coalesces a burst of `task.changed` events into one refetch per query.
 const TASK_REFRESH_DEBOUNCE_MS = 250;
-// Coalesces the run, epic and task events that move fan-out progress into one refetch.
-const EPIC_REFRESH_DEBOUNCE_MS = 250;
+// Coalesces the run, milestone and task events that move fan-out progress into one refetch.
+const MILESTONE_REFRESH_DEBOUNCE_MS = 250;
 
 // Drops an answered gate from the cached open list at once, so its card goes
 // before the refetch lands and cannot send a second answer to a closed gate.
@@ -489,12 +489,12 @@ export interface DispatchProjectData {
     | undefined;
   readyIds: Set<string>;
   blockedIds: Set<string>;
-  epics: TaskListItem[];
-  epicProgressById: Map<string, EpicProgress>;
-  /** The epics with a fan-out session that is `active` or `paused` right now
+  milestones: TaskListItem[];
+  milestoneProgressById: Map<string, MilestoneProgress>;
+  /** The milestones with a fan-out session that is `active` or `paused` right now
    * — what the live rail groups under and the status strip sums ceilings
    * over. Order follows the bulk progress response. */
-  liveEpicSessions: EpicProgress[];
+  liveMilestoneSessions: MilestoneProgress[];
   liveRunStateByTaskId: Map<string, RunState>;
   latestRunByTaskId: Map<string, RunMeta>;
   /** Tasks whose latest run needs a human right now (waiting on approval/question, failed,
@@ -580,7 +580,7 @@ export interface DispatchProjectData {
   handleUpdateConfig: (patch: {
     verifyCommand?: string | null;
     autoCommit?: boolean;
-    epicConcurrency?: number;
+    milestoneConcurrency?: number;
     maxConcurrency?: number;
     runCostEstimateUsd?: number;
     verifyTimeoutSec?: number;
@@ -757,25 +757,25 @@ export interface DispatchProjectData {
   handlePublishRun: (runId: string) => Promise<void>;
   handleRequestChanges: (runId: string, text: string) => Promise<void>;
   handleOpenPr: (runId: string) => Promise<void>;
-  /** Starts a fan-out session on an epic. A bare number is the pre-fan-out
+  /** Starts a fan-out session on a milestone. A bare number is the pre-fan-out
    * form, `{ concurrency }` with no ceilings — kept until every caller passes
    * options (Parked). */
-  handleWorkEpic: (
-    epicId: string,
-    opts: number | WorkEpicOptions
+  handleWorkMilestone: (
+    milestoneId: string,
+    opts: number | WorkMilestoneOptions
   ) => Promise<void>;
   /** Stops a session filling; live runs finish. Resume picks it back up. */
-  handlePauseEpic: (epicId: string) => Promise<void>;
+  handlePauseMilestone: (milestoneId: string) => Promise<void>;
   /** Resumes a paused session, optionally with new ceilings or concurrency —
    * `null` lifts a ceiling, `undefined` keeps the session's value. */
-  handleResumeEpic: (
-    epicId: string,
-    opts?: Partial<WorkEpicOptions>
+  handleResumeMilestone: (
+    milestoneId: string,
+    opts?: Partial<WorkMilestoneOptions>
   ) => Promise<void>;
-  handleStopEpic: (epicId: string) => Promise<void>;
-  /** Lands a finished epic branch on the default base — one PR or one local
+  handleStopMilestone: (milestoneId: string) => Promise<void>;
+  /** Lands a finished milestone branch on the default base — one PR or one local
    * merge, decided server-side off the project's `pr` capability. */
-  handleLandEpic: (epicId: string) => Promise<void>;
+  handleLandMilestone: (milestoneId: string) => Promise<void>;
   // Task 6: enqueue/dequeue a run in the merge queue. Both let the server's
   // 404/409 (unknown run, not terminal, already reviewed, already queued, or
   // "can't remove the actively-processing entry") propagate as a thrown
@@ -957,8 +957,8 @@ export function useDispatchProject(
     () => ['dispatch-review', port, selectedRunId],
     [port, selectedRunId]
   );
-  const epicProgressKeyPrefix = useMemo(
-    () => ['dispatch-epic-progress', port],
+  const milestoneProgressKeyPrefix = useMemo(
+    () => ['dispatch-milestone-progress', port],
     [port]
   );
   const mergeQueueQueryKey = useMemo(
@@ -1507,16 +1507,18 @@ export function useDispatchProject(
   // Every container: a container kind, or any task with children.
   // The same array while it holds the same containers: every list row takes it, so a
   // copy per task change (a dispatch, a patch) redrew them all.
-  const epicsRef = useRef<TaskListItem[]>([]);
-  const epics = useMemo(() => {
+  const milestonesRef = useRef<TaskListItem[]>([]);
+  const milestones = useMemo(() => {
     const all = tasks ?? [];
     const parentIds = parentIdsOf(all);
     const next = all.filter((t) => isContainer(t.meta, parentIds));
-    return sameItems(epicsRef.current, next) ? epicsRef.current : next;
+    return sameItems(milestonesRef.current, next)
+      ? milestonesRef.current
+      : next;
   }, [tasks]);
   useEffect(() => {
-    epicsRef.current = epics;
-  }, [epics]);
+    milestonesRef.current = milestones;
+  }, [milestones]);
 
   // Task 9: the archived subset of the archived-inclusive query.
   const archivedTasks = useMemo(
@@ -1542,30 +1544,30 @@ export function useDispatchProject(
     [runs, archivedTaskIds, showArchived]
   );
 
-  // One GET for every epic's progress rather than one per epic: the prefix
-  // is invalidated on every run/epic change, and a fan-out of dozens of
+  // One GET for every milestone's progress rather than one per milestone: the prefix
+  // is invalidated on every run/milestone change, and a fan-out of dozens of
   // milestones made that a burst of dozens of requests each time.
-  const { data: allEpicProgress } = useQuery({
-    queryKey: [...epicProgressKeyPrefix, 'all'],
+  const { data: allMilestoneProgress } = useQuery({
+    queryKey: [...milestoneProgressKeyPrefix, 'all'],
     queryFn: () => {
       if (client === null) throw new Error('dispatchd client not ready');
-      return client.fetchAllEpicProgress();
+      return client.fetchAllMilestoneProgress();
     },
     enabled: client !== null,
   });
-  const epicProgressById = useMemo(() => {
-    const map = new Map<string, EpicProgress>();
-    for (const progress of allEpicProgress ?? []) {
-      map.set(progress.epicId, progress);
+  const milestoneProgressById = useMemo(() => {
+    const map = new Map<string, MilestoneProgress>();
+    for (const progress of allMilestoneProgress ?? []) {
+      map.set(progress.milestoneId, progress);
     }
     return map;
-  }, [allEpicProgress]);
-  const liveEpicSessions = useMemo(
+  }, [allMilestoneProgress]);
+  const liveMilestoneSessions = useMemo(
     () =>
-      (allEpicProgress ?? []).filter(
+      (allMilestoneProgress ?? []).filter(
         (p) => p.session?.state === 'active' || p.session?.state === 'paused'
       ),
-    [allEpicProgress]
+    [allMilestoneProgress]
   );
 
   // Read through a ref, so a new judge callback never reopens the socket.
@@ -1581,17 +1583,19 @@ export function useDispatchProject(
     // here: a daemon write to it broadcasts `config.changed`, and a pull or a
     // reconnect refetches it below.
     let listTimer: ReturnType<typeof setTimeout> | null = null;
-    let epicTimer: ReturnType<typeof setTimeout> | null = null;
-    const refreshEpicProgress = () => {
-      if (epicTimer !== null) return;
-      epicTimer = setTimeout(() => {
-        epicTimer = null;
-        void queryClient.invalidateQueries({ queryKey: epicProgressKeyPrefix });
-      }, EPIC_REFRESH_DEBOUNCE_MS);
+    let milestoneTimer: ReturnType<typeof setTimeout> | null = null;
+    const refreshMilestoneProgress = () => {
+      if (milestoneTimer !== null) return;
+      milestoneTimer = setTimeout(() => {
+        milestoneTimer = null;
+        void queryClient.invalidateQueries({
+          queryKey: milestoneProgressKeyPrefix,
+        });
+      }, MILESTONE_REFRESH_DEBOUNCE_MS);
     };
     // Tasks changed unseen, so readings may have too.
     const refetchTaskList = () => {
-      refreshEpicProgress();
+      refreshMilestoneProgress();
       readinessRef.current.scheduleJudge();
       if (listTimer !== null) return;
       listTimer = setTimeout(() => {
@@ -1625,7 +1629,7 @@ export function useDispatchProject(
         client.fetchTask(id).then(
           (doc) => {
             const list = cachedList();
-            if (touchesFanout(list, id, doc.meta)) refreshEpicProgress();
+            if (touchesFanout(list, id, doc.meta)) refreshMilestoneProgress();
             readinessRef.current.noteTask(
               list?.find((t) => t.meta.id === id)?.meta,
               doc
@@ -1637,7 +1641,8 @@ export function useDispatchProject(
               refetchTaskList();
               return;
             }
-            if (touchesFanout(cachedList(), id, null)) refreshEpicProgress();
+            if (touchesFanout(cachedList(), id, null))
+              refreshMilestoneProgress();
             queryClient.setQueryData<TaskListItem[]>(tasksQueryKey, (old) =>
               old === undefined ? old : removeTaskListItem(old, id)
             );
@@ -1765,7 +1770,7 @@ export function useDispatchProject(
           void queryClient.invalidateQueries({
             queryKey: ['dispatch-run', port],
           });
-          refreshEpicProgress();
+          refreshMilestoneProgress();
           // Every worktree/branch lifecycle event (dispatch, review, and the
           // branch actions themselves) broadcasts run.changed, so this is the
           // one signal the Branches surface needs.
@@ -1921,28 +1926,28 @@ export function useDispatchProject(
               target: { kind: 'task', taskId: event.taskId },
             },
           ]);
-        } else if (event.type === 'epic.changed') {
+        } else if (event.type === 'milestone.changed') {
           // A session started, paused, resumed, stopped, completed or filled
           // a batch — the bulk progress query is the one reader.
-          refreshEpicProgress();
-        } else if (event.type === 'epic.paused') {
-          refreshEpicProgress();
+          refreshMilestoneProgress();
+        } else if (event.type === 'milestone.paused') {
+          refreshMilestoneProgress();
           // A session that paused itself needs a human to resume or raise
           // the ceiling — a toast plus a durable inbox row, worded from the
           // event's own numbers so neither waits on the refetch above.
           const liveTasks =
             queryClient.getQueryData<TaskListItem[]>(tasksQueryKey);
-          const epicTitle =
-            liveTasks?.find((t) => t.meta.id === event.epicId)?.meta.title ??
-            event.epicId;
-          const notice = epicPausedNotice(epicTitle, event);
+          const milestoneTitle =
+            liveTasks?.find((t) => t.meta.id === event.milestoneId)?.meta
+              .title ?? event.milestoneId;
+          const notice = milestonePausedNotice(milestoneTitle, event);
           void notify(notice.title, notice.body);
           onRecordInbox([
             {
               ts: new Date().toISOString(),
               title: notice.title,
               body: notice.body,
-              target: { kind: 'task', taskId: event.epicId },
+              target: { kind: 'task', taskId: event.milestoneId },
             },
           ]);
         } else if (event.type === 'config.changed') {
@@ -2098,7 +2103,7 @@ export function useDispatchProject(
     });
     return () => {
       if (listTimer !== null) clearTimeout(listTimer);
-      if (epicTimer !== null) clearTimeout(epicTimer);
+      if (milestoneTimer !== null) clearTimeout(milestoneTimer);
       disconnect();
     };
   }, [
@@ -2113,7 +2118,7 @@ export function useDispatchProject(
     draftsQueryKey,
     agentSessionsQueryKey,
     inboxQueryKey,
-    epicProgressKeyPrefix,
+    milestoneProgressKeyPrefix,
     mergeQueueQueryKey,
     landingQueryKey,
     branchesQueryKey,
@@ -2573,67 +2578,83 @@ export function useDispatchProject(
     [client, queryClient, runsQueryKey, port]
   );
 
-  const handleWorkEpic = useCallback(
-    async (epicId: string, opts: number | WorkEpicOptions): Promise<void> => {
+  const handleWorkMilestone = useCallback(
+    async (
+      milestoneId: string,
+      opts: number | WorkMilestoneOptions
+    ): Promise<void> => {
       if (client === null) return;
       const { concurrency, maxSpendUsd, maxRuns } =
         typeof opts === 'number' ? { concurrency: opts } : opts;
       // The same opt-in the task page's hidden fake control uses: a fan-out
       // against a DISPATCH_ENABLE_FAKES daemon runs scripted agents, not Claude.
       const executor = isFakeExecutorDevToolEnabled() ? 'fake' : undefined;
-      await client.startEpic(epicId, {
+      await client.startMilestone(milestoneId, {
         concurrency,
         maxSpendUsd,
         maxRuns,
         executor,
       });
-      void queryClient.invalidateQueries({ queryKey: epicProgressKeyPrefix });
+      void queryClient.invalidateQueries({
+        queryKey: milestoneProgressKeyPrefix,
+      });
       void queryClient.invalidateQueries({ queryKey: runsQueryKey });
     },
-    [client, queryClient, epicProgressKeyPrefix, runsQueryKey]
+    [client, queryClient, milestoneProgressKeyPrefix, runsQueryKey]
   );
 
-  const handlePauseEpic = useCallback(
-    async (epicId: string): Promise<void> => {
+  const handlePauseMilestone = useCallback(
+    async (milestoneId: string): Promise<void> => {
       if (client === null) return;
-      await client.pauseEpic(epicId);
-      void queryClient.invalidateQueries({ queryKey: epicProgressKeyPrefix });
+      await client.pauseMilestone(milestoneId);
+      void queryClient.invalidateQueries({
+        queryKey: milestoneProgressKeyPrefix,
+      });
       void queryClient.invalidateQueries({ queryKey: runsQueryKey });
     },
-    [client, queryClient, epicProgressKeyPrefix, runsQueryKey]
+    [client, queryClient, milestoneProgressKeyPrefix, runsQueryKey]
   );
 
   // Runs refetch too: a resume fills the queue straight away.
-  const handleResumeEpic = useCallback(
-    async (epicId: string, opts?: Partial<WorkEpicOptions>): Promise<void> => {
+  const handleResumeMilestone = useCallback(
+    async (
+      milestoneId: string,
+      opts?: Partial<WorkMilestoneOptions>
+    ): Promise<void> => {
       if (client === null) return;
-      await client.resumeEpic(epicId, opts ?? {});
-      void queryClient.invalidateQueries({ queryKey: epicProgressKeyPrefix });
+      await client.resumeMilestone(milestoneId, opts ?? {});
+      void queryClient.invalidateQueries({
+        queryKey: milestoneProgressKeyPrefix,
+      });
       void queryClient.invalidateQueries({ queryKey: runsQueryKey });
     },
-    [client, queryClient, epicProgressKeyPrefix, runsQueryKey]
+    [client, queryClient, milestoneProgressKeyPrefix, runsQueryKey]
   );
 
-  const handleStopEpic = useCallback(
-    async (epicId: string): Promise<void> => {
+  const handleStopMilestone = useCallback(
+    async (milestoneId: string): Promise<void> => {
       if (client === null) return;
-      await client.stopEpic(epicId);
-      void queryClient.invalidateQueries({ queryKey: epicProgressKeyPrefix });
+      await client.stopMilestone(milestoneId);
+      void queryClient.invalidateQueries({
+        queryKey: milestoneProgressKeyPrefix,
+      });
     },
-    [client, queryClient, epicProgressKeyPrefix]
+    [client, queryClient, milestoneProgressKeyPrefix]
   );
 
-  // Lands a finished epic branch on the default base — one PR or one local
+  // Lands a finished milestone branch on the default base — one PR or one local
   // merge, decided server-side. Tasks refetch because a local land flips the
-  // epic to done immediately (the PR path flips it later, off the poller).
-  const handleLandEpic = useCallback(
-    async (epicId: string): Promise<void> => {
+  // milestone to done immediately (the PR path flips it later, off the poller).
+  const handleLandMilestone = useCallback(
+    async (milestoneId: string): Promise<void> => {
       if (client === null) return;
-      await client.landEpic(epicId);
+      await client.landMilestone(milestoneId);
       void queryClient.invalidateQueries({ queryKey: tasksQueryKey });
-      void queryClient.invalidateQueries({ queryKey: epicProgressKeyPrefix });
+      void queryClient.invalidateQueries({
+        queryKey: milestoneProgressKeyPrefix,
+      });
     },
-    [client, queryClient, tasksQueryKey, epicProgressKeyPrefix]
+    [client, queryClient, tasksQueryKey, milestoneProgressKeyPrefix]
   );
 
   // Task 6: enqueue a terminal, unreviewed run into the merge queue. The
@@ -2867,7 +2888,7 @@ export function useDispatchProject(
     async (patch: {
       verifyCommand?: string | null;
       autoCommit?: boolean;
-      epicConcurrency?: number;
+      milestoneConcurrency?: number;
       maxConcurrency?: number;
       runCostEstimateUsd?: number;
       verifyTimeoutSec?: number;
@@ -3085,9 +3106,9 @@ export function useDispatchProject(
       health,
       readyIds,
       blockedIds,
-      epics,
-      epicProgressById,
-      liveEpicSessions,
+      milestones,
+      milestoneProgressById,
+      liveMilestoneSessions,
       liveRunStateByTaskId,
       latestRunByTaskId,
       attentionByTaskId,
@@ -3134,11 +3155,11 @@ export function useDispatchProject(
       handlePublishRun,
       handleRequestChanges,
       handleOpenPr,
-      handleWorkEpic,
-      handlePauseEpic,
-      handleResumeEpic,
-      handleStopEpic,
-      handleLandEpic,
+      handleWorkMilestone,
+      handlePauseMilestone,
+      handleResumeMilestone,
+      handleStopMilestone,
+      handleLandMilestone,
       handleEnqueueMerge,
       handleEnqueueMergeStack,
       handleDequeueMerge,
@@ -3221,9 +3242,9 @@ export function useDispatchProject(
       health,
       readyIds,
       blockedIds,
-      epics,
-      epicProgressById,
-      liveEpicSessions,
+      milestones,
+      milestoneProgressById,
+      liveMilestoneSessions,
       liveRunStateByTaskId,
       latestRunByTaskId,
       attentionByTaskId,
@@ -3268,11 +3289,11 @@ export function useDispatchProject(
       handlePublishRun,
       handleRequestChanges,
       handleOpenPr,
-      handleWorkEpic,
-      handlePauseEpic,
-      handleResumeEpic,
-      handleStopEpic,
-      handleLandEpic,
+      handleWorkMilestone,
+      handlePauseMilestone,
+      handleResumeMilestone,
+      handleStopMilestone,
+      handleLandMilestone,
       handleEnqueueMerge,
       handleEnqueueMergeStack,
       handleDequeueMerge,
