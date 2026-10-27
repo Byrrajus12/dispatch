@@ -115,9 +115,11 @@ import {
 import type { InboxEntryDraft, InboxState } from '../lib/inbox';
 import {
   addEntries,
+  clearEntries,
   loadInbox,
   markAllRead,
   markRead,
+  removeEntry,
   saveInbox,
 } from '../lib/inbox';
 import { applyLabelColors } from '../lib/labelColor';
@@ -813,6 +815,10 @@ export interface DispatchProjectData {
   markNotificationInboxRead: () => void;
   /** Flips one entry to read — the Inbox page selecting a notification row. */
   markNotificationRead: (id: string) => void;
+  /** Drops one notification entry. */
+  dismissNotification: (id: string) => void;
+  /** Drops every notification entry. */
+  clearNotifications: () => void;
 }
 
 /**
@@ -902,6 +908,17 @@ export function useDispatchProject(
     },
     [updateNotificationInbox]
   );
+
+  const dismissNotification = useCallback(
+    (id: string) => {
+      updateNotificationInbox((prev) => removeEntry(prev, id));
+    },
+    [updateNotificationInbox]
+  );
+
+  const clearNotifications = useCallback(() => {
+    updateNotificationInbox((prev) => clearEntries(prev));
+  }, [updateNotificationInbox]);
 
   const {
     data: connection,
@@ -3172,6 +3189,8 @@ export function useDispatchProject(
       notificationInbox,
       markNotificationInboxRead,
       markNotificationRead,
+      dismissNotification,
+      clearNotifications,
 
       inbox: inbox ?? [],
       handleCaptureInbox,
@@ -3305,6 +3324,8 @@ export function useDispatchProject(
       notificationInbox,
       markNotificationInboxRead,
       markNotificationRead,
+      dismissNotification,
+      clearNotifications,
       inbox,
       handleCaptureInbox,
       handleDismissInbox,

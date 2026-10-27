@@ -93,6 +93,7 @@ import {
 import { useGlobalKeyboard } from './hooks/useGlobalKeyboard';
 import { useOverseerSession } from './hooks/useOverseerSession';
 import { useSavedViews } from './hooks/useSavedViews';
+import { useSidePanelNotifications } from './hooks/useSidePanelNotifications';
 import { tasksKey } from './hooks/useTaskDoc';
 import {
   threadListsKey,
@@ -123,6 +124,12 @@ import { mentions, subjectOf } from './lib/conversationScope';
 import { type DecisionItem, decisionTarget } from './lib/decisionFeed';
 import { draftTrayViewModel } from './lib/draftTray';
 import { formTaskInput, guideProvider } from './lib/firstTaskGuide';
+import {
+  dismissPosts,
+  readDismissedPosts,
+  visiblePosts,
+  writeDismissedPosts,
+} from './lib/forYouDismissed';
 import type { InboxEntry, InboxTarget } from './lib/inbox';
 import { projectViewForInboxTarget, unreadCount } from './lib/inbox';
 import { liveCeilingsOf, spendToday } from './lib/liveSpend';
@@ -991,7 +998,11 @@ function App() {
     notificationInbox,
     markNotificationInboxRead,
     markNotificationRead,
+    dismissNotification,
+    clearNotifications,
   } = data;
+  const [sidePanelNotifications, setSidePanelNotifications] =
+    useSidePanelNotifications();
 
   // Every label in use across the project — the create dialog's Labels picker candidates.
   const labelCatalogue = useMemo(() => {
@@ -1897,7 +1908,19 @@ function App() {
     }
     return out;
   }, [data.me, mailbox]);
-  const posts = useMemo(
+  const forYouRoot = activeProject?.path ?? null;
+  const [dismissedPosts, setDismissedPosts] = useState(() =>
+    readDismissedPosts(forYouRoot)
+  );
+  useEffect(() => {
+    setDismissedPosts(readDismissedPosts(forYouRoot));
+  }, [forYouRoot]);
+  const dismissForYou = (dismissed: readonly Post[]) => {
+    const next = dismissPosts(dismissedPosts, dismissed, Date.now());
+    writeDismissedPosts(forYouRoot, next);
+    setDismissedPosts(next);
+  };
+  const allPosts = useMemo(
     () =>
       data.me === null
         ? []
@@ -1911,6 +1934,10 @@ function App() {
             now: Date.now(),
           }),
     [data.me, mailbox, myTaskIds, followedRooms]
+  );
+  const posts = useMemo(
+    () => visiblePosts(allPosts, dismissedPosts),
+    [allPosts, dismissedPosts]
   );
   const captures = useMemo(() => openCaptures(data.inbox), [data.inbox]);
   // An agent or narrator door: Tasks on a task, a milestone or a preset.
@@ -1928,8 +1955,12 @@ function App() {
   const [overseerFocus, setOverseerFocus] = useState<OverseerFocus | null>(
     null
   );
+  // A run address names its task, so a run's post reads as the work it is on.
   const addressName = (address: string) =>
     data.people.find((p) => p.ref === address)?.name ??
+    (address.startsWith('run:')
+      ? data.runs.find((r) => r.id === address.slice('run:'.length))?.taskTitle
+      : undefined) ??
     address.replace(/^(human|a2a|run|agent):/, '');
   // Messages to me not yet read, the quiet count beside "threads".
   const unreadToMe = (mailbox ?? []).filter(
@@ -2093,12 +2124,17 @@ function App() {
             }
             draftsCount={draftTrayViewModel(data.drafts).badgeCount}
             notifications={
-              <NotificationsSection
-                entries={notificationInbox.entries}
-                unreadCount={unreadCount(notificationInbox)}
-                onMarkAllRead={markNotificationInboxRead}
-                onOpen={openNotification}
-              />
+              sidePanelNotifications && (
+                <NotificationsSection
+                  entries={notificationInbox.entries}
+                  unreadCount={unreadCount(notificationInbox)}
+                  onMarkAllRead={markNotificationInboxRead}
+                  onOpen={openNotification}
+                  onDismiss={dismissNotification}
+                  onClearAll={clearNotifications}
+                  onHide={() => setSidePanelNotifications(false)}
+                />
+              )
             }
             outflow={{
               sessions: data.liveMilestoneSessions,
@@ -2226,6 +2262,8 @@ function App() {
                   label={addressName}
                   onOpen={openPost}
                   onReply={replyToPost}
+                  onDismiss={(post) => dismissForYou([post])}
+                  onClearAll={dismissForYou}
                   holding={overseerTurnLive(overseer)}
                 />
                 <CapturedNotes
