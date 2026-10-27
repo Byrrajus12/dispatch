@@ -4,10 +4,12 @@ import { buildOp, verifyEntry } from '../../src/federation/chain.js';
 import type { ChainHead } from '../../src/federation/chain.js';
 import {
   CONTENT_TYPES,
+  contentKeyRequest,
   decryptContent,
   encryptContent,
   generateContentKey,
   isContentEnvelope,
+  isContentKeyRequest,
   runTag,
 } from '../../src/federation/content.js';
 import type { ContentEnvelope } from '../../src/federation/content.js';
@@ -173,5 +175,52 @@ describe('team content', () => {
     expect(op.sealed).toBeUndefined();
     expect(verifyEntry(head, op, keys.signPub).ok).toBe(true);
     expect(decryptContent(op, key)).toEqual({ kind: 'run', run: 'run-1' });
+  });
+
+  it('carries wants in the clear on replica presence only', () => {
+    const wants = ['a'.repeat(64)];
+    const replica = encryptContent({
+      replica: REPLICA,
+      seq: 3,
+      type: 'presence',
+      body: { kind: 'replica', caps: ['relay'] },
+      epoch: EPOCH,
+      key,
+      wants,
+    });
+    expect(replica.wants).toEqual(wants);
+    expect(replica.caps).toEqual(['relay']);
+    const run = encryptContent({
+      replica: REPLICA,
+      seq: 4,
+      type: 'presence',
+      body: { kind: 'run', run: 'r' },
+      epoch: EPOCH,
+      key,
+      wants,
+    });
+    expect(run.wants).toBeUndefined();
+    expect(isContentKeyRequest(replica)).toBe(false);
+  });
+
+  it('asks for keys with a hint-only envelope that never decrypts', () => {
+    const ask = contentKeyRequest({
+      epoch: EPOCH,
+      caps: ['relay'],
+      wants: [EPOCH],
+    });
+    expect(isContentEnvelope(ask)).toBe(true);
+    expect(isContentKeyRequest(ask)).toBe(true);
+    expect(ask).toMatchObject({
+      kind: 'replica',
+      caps: ['relay'],
+      wants: [EPOCH],
+    });
+    expect(() =>
+      decryptContent(
+        { replica: REPLICA, seq: 5, type: 'presence', body: ask },
+        key
+      )
+    ).toThrow();
   });
 });

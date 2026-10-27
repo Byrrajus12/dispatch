@@ -5,10 +5,12 @@ export type { ChainHead } from './chain.js';
 export {
   CONTENT_TYPES,
   contentAad,
+  contentKeyRequest,
   decryptContent,
   encryptContent,
   generateContentKey,
   isContentEnvelope,
+  isContentKeyRequest,
   runTag,
   TEAM_CONTENT_KEY_BYTES,
 } from './content.js';

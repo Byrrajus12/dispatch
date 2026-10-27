@@ -30,6 +30,7 @@ export type ContentEnvelope = {
   kind?: string; // presence: its kind, which the relay's retention reads
   run?: string; // presence: runTag of its run id, so retention still groups by run
   caps?: string[]; // replica presence: what its build speaks
+  wants?: string[]; // replica presence: epochs whose key its machine lacks
 };
 
 // One epoch's key, as a sealed `state` op's grant payload carries it.
@@ -75,16 +76,20 @@ function checkKey(key: Buffer): void {
     );
 }
 
-// The clear fields presence keeps for the relay's retention: kind, a tagged run, caps.
+type Hints = Pick<ContentEnvelope, 'kind' | 'run' | 'caps' | 'wants'>;
+
+// The clear fields presence keeps for the relay's retention: kind, a tagged
+// run, and on replica presence its caps and the epochs it wants.
 function hintsOf(
   type: string,
   body: JsonValue,
-  key: Buffer
-): Pick<ContentEnvelope, 'kind' | 'run' | 'caps'> {
+  key: Buffer,
+  wants: readonly string[] | undefined
+): Hints {
   if (type !== 'presence' || typeof body !== 'object' || body === null)
     return {};
   if (Array.isArray(body)) return {};
-  const hints: Pick<ContentEnvelope, 'kind' | 'run' | 'caps'> = {};
+  const hints: Hints = {};
   if (typeof body.kind === 'string') hints.kind = body.kind;
   if (typeof body.run === 'string') hints.run = runTag(key, body.run);
   if (
@@ -93,6 +98,8 @@ function hintsOf(
     body.caps.every((c) => typeof c === 'string')
   )
     hints.caps = body.caps;
+  if (body.kind === 'replica' && wants !== undefined && wants.length > 0)
+    hints.wants = [...wants];
   return hints;
 }
 
@@ -105,6 +112,8 @@ export function encryptContent(input: {
   body: JsonValue;
   epoch: string;
   key: Buffer;
+  /** Replica presence only: epochs this machine lacks, in the clear. */
+  wants?: readonly string[];
 }): ContentEnvelope {
   if (!CONTENT_TYPES.has(input.type))
     throw new RangeError(`a ${input.type} op is not team content`);
@@ -121,8 +130,30 @@ export function encryptContent(input: {
     epoch: input.epoch,
     nonce: b64u(nonce),
     ct: b64u(ct),
-    ...hintsOf(input.type, input.body, input.key),
+    ...hintsOf(input.type, input.body, input.key, input.wants),
   };
+}
+
+// A replica presence from a machine that holds no key for the current epoch:
+// clear hints only, no ciphertext, so it can still ask for the keys it wants.
+export function contentKeyRequest(input: {
+  epoch: string;
+  caps?: readonly string[];
+  wants: readonly string[];
+}): ContentEnvelope {
+  return {
+    e2e: 1,
+    epoch: input.epoch,
+    nonce: '',
+    ct: '',
+    kind: 'replica',
+    ...(input.caps === undefined ? {} : { caps: [...input.caps] }),
+    wants: [...input.wants],
+  };
+}
+
+export function isContentKeyRequest(body: unknown): boolean {
+  return isContentEnvelope(body) && body.ct === '' && body.kind === 'replica';
 }
 
 // The original body of a content op. Throws when its body is no envelope, or
