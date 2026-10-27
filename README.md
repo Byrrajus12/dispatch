@@ -435,6 +435,33 @@ tasks themselves. Findings, ledger entries, notes and run evidence stay on the
 machine that made them, and so do attachment files, although the task still
 lists them.
 
+### What the relay can read
+
+A team made with `dispatch team start` syncs through the relay at
+relay.dispatch.foo, or over a git branch with `--git`. Messages between
+teammates are always sealed to their recipients' machines. The rest of the
+team's content (the board, team memory, team docs, presence and agents) is
+readable by the relay until an admin turns on end-to-end encryption:
+
+    dispatch team encrypt          # on or off, and what still blocks it
+    dispatch team encrypt --on     # turn it on for the whole team, after a confirm
+
+The same is under **Settings → Members → End-to-end encryption**. It needs every
+teammate on a Dispatch build that reads encrypted content, and the window for
+older builds closed (`dispatch team advanced close-legacy`). From then on that
+content travels encrypted under team keys only the team's machines hold, and
+each removal from the team starts a new key. It cannot be turned off.
+
+What it does not cover:
+
+- Anything published before you turned it on stays readable on the relay. Board
+  history is never pruned; starting a new team is the only way to purge it.
+- A removed teammate keeps what they already received.
+- One key covers everything until the next removal, so there is no forward
+  secrecy within it.
+- The relay still sees who published each change, when, its type and size, and
+  the roster with the team's license key.
+
 ### Keeping the audit log off the machine
 
 The receipt log (every task, finding, decision and piece of run evidence, as
