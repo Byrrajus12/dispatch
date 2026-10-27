@@ -2399,6 +2399,25 @@ interface TransportHealth {
   url?: string;
 }
 
+/** Mirrors ContentE2eStatus in packages/server/src/team/federation/content.ts:
+ *  what `GET /api/team/content-e2e` answers, at the decide tier. */
+export interface ContentE2eStatus {
+  on: boolean;
+  /** The switch's op hash, or null while off. */
+  since: string | null;
+  /** When the switch was signed (ISO), or null while off. */
+  sinceAt: string | null;
+  /** The epoch new content goes under, or null while off. */
+  current: string | null;
+  /** Every epoch, oldest first, and whether this machine holds its key. */
+  epochs: { epoch: string; held: boolean }[];
+  /** Epochs whose key this machine lacks. */
+  missing: string[];
+  /** Members and invitees whose build does not speak content-e2e yet. */
+  lacking: { replica: string; handle: string }[];
+  legacyClosed: boolean;
+}
+
 /** Mirrors TeamKeys in packages/server/src/team/federation/teamKeys.ts. */
 export interface TeamKeys {
   machine: {
@@ -3655,6 +3674,12 @@ export interface ApiClient {
     /** Sent only in the relay registration the switch makes; never kept. */
     registrationToken?: string;
   }): Promise<RosterAnswer>;
+  /** Whether team content is e2e, which keys this machine holds, and which
+   *  machines lack the cap. */
+  getContentE2e(): Promise<ContentE2eStatus>;
+  /** An admin turns on e2e team content, for good; refused (409) while a
+   *  machine lacks the cap or the legacy window is open. */
+  enableContentE2e(): Promise<ContentE2eStatus & RosterAnswer>;
   /** FW-R8: takes an op no build reads out of every fold. */
   dismissRosterOp(
     replica: string,
@@ -4663,6 +4688,8 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
       teamPost(target, rosterPath(replica, 'hosts'), { hosts }),
     closeLegacy: () => teamPost(target, '/api/team/close-legacy', {}),
     switchTransport: (body) => teamPost(target, '/api/team/transport', body),
+    getContentE2e: () => request(target, '/api/team/content-e2e'),
+    enableContentE2e: () => teamPost(target, '/api/team/content-e2e', {}),
     dismissRosterOp: (replica, seq, hash) =>
       teamPost(target, '/api/team/dismiss', { replica, seq, hash }),
     abandonInvite: () => teamPost(target, '/api/team/abandon-invite', {}),

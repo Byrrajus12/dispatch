@@ -162,6 +162,17 @@ describe('events mirror dispatchd', () => {
   });
 });
 
+describe('team types mirror dispatchd', () => {
+  it('ContentE2eStatus declares the fields GET /api/team/content-e2e answers', () => {
+    const server = fields(
+      serverSource('team', 'federation', 'content.ts'),
+      'ContentE2eStatus'
+    );
+    expect(server).toContain('lacking');
+    expect(fields(clientSource(), 'ContentE2eStatus')).toEqual(server);
+  });
+});
+
 describe('run types mirror dispatchd', () => {
   it('NormalizedEntry declares the same fields with the same optionality', () => {
     const server = fields(

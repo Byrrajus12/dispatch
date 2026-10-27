@@ -36,6 +36,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTaskComments } from '../../../hooks/useTaskComments';
 import { useTaskDoc } from '../../../hooks/useTaskDoc';
 import { useTeamOn } from '../../../hooks/useTeamOn';
+import { describeError } from '../../../lib/actionFeedback';
 import { parseActivity } from '../../../lib/activityFeed';
 import type { TaskTab } from '../../../lib/appNav';
 import { liveClaimsFrom } from '../../../lib/dispatchPreview';
@@ -168,11 +169,6 @@ function TeamPresenceLine({
       {line}
     </p>
   );
-}
-
-function errorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return typeof err === 'string' ? err : 'Something went wrong.';
 }
 
 // Which rail picker each single-key command opens.
@@ -448,7 +444,7 @@ function TaskPageLoaded({
 
   const fail = useCallback(
     (title: string, err: unknown) => {
-      toasts.push({ title, description: errorMessage(err), tone: 'error' });
+      toasts.push({ title, description: describeError(err), tone: 'error' });
     },
     [toasts]
   );
