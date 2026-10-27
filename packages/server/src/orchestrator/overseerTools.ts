@@ -1,6 +1,9 @@
 import {
+  isCanceledStatus,
+  isCompletedStatus,
   isDoneStatus,
   notificationKindForMessage,
+  resolveStatusName,
   untrustedFenced,
   untrustedInline,
   untrustedVerbatim,
@@ -270,6 +273,20 @@ function requireTask(ctx: OverseerToolContext, taskId: string): TaskDoc {
   const doc = ctx.cache.get(taskId) ?? ctx.store.get(taskId);
   if (doc === null) throw new OverseerToolError(`task not found: ${taskId}`);
   return doc;
+}
+
+// A status as one of the board's defined names: exact, then case-insensitive,
+// then a legacy alias, then a built-in word read through statusRoles.
+function requireStatus(ctx: OverseerToolContext, raw: string): string {
+  const model = statusModelFor(ctx.store.rootDir);
+  const known = model.definitions.map((d) => d.name);
+  const resolved = resolveStatusName(raw, known, model);
+  if (resolved === null) {
+    throw new OverseerToolError(
+      `unknown status ${JSON.stringify(raw)} (expected ${known.join('|')})`
+    );
+  }
+  return resolved;
 }
 
 function requireRun(ctx: OverseerToolContext, runId: string): RunMeta {
@@ -740,7 +757,7 @@ const milestoneStatusTool: OverseerStatusTool<
 > = {
   name: 'milestone_status',
   description:
-    "Each milestone's direct tasks counted by status, with landed out of the total (dropped tasks excluded).",
+    "Each milestone's direct tasks counted by status, with completed (as `landed`) out of the total (canceled tasks excluded).",
   inputSchema: milestoneStatusInput,
   read(ctx, input) {
     const items = ctx.cache.allItems();
@@ -752,21 +769,27 @@ const milestoneStatusTool: OverseerStatusTool<
     if (input.milestoneId !== undefined && milestones.length === 0) {
       throw new OverseerToolError(`milestone not found: ${input.milestoneId}`);
     }
+    // By status type, so a board on its tracker's names (Done, Canceled)
+    // counts the same as one on the built-ins.
+    const model = statusModelFor(ctx.store.rootDir);
     return {
       milestones: milestones.map((milestone) => {
         const counts: Record<string, number> = {};
+        let landed = 0;
+        let total = 0;
         for (const item of items) {
           if (item.meta.parent !== milestone.meta.id) continue;
-          counts[item.meta.status] = (counts[item.meta.status] ?? 0) + 1;
+          const status = item.meta.status;
+          counts[status] = (counts[status] ?? 0) + 1;
+          if (isCanceledStatus(status, model)) continue;
+          total += 1;
+          if (isCompletedStatus(status, model)) landed += 1;
         }
-        const total = Object.entries(counts)
-          .filter(([status]) => status !== 'dropped')
-          .reduce((sum, [, n]) => sum + n, 0);
         return {
           id: milestone.meta.id,
           title: safeTitle(milestone.meta.title),
           status: milestone.meta.status,
-          landed: counts.landed ?? 0,
+          landed,
           total,
           byStatus: counts,
         };
@@ -1459,7 +1482,12 @@ const updateTaskInput = z
   .strictObject({
     taskId: z.string().describe('The task (t-…) to change.'),
     title: z.string().min(1).optional(),
-    status: z.string().optional().describe("One of the project's statuses."),
+    status: z
+      .string()
+      .optional()
+      .describe(
+        "One of the project's statuses, matched case-insensitively; a built-in word (landed, working, draft, …) maps through statusRoles."
+      ),
     priority: PRIORITY.optional(),
     blockedBy: z
       .array(z.string())
@@ -1482,16 +1510,8 @@ const updateTask: OverseerMutatingTool<z.infer<typeof updateTaskInput>> = {
   inputSchema: updateTaskInput,
   describe(ctx, input) {
     const doc = requireTask(ctx, input.taskId);
-    if (input.status !== undefined) {
-      const known = statusModelFor(ctx.store.rootDir).definitions.map(
-        (d) => d.name
-      );
-      if (!known.includes(input.status)) {
-        throw new OverseerToolError(
-          `unknown status ${JSON.stringify(input.status)} (expected ${known.join('|')})`
-        );
-      }
-    }
+    const status =
+      input.status === undefined ? undefined : requireStatus(ctx, input.status);
     for (const id of input.blockedBy ?? []) {
       if (id === doc.meta.id) {
         throw new OverseerToolError('a task cannot wait on itself');
@@ -1500,9 +1520,7 @@ const updateTask: OverseerMutatingTool<z.infer<typeof updateTaskInput>> = {
     }
     const changes = [
       input.title === undefined ? null : `title → "${safeTitle(input.title)}"`,
-      input.status === undefined
-        ? null
-        : `status ${doc.meta.status} → ${input.status}`,
+      status === undefined ? null : `status ${doc.meta.status} → ${status}`,
       input.priority === undefined
         ? null
         : `priority ${doc.meta.priority} → ${input.priority}`,
@@ -1515,7 +1533,9 @@ const updateTask: OverseerMutatingTool<z.infer<typeof updateTaskInput>> = {
   apply(ctx, input) {
     requireTasks(ctx).update(input.taskId, {
       ...(input.title !== undefined ? { title: input.title } : {}),
-      ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(input.status !== undefined
+        ? { status: requireStatus(ctx, input.status) }
+        : {}),
       ...(input.priority !== undefined ? { priority: input.priority } : {}),
       ...(input.blockedBy !== undefined ? { blockedBy: input.blockedBy } : {}),
     });

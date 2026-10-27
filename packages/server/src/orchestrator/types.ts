@@ -343,6 +343,12 @@ export const TERMINAL_RUN_STATES: ReadonlySet<RunState> = new Set([
   'interrupted-dirty',
 ]);
 
+// The reason stamped onto every run reconcileOnBoot force-fails. The run's
+// agent did nothing wrong — dispatchd lost track of it across a restart — and
+// the process itself survives a daemon restart, so it may still be working.
+export const BOOT_FORCE_FAIL_ERROR =
+  'dispatchd restarted while this run was in flight; the agent process may still be running';
+
 // What survived a run that did not finish cleanly, read straight from its
 // worktree's git status — recovery info instead of a hand inspection.
 export interface RunSurvey {
@@ -535,6 +541,42 @@ export type DecoratedRunMeta = RunMeta & {
 // before `kind` existed.
 export function runKind(meta: Pick<RunMeta, 'kind'>): RunKind {
   return meta.kind ?? 'execute';
+}
+
+// Whether a run ended the way that moves its task to review: a finish or a
+// failure the daemon recorded. A cancel leaves the task as it is, and so does
+// a run force-failed at boot, whose agent may still be working.
+export function runEndedForReview(
+  run: Pick<RunMeta, 'state' | 'error'>
+): boolean {
+  if (!TERMINAL_RUN_STATES.has(run.state) || run.state === 'cancelled') {
+    return false;
+  }
+  return run.error !== BOOT_FORCE_FAIL_ERROR;
+}
+
+// Tasks whose newest execute run ended for review (runEndedForReview): when
+// the review status is also the dispatched one, this is what says the work is
+// up for review.
+export function tasksWithFinishedRun(
+  runs: readonly Pick<
+    RunMeta,
+    'taskId' | 'kind' | 'state' | 'createdAt' | 'error'
+  >[]
+): Set<string> {
+  const newest = new Map<string, (typeof runs)[number]>();
+  for (const run of runs) {
+    if (runKind(run) !== 'execute') continue;
+    const seen = newest.get(run.taskId);
+    if (seen === undefined || run.createdAt > seen.createdAt) {
+      newest.set(run.taskId, run);
+    }
+  }
+  const out = new Set<string>();
+  for (const [taskId, run] of newest) {
+    if (runEndedForReview(run)) out.add(taskId);
+  }
+  return out;
 }
 
 // The human a run acts for; null means no one. Runs from before the field

@@ -57,7 +57,10 @@ import {
 } from '../../../lib/linearSettings';
 import { presenceLine } from '../../../lib/remotePresence';
 import { criteriaItems } from '../../../lib/reviewCriteria';
-import { isTerminalRunState } from '../../../lib/runState';
+import {
+  isTerminalRunState,
+  tasksWithFinishedRun,
+} from '../../../lib/runState';
 import { useStatusModelOf } from '../../../lib/statusModel';
 import { dueDateInfo } from '../../../lib/taskDates';
 import { parseTaskSections } from '../../../lib/taskDisplay';
@@ -379,9 +382,17 @@ function TaskPageLoaded({
   const runs = useMemo(() => executeRuns(allRuns), [allRuns]);
   const latestRun = runs[0];
   const model = useStatusModelOf(project.config);
+  const finishedRuns = useMemo(
+    () => tasksWithFinishedRun(project.runs),
+    [project.runs]
+  );
+  const finishedRun = useCallback(
+    (id: string) => finishedRuns.has(id),
+    [finishedRuns]
+  );
   const unmet = useMemo(
-    () => unmetBlockers(item, tasksById, model),
-    [item, tasksById, model]
+    () => unmetBlockers(item, tasksById, model, finishedRun),
+    [item, tasksById, model, finishedRun]
   );
   const stateInput = {
     statusType: statusType(meta.status, model),
@@ -506,6 +517,7 @@ function TaskPageLoaded({
     liveRun: runs.find((r) => !isTerminalRunState(r.state)),
     reading: project.readinessById.get(taskId),
     liveClaims,
+    finishedRun,
   });
   // A container goes out from its plan, never as one run.
   const canDispatch = !container && readiness.canDispatch;
@@ -534,6 +546,7 @@ function TaskPageLoaded({
     children,
     tasksById,
     unmetBlockers: unmet,
+    finishedRun,
     readiness,
     statusModel: model,
     patch,

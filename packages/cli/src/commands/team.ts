@@ -16,6 +16,7 @@ import { createApiClient } from '../apiClient.js';
 import type { CliContext } from '../context.js';
 import { CliError } from '../context.js';
 import { formatTable } from '../output.js';
+import { confirmNo } from '../prompt.js';
 import {
   appTokenClient,
   attachToRunningDaemon,
@@ -197,21 +198,6 @@ async function joinConfirmingRepo(
         'Not joined. Ask whoever invited you where the board is kept, or run this again with --accept-repo.'
       );
     return await api.joinTeam(code, { confirmRepo: true });
-  }
-}
-
-// Like defaultConfirm, but no is the default: this guards a risk.
-async function confirmNo(question: string): Promise<boolean> {
-  if (process.stdin.isTTY !== true) return false;
-  process.stderr.write(`${question} [y/N] `);
-  const rl = createInterface({ input: process.stdin, terminal: false });
-  try {
-    const answer = await new Promise<string>((resolve) =>
-      rl.once('line', resolve)
-    );
-    return /^y/i.test(answer.trim());
-  } finally {
-    rl.close();
   }
 }
 

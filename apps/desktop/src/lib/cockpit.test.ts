@@ -1,5 +1,8 @@
 import type { TaskListItem } from '@dispatch-foo/core/browser';
-import { DEFAULT_STATUS_MODEL } from '@dispatch-foo/core/browser';
+import {
+  DEFAULT_STATUS_MODEL,
+  statusModelOf,
+} from '@dispatch-foo/core/browser';
 import type {
   MergeQueueEntry,
   MergeQueueEntryState,
@@ -620,4 +623,32 @@ test('formatAge reads compactly', () => {
   expect(formatAge('2026-09-23T08:00:00.000Z', now)).toBe('4h');
   expect(formatAge('2026-07-25T12:00:00.000Z', now)).toBe('60d');
   expect(formatAge('garbage', now)).toBe('—');
+});
+
+// A Linear team with no review state: review shares In Progress with dispatched.
+describe('indexCockpitTasks where review shares the dispatched status', () => {
+  test('status alone puts nothing in review', () => {
+    const model = statusModelOf({
+      statuses: ['Todo', 'In Progress', 'Done'],
+      statusDefinitions: [
+        { name: 'Todo', type: 'unstarted', color: null },
+        { name: 'In Progress', type: 'started', color: null },
+        { name: 'Done', type: 'completed', color: null },
+      ],
+      statusRoles: {
+        ready: 'Todo',
+        dispatched: 'In Progress',
+        review: 'In Progress',
+        landing: null,
+        landed: 'Done',
+        dropped: 'Done',
+      },
+    });
+    const index = indexCockpitTasks(
+      [task('t-1', { status: 'In Progress', assignee: ME })],
+      model
+    );
+    expect(index.inReview).toEqual([]);
+    expect(index.started.map((t) => t.meta.id)).toEqual(['t-1']);
+  });
 });

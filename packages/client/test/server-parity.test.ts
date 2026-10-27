@@ -432,3 +432,73 @@ describe('A2A types mirror dispatchd', () => {
     ]);
   });
 });
+
+describe('Linear types mirror dispatchd', () => {
+  // Some of these stay file-private in the daemon, so `export` is optional.
+  const fieldsOf = (source: string, name: string): string[] | null => {
+    const body = new RegExp(
+      `(?:export )?interface ${name} \\{([\\s\\S]*?)\\n\\}`
+    ).exec(source)?.[1];
+    if (body === undefined) return null;
+    return [...body.matchAll(/\n {2}(\w+\??):/g)].map((m) => m[1]);
+  };
+  const linear = (file: string): string => serverSource('linear', `${file}.ts`);
+
+  for (const [name, file] of [
+    ['LinearBulkOutcome', 'state'],
+    ['LinearCapacityState', 'state'],
+    ['LinearCoverage', 'coverage'],
+    ['LinearCoverageCounts', 'coverage'],
+    ['LinearUnlinkedTask', 'coverage'],
+    ['LinearExportPreview', 'coverage'],
+    ['LinearCapacity', 'client'],
+  ] as const) {
+    it(`${name} declares the same fields with the same optionality`, () => {
+      const server = fieldsOf(linear(file), name);
+      expect(server).not.toBeNull();
+      expect(fieldsOf(clientSource(), name)).toEqual(server);
+    });
+  }
+
+  // Fields newer than the mirror are optional on the client, for older daemons.
+  for (const [name, file] of [
+    ['LinearSyncSummary', 'reconcile'],
+    ['LinearStatus', 'sync'],
+    ['LinearProgress', 'sync'],
+  ] as const) {
+    it(`${name} declares every field the server does`, () => {
+      const bare = (f: string[] | null) => f?.map((n) => n.replace('?', ''));
+      const server = bare(fieldsOf(linear(file), name));
+      expect(server).toBeDefined();
+      expect(bare(fieldsOf(clientSource(), name))).toEqual(server);
+    });
+  }
+
+  for (const [name, server, file] of [
+    ['LinearUnlinkedReason', 'LinearUnlinkedReason', 'coverage'],
+    ['LinearExportScope', 'LinearExportScope', 'state'],
+    ['LinearBulkAction', 'BulkAction', 'sync'],
+  ] as const) {
+    it(`${name} carries the same literals as the server`, () => {
+      const pattern = (n: string) =>
+        new RegExp(`(?:export )?type ${n} =([^;]+);`);
+      const theirs = literals(linear(file), pattern(server));
+      expect(theirs).not.toBeNull();
+      expect(literals(clientSource(), pattern(name))).toEqual(theirs);
+    });
+  }
+
+  it('LinearProgress.phase carries the same phases as the server', () => {
+    const pattern = /interface LinearProgress \{\n {2}phase: ([^;]+);/;
+    const server = literals(linear('sync'), pattern);
+    expect(server).not.toBeNull();
+    expect(literals(clientSource(), pattern)).toEqual(server);
+  });
+
+  it('LINEAR_USAGE_LIMIT_MESSAGE says what the server does', () => {
+    const pattern = /export const LINEAR_USAGE_LIMIT_MESSAGE =\s*'([^']+)'/;
+    const server = pattern.exec(linear('client'))?.[1];
+    expect(server).toBeDefined();
+    expect(pattern.exec(clientSource())?.[1]).toBe(server);
+  });
+});

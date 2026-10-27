@@ -53,6 +53,7 @@ function shared(
     local: 'human:wyat',
     sessions: new Map((opts.sessions ?? []).map((p) => [p.milestoneId, p])),
     withRunBranch: new Set(),
+    withFinishedRun: new Set(),
     landing: new Map((opts.landing ?? []).map((id) => [id, 'queued'])),
   };
 }

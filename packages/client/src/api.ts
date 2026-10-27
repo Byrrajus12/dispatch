@@ -35,6 +35,7 @@ import type {
   SetupReport,
   TaskComment,
   TaskDoc,
+  TaskKind,
   TaskListItem,
   TaskRisk,
   UpdatePatch,
@@ -1215,7 +1216,8 @@ export type ServerEvent =
   // A Linear sync pass finished, carrying its own summary. Mirrors
   // packages/server/src/events.ts exactly.
   | { type: 'linear.changed'; summary: LinearSyncSummary }
-  // A long Linear pass (an import) moved on. Mirrors the server's event.
+  // A long Linear pass (an import, export, archive or retry) moved on.
+  // Mirrors the server's event.
   | { type: 'linear.progress'; progress: LinearProgress }
   // The brain-dump inbox changed — captured, retyped, dismissed or converted.
   | { type: 'inbox.changed' }
@@ -2714,8 +2716,9 @@ export interface ReceiptsResult {
   detail: string;
 }
 
-// Mirrors LinearSyncSummary in packages/server/src/linear/sync.ts: `created`
-// counts new local tasks, `createdIssues` counts new Linear issues.
+// Mirrors LinearSyncSummary in packages/server/src/linear/reconcile.ts:
+// `created` counts new local tasks, `createdIssues` counts new Linear issues.
+// The optional fields are absent from older daemons.
 export interface LinearSyncSummary {
   at: string;
   pulled: number;
@@ -2725,7 +2728,22 @@ export interface LinearSyncSummary {
   conflicts: number;
   errors: string[];
   rateLimited: boolean;
+  /** Linear refused a create over the plan's issue limit; later creates were skipped. */
+  usageLimited?: boolean;
+  /** Named creates still waiting to land after the pass. */
+  queued?: number;
+  /** Tasks whose create failed this pass. */
+  failedTaskIds?: string[];
+  /** Tasks whose status moved onto a regenerated workflow state. */
+  migrated?: number;
+  /** Closed issues archived in Linear. */
+  archivedIssues?: number;
 }
+
+/** What a usage-limit failure says. Mirrors the server's constant in
+ *  packages/server/src/linear/client.ts. */
+export const LINEAR_USAGE_LIMIT_MESSAGE =
+  'Workspace is at its issue limit — archive closed issues or upgrade';
 
 /** Display data for a linked issue, keyed by issue UUID. `TaskMeta.external` holds the UUID. */
 export interface LinearIssueLink {
@@ -2752,12 +2770,23 @@ export interface LinearStatus {
   lastError: string | null;
   lastSummary: LinearSyncSummary | null;
   syncing: boolean;
+  /** Asked for by request id: the summary that sync or import answered
+   *  with, null until its pass ends. */
+  answered?: LinearSyncSummary | null;
   /** Field conflicts resolved since the link. Absent from older daemons. */
   conflicts?: { total: number; recent: LinearConflict[] };
-  /** Set while an import is running. */
+  /** Set while an import or other long pass is running. */
   progress?: LinearProgress | null;
   /** How changes arrive: a webhook, or polling. */
   webhook?: LinearWebhookStatus;
+  /** The usage-limit pause and the counts last measured against the cap. */
+  capacity?: LinearCapacityState | null;
+  /** Which tasks have a Linear record; null while sync is off. */
+  coverage?: LinearCoverageCounts | null;
+  /** An export, archive or retry started and not yet finished. */
+  running?: { action: LinearBulkAction; startedAt: string } | null;
+  lastExport?: LinearBulkOutcome | null;
+  lastArchive?: LinearBulkOutcome | null;
 }
 
 /** One field both sides changed, and whose edit was kept. */
@@ -2768,11 +2797,151 @@ export interface LinearConflict {
   at: string;
 }
 
-/** Where a long pass has got to; `total` is null while unknown. */
+/** Where a long pass has got to. `total` is null while unknown; an absent
+ *  `action` is an import. */
 export interface LinearProgress {
-  phase: 'containers' | 'issues' | 'applying';
+  phase: 'containers' | 'issues' | 'applying' | 'creating' | 'archiving';
   done: number;
   total: number | null;
+  action?: 'import' | LinearBulkAction;
+}
+
+/** A long Linear action run in the background, reported through status. */
+export type LinearBulkAction = 'export' | 'archive' | 'retry';
+
+/** Which unlinked tasks an export sends. Mirrors packages/server/src/linear/state.ts. */
+export type LinearExportScope = 'open' | 'all' | 'all-archive-finished';
+
+/** How the last export, archive or retry run ended. Mirrors state.ts. */
+export interface LinearBulkOutcome {
+  action: 'export' | 'archive' | 'retry';
+  startedAt: string;
+  at: string;
+  scope?: LinearExportScope;
+  includeCanceled?: boolean;
+  candidates: number;
+  done: number;
+  archivedOnArrival?: number;
+  remaining: number;
+  halted: 'usage-limit' | 'rate-limit' | null;
+  /** Deduplicated, at most 5, a repeat counted: 'usage limit exceeded (x44)'. */
+  errors: string[];
+}
+
+/** The usage-limit pause, and the counts last measured against the cap. Mirrors state.ts. */
+export interface LinearCapacityState {
+  limitedAt: string | null;
+  /** Ordinary passes create nothing before this. */
+  retryAt: string | null;
+  message: string | null;
+  active: number | null;
+  limit: number | null;
+  limitSource: 'plan' | 'observed' | null;
+  plan: 'free' | 'paid' | 'trial' | 'unknown';
+  checkedAt: string | null;
+}
+
+/** The coverage counts status carries. Mirrors packages/server/src/linear/coverage.ts. */
+export interface LinearCoverageCounts {
+  total: number;
+  linked: number;
+  notLinked: number;
+  heldBack: number;
+  queued: number;
+  /** Creates that failed, the issue limit included. */
+  failed: number;
+  excluded: number;
+}
+
+/** Why an unlinked task has no Linear record, in precedence order. Mirrors coverage.ts. */
+export type LinearUnlinkedReason =
+  | 'failed'
+  | 'at-capacity'
+  | 'queued'
+  | 'moved-out'
+  | 'pull-only'
+  | 'held-back'
+  | 'pending';
+
+/** One task with no Linear record, and why. Mirrors coverage.ts. */
+export interface LinearUnlinkedTask {
+  id: string;
+  title: string;
+  kind: TaskKind;
+  status: string;
+  finished: boolean;
+  archived: boolean;
+  reason: LinearUnlinkedReason;
+  attempts: number;
+  lastError: string | null;
+  lastAttemptAt: string | null;
+  retryAt: string | null;
+}
+
+/** Which tasks have a Linear record, and why each of the rest does not. Mirrors coverage.ts. */
+export interface LinearCoverage {
+  /** Tasks that may sync: every task but derived ones. */
+  total: number;
+  linked: number;
+  notLinked: number;
+  excluded: { derived: number };
+  byEntity: {
+    issue: number;
+    project: number;
+    milestone: number;
+    initiative: number;
+  };
+  counts: Record<LinearUnlinkedReason, number>;
+  /** Failed first, then by reason, then by title. */
+  unlinked: LinearUnlinkedTask[];
+}
+
+/** How many tasks each export scope would send. Mirrors coverage.ts. */
+export interface LinearExportPreview {
+  open: number;
+  all: number;
+  allArchiveFinished: number;
+  /** Finished tasks 'all' sends, which arrive as closed issues. */
+  finished: number;
+  /** Archived tasks only 'all-archive-finished' sends. */
+  archived: number;
+  /** Derived tasks, which no scope sends. */
+  derived: number;
+  /** Tasks 'all' sends that are not plain tasks (projects, milestones,
+   *  initiatives), so most take no issue slot. */
+  containers: number;
+}
+
+/** Issue counts measured against the workspace's plan cap. Mirrors
+ *  packages/server/src/linear/client.ts. */
+export interface LinearCapacity {
+  /** Per linked team: non-archived issues, and how many of those are closed. */
+  teams: {
+    id: string;
+    key: string;
+    name: string;
+    active: number;
+    completed: number;
+    canceled: number;
+  }[];
+  /** Non-archived issues across `activeScope`; null when not measured. */
+  active: number | null;
+  activeScope: 'workspace' | 'linked-teams';
+  limit: number | null;
+  limitSource: 'plan' | 'observed' | null;
+  plan: 'free' | 'paid' | 'trial' | 'unknown';
+  limitHitAt: string | null;
+  /** A closed count stopped at its cap, so it is a floor. */
+  truncated: boolean;
+  checkedAt: string;
+}
+
+/** What starting an export, retry or archive answers: begun in the background
+ *  (progress and the outcome arrive through status), or nothing to send. */
+export interface LinearBulkStart {
+  started: boolean;
+  candidates: number;
+  startedAt?: string;
 }
 
 // Mirrors LinearWebhookStatus in packages/server/src/linear/sync.ts.
@@ -3715,6 +3884,26 @@ export interface ApiClient {
   // Creates local tasks for Linear issues that have none. An ordinary sync never
   // imports a backlog, so this is the explicit first-sync action.
   importLinearIssues(): Promise<LinearSyncSummary>;
+  // How many tasks each export scope would send. Reads the task cache only.
+  previewLinearExport(): Promise<LinearExportPreview>;
+  // Creates Linear records for the unlinked tasks `scope` covers, in the
+  // background; `running`, `progress` and `lastExport` on status report it.
+  exportToLinear(scope: LinearExportScope): Promise<LinearBulkStart>;
+  // Which tasks have a Linear record, and why the rest do not. Works disconnected.
+  fetchLinearCoverage(): Promise<LinearCoverage>;
+  // Sends the named queued creates now, or every queued one, resetting their
+  // backoff and the issue-limit pause.
+  retryLinear(taskIds?: string[]): Promise<LinearBulkStart>;
+  // Stops retrying these tasks' creates; they stay local until edited or sent by name.
+  forgetLinear(taskIds: string[]): Promise<{ forgotten: number }>;
+  // Active issues against the plan's cap. The daemon caches a measurement for a
+  // minute; `refresh` measures again.
+  fetchLinearCapacity(refresh?: boolean): Promise<LinearCapacity>;
+  // Archives the linked teams' closed issues in Linear, in the background; the
+  // linked tasks here take the archive too (decide tier).
+  archiveClosedLinearIssues(opts: {
+    includeCanceled: boolean;
+  }): Promise<LinearBulkStart>;
   fetchPlan(planId: string): Promise<PlanRecord>;
   // Send a follow-up message on an existing plan conversation. Resolves (202)
   // with the record already back in `running` — poll `fetchPlan`/watch
@@ -4639,6 +4828,35 @@ export function createApiClient(baseUrl: string, token?: string): ApiClient {
     fetchLinearLinks: () => request(target, '/api/linear/links'),
     importLinearIssues: () =>
       request(target, '/api/linear/import', { method: 'POST' }),
+    previewLinearExport: () => request(target, '/api/linear/export'),
+    exportToLinear: (scope) =>
+      request(target, '/api/linear/export', {
+        method: 'POST',
+        ...jsonBody({ scope }),
+      }),
+    fetchLinearCoverage: () => request(target, '/api/linear/coverage'),
+    retryLinear: (taskIds) =>
+      request(target, '/api/linear/retry', {
+        method: 'POST',
+        ...jsonBody(taskIds === undefined ? {} : { taskIds }),
+      }),
+    forgetLinear: (taskIds) =>
+      request(target, '/api/linear/forget', {
+        method: 'POST',
+        ...jsonBody({ taskIds }),
+      }),
+    fetchLinearCapacity: (refresh) =>
+      request(
+        target,
+        refresh === true
+          ? '/api/linear/capacity?refresh=1'
+          : '/api/linear/capacity'
+      ),
+    archiveClosedLinearIssues: ({ includeCanceled }) =>
+      request(target, '/api/linear/archive-closed', {
+        method: 'POST',
+        ...jsonBody({ includeCanceled }),
+      }),
     submitReview: (runId, verdict, body, postToGitHub = false) =>
       request(target, `/api/runs/${encodeURIComponent(runId)}/review-submit`, {
         method: 'POST',
