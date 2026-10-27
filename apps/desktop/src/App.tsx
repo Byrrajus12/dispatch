@@ -573,15 +573,27 @@ function App() {
     }),
     [toasts]
   );
+  // A board drag's status change is not a `handle*`, so it reports its own
+  // refusal (a 409 while this machine lacks the team's key, say).
+  const rawMoveTaskStatus = rawData.moveTaskStatus;
+  const moveTaskStatus = useCallback(
+    (id: string, status: string): Promise<void> =>
+      rawMoveTaskStatus(id, status).catch((err: unknown) => {
+        feedback.onError('Change status', describeError(err));
+      }),
+    [rawMoveTaskStatus, feedback]
+  );
   const data = useMemo(
-    () =>
-      withActionFeedback(
+    () => ({
+      ...withActionFeedback(
         rawData,
         feedback.onError,
         feedback.onSuccess,
         feedback.cache
       ),
-    [rawData, feedback]
+      moveTaskStatus,
+    }),
+    [rawData, feedback, moveTaskStatus]
   );
   // Settings reports its own save failures (its save line, a refusal's reason,
   // a kept draft), which the toast wrapper above would swallow first.
