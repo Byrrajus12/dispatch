@@ -2236,6 +2236,8 @@ describe('LinearSync creates a throttle cuts short', () => {
       const comments = new FileCommentStore(root);
       const doc = store.create({ title: 'Talked about' });
       comments.add({ taskId: doc.meta.id, author: 'human:me', body: 'One' });
+      // Comments go in creation order; a shared millisecond would tie them.
+      await new Promise((resolve) => setTimeout(resolve, 3));
       comments.add({ taskId: doc.meta.id, author: 'human:me', body: 'Two' });
       cache.rebuild(store);
       fake.failures.createComment = {
