@@ -89,6 +89,8 @@ function makeClient(getPlan: ApiClient['getPlan']): ApiClient {
     ackProblem: () => Promise.reject(new Error('not used')),
     resolveRunConflict: () => Promise.reject(new Error('not used')),
     switchTransport: () => Promise.reject(new Error('not used')),
+    getContentE2e: () => Promise.reject(new Error('not used')),
+    enableContentE2e: () => Promise.reject(new Error('not used')),
   };
 }
 

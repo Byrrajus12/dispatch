@@ -889,6 +889,12 @@ export interface ApiClient {
     /** Sent only in the relay registration the switch makes; never kept. */
     registrationToken?: string;
   }): Promise<RosterAnswer>;
+  /** Whether team content is e2e, which keys this machine holds, and which
+   *  machines lack the cap (decide tier). */
+  getContentE2e(): Promise<ContentE2eStatus>;
+  /** An admin turns on e2e team content, for good (operator tier); refused
+   *  while a machine lacks the cap or the legacy window is open. */
+  enableContentE2e(): Promise<ContentE2eStatus & RosterAnswer>;
 }
 
 /** The fields of @dispatch/memory's entry view the CLI prints. */
@@ -1015,6 +1021,22 @@ export interface RosterAnswer {
   pending?: boolean;
   /** The roster already showed this change; nothing new was signed. */
   already?: boolean;
+}
+
+/** Mirrors ContentE2eStatus in packages/server/src/team/federation/content.ts. */
+export interface ContentE2eStatus {
+  on: boolean;
+  /** The switch's op hash, or null while off. */
+  since: string | null;
+  /** The epoch new content goes under, or null while off. */
+  current: string | null;
+  /** Every epoch, oldest first, and whether this machine holds its key. */
+  epochs: { epoch: string; held: boolean }[];
+  /** Epochs whose key this machine lacks. */
+  missing: string[];
+  /** Members and invitees whose build does not speak content-e2e yet. */
+  lacking: { replica: string; handle: string }[];
+  legacyClosed: boolean;
 }
 
 /** Mirrors TeamKeys in packages/server/src/team/federation/teamKeys.ts. */
@@ -1371,6 +1393,9 @@ export function createApiClient(baseUrl: string, token: string): ApiClient {
       ),
     switchTransport: (body) =>
       request(target, '/api/team/transport', jsonBody(body)),
+    getContentE2e: () => request(target, '/api/team/content-e2e'),
+    enableContentE2e: () =>
+      request(target, '/api/team/content-e2e', jsonBody({})),
     revokeTeamToken: async (handle) => {
       await request(target, `/api/team/tokens/${encodeURIComponent(handle)}`, {
         method: 'DELETE',
