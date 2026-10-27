@@ -82,6 +82,8 @@ export interface RelationsEditorProps {
   tasks: readonly TaskListItem[];
   tasksById: ReadonlyMap<string, TaskListItem>;
   model: StatusModel;
+  /** Whether a task's latest run has ended; omitted, none has. */
+  finishedRun?: (id: string) => boolean;
   onPatch: (patch: UpdatePatch) => void;
   onOpenTask: (taskId: string) => void;
 }
@@ -97,6 +99,7 @@ export function RelationsEditor({
   tasks,
   tasksById,
   model,
+  finishedRun,
   onPatch,
   onOpenTask,
 }: RelationsEditorProps) {
@@ -153,7 +156,11 @@ export function RelationsEditor({
                 task={blocker}
                 dim={
                   blocker !== undefined &&
-                  isSatisfiedForDispatchStatus(blocker.meta.status, model)
+                  isSatisfiedForDispatchStatus(
+                    blocker.meta.status,
+                    model,
+                    finishedRun?.(b) ?? false
+                  )
                 }
                 onOpen={onOpenTask}
                 onRemove={() =>

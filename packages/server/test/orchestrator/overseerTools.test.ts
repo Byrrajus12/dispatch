@@ -1567,6 +1567,49 @@ describe('the agent reaches into Tasks', () => {
     ]);
   });
 
+  it('milestone_status counts by status type on a board with its own names', () => {
+    const h = makeHarness();
+    writeFileSync(
+      join(repo, '.dispatch', 'config.yml'),
+      `statuses:
+  - { name: Todo, type: unstarted }
+  - { name: In Progress, type: started }
+  - { name: Done, type: completed }
+  - { name: Canceled, type: canceled }
+  - { name: Duplicate, type: canceled }
+statusRoles:
+  ready: Todo
+  dispatched: In Progress
+  review: In Progress
+  landing: null
+  landed: Done
+  dropped: Canceled
+`
+    );
+    const milestone = h.store.create({ title: 'M1', kind: 'milestone' });
+    const statuses = ['Done', 'Done', 'In Progress', 'Canceled', 'Duplicate'];
+    for (const [i, status] of statuses.entries()) {
+      h.store.create({ title: `t${i}`, parent: milestone.meta.id, status });
+    }
+    h.cache.rebuild(h.store);
+    const out = h.registry.callStatusTool('milestone_status', {}) as {
+      milestones: {
+        id: string;
+        landed: number;
+        total: number;
+        byStatus: Record<string, number>;
+      }[];
+    };
+    expect(out.milestones).toEqual([
+      expect.objectContaining({
+        id: milestone.meta.id,
+        landed: 2,
+        total: 3,
+        byStatus: { Done: 2, 'In Progress': 1, Canceled: 1, Duplicate: 1 },
+      }),
+    ]);
+  });
+
   it('read_conversation reads only the owner’s own talk, fenced', async () => {
     const h = makeHarness();
     await withBus(h);
@@ -1781,6 +1824,49 @@ describe('the agent drives everything behind cards', () => {
     );
     await h.registry.applyAction(action.id, CONFIRMED);
     expect(h.cache.get(task.meta.id)?.meta.priority).toBe('urgent');
+  });
+
+  it('update_task reads a built-in word or any casing through the board roles', async () => {
+    const h = makeHarness();
+    writeFileSync(
+      join(repo, '.dispatch', 'config.yml'),
+      `statuses:
+  - { name: Todo, type: unstarted }
+  - { name: In Progress, type: started }
+  - { name: Done, type: completed }
+  - { name: Canceled, type: canceled }
+statusRoles:
+  ready: Todo
+  dispatched: In Progress
+  review: In Progress
+  landing: null
+  landed: Done
+  dropped: Canceled
+`
+    );
+    const task = h.store.create({ title: 'Polish', status: 'Todo' });
+    h.cache.rebuild(h.store);
+    const action = h.registry.callMutatingTool('update_task', {
+      taskId: task.meta.id,
+      status: 'landed',
+    });
+    expect(action.summary).toBe(
+      `Update ${task.meta.id} ("Polish"): status Todo → Done`
+    );
+    await h.registry.applyAction(action.id, CONFIRMED);
+    expect(h.store.get(task.meta.id)?.meta.status).toBe('Done');
+    const lower = h.registry.callMutatingTool('update_task', {
+      taskId: task.meta.id,
+      status: 'in progress',
+    });
+    expect(lower.summary).toContain('status Done → In Progress');
+    // No landing role here, so the word names no status.
+    expect(() =>
+      h.registry.callMutatingTool('update_task', {
+        taskId: task.meta.id,
+        status: 'landing',
+      })
+    ).toThrow('unknown status "landing"');
   });
 
   it('queue_merge names one run and refuses an unknown one', async () => {

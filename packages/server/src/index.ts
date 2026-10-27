@@ -171,7 +171,11 @@ import {
 } from './orchestrator/repoDigest.js';
 import { ReviewRunner } from './orchestrator/review.js';
 import { TaskAuthorship } from './orchestrator/taskAuthorship.js';
-import { runKind, TERMINAL_RUN_STATES } from './orchestrator/types.js';
+import {
+  runKind,
+  tasksWithFinishedRun,
+  TERMINAL_RUN_STATES,
+} from './orchestrator/types.js';
 import { VerificationRunner } from './orchestrator/verify.js';
 import {
   policyActivityAppender,
@@ -2182,6 +2186,7 @@ async function bootServer(
         new LinearDocsAdapter({ ...link, service: docs.service }),
       outstanding: () => docs.service.linearOutstanding(),
     },
+    finishedRuns: () => tasksWithFinishedRun(orchestrator.list()),
   });
   const unsubscribeLinear = events.subscribe((event) => {
     if (event.type === 'task.changed') linearSync.notifyTaskChanged();

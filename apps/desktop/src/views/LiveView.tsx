@@ -69,6 +69,7 @@ import { resolveLinearLink } from '../lib/linearSettings';
 import { liveCeilingsOf, spendToday } from '../lib/liveSpend';
 import type { WorkMilestoneOptions } from '../lib/milestoneSession';
 import { pendingStarts } from '../lib/optimisticDispatch';
+import { tasksWithFinishedRun } from '../lib/runState';
 import { assigneeRef } from '../lib/taskDisplay';
 import { PageHeader } from '@/ui/ai/page-header';
 import {
@@ -208,6 +209,10 @@ export function LiveView({
     () => tasksWithRunBranch(data.runs),
     [data.runs]
   );
+  const withFinishedRun = useMemo(
+    () => tasksWithFinishedRun(data.runs),
+    [data.runs]
+  );
   // A teammate's task as this window reads it: `d` never sends one, and the fan-out
   // offers never count one.
   const holderOf = useMemo(
@@ -237,6 +242,7 @@ export function LiveView({
       local: data.localHuman,
       sessions: sessionById,
       withRunBranch,
+      withFinishedRun,
       landing,
     }),
     [
@@ -248,6 +254,7 @@ export function LiveView({
       data.localHuman,
       sessionById,
       withRunBranch,
+      withFinishedRun,
       landing,
     ]
   );

@@ -25,10 +25,10 @@ import { createRunTokens } from '../../src/messaging/runTokens.js';
 import type { Messaging } from '../../src/messaging/service.js';
 import { openMessaging } from '../../src/messaging/service.js';
 import type { Orchestrator } from '../../src/orchestrator/orchestrator.js';
-import { BOOT_FORCE_FAIL_ERROR } from '../../src/orchestrator/orchestrator.js';
 import { memoryDbPath, runsDir } from '../../src/orchestrator/paths.js';
 import type { ExecutorProfile } from '../../src/orchestrator/types.js';
 import {
+  BOOT_FORCE_FAIL_ERROR,
   DEFAULT_EXECUTOR_PROFILE,
   TERMINAL_RUN_STATES,
 } from '../../src/orchestrator/types.js';

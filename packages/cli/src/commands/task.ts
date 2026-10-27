@@ -1,7 +1,6 @@
 import {
   ActorContext,
   ASSIGNEES,
-  canonicalStatus,
   childEnv,
   DISPATCH_DIR,
   KINDS,
@@ -10,12 +9,14 @@ import {
   readProjectBackend,
   readyTasks,
   resolveMilestoneRef,
+  resolveStatusName,
   serializeTaskFile,
   statusModelOf,
   TaskStore,
 } from '@dispatch-foo/core';
 import type {
   CreateInput,
+  DispatchConfig,
   GitReader,
   ListFilter,
   Priority,
@@ -35,9 +36,25 @@ import { formatTable } from '../output.js';
 import { projectRoot } from '../projectRoot.js';
 import { findRunningDaemon } from './daemon.js';
 
-// The status alias layer, tolerant of an omitted flag.
-function canonicalStatusOpt(value: string | undefined): string | undefined {
-  return value === undefined ? undefined : canonicalStatus(value);
+// A typed status as one of config.statuses: exact, then case-insensitive, then
+// a legacy alias, then a built-in word read through statusRoles (core's
+// resolveStatusName). Tolerates an omitted flag.
+function resolveStatus(
+  value: string | undefined,
+  config: DispatchConfig
+): string | undefined {
+  if (value === undefined) return undefined;
+  const resolved = resolveStatusName(
+    value,
+    config.statuses,
+    statusModelOf(config)
+  );
+  if (resolved === null) {
+    throw new CliError(
+      `invalid status: ${value} (expected ${config.statuses.join('|')})`
+    );
+  }
+  return resolved;
 }
 
 // ActorContext's GitReader seam, Node-based — mirrors server/src/index.ts's
@@ -237,11 +254,7 @@ export function registerTaskCommands(program: Command, ctx: CliContext): void {
         const input: CreateInput = {
           title,
           kind: validate(opts.kind as string, KINDS, 'kind') as TaskKind,
-          status: validate(
-            canonicalStatusOpt(opts.status as string | undefined),
-            config.statuses,
-            'status'
-          ),
+          status: resolveStatus(opts.status as string | undefined, config),
           description: opts.description as string | undefined,
           parent: (opts.parent as string | undefined) ?? null,
           priority: validate(
@@ -259,16 +272,21 @@ export function registerTaskCommands(program: Command, ctx: CliContext): void {
             milestone === undefined ? input : { ...input, milestone }
           );
         } else {
+          // Omitted, a task starts in the board's ready role, as dispatchd does.
+          const local: CreateInput = {
+            ...input,
+            status: input.status ?? statusModelOf(config).roles.ready,
+          };
           doc = route.store.create(
             milestone === undefined
-              ? input
+              ? local
               : {
-                  ...input,
+                  ...local,
                   parent: localMilestoneParent(
                     route.store,
                     milestone,
-                    input.kind ?? 'task',
-                    input.parent ?? null
+                    local.kind ?? 'task',
+                    local.parent ?? null
                   ),
                 }
           );
@@ -291,11 +309,7 @@ export function registerTaskCommands(program: Command, ctx: CliContext): void {
       const route = await resolveTaskRoute(ctx);
       const config = loadConfig(ctx.cwd);
       const query: ListFilter = {
-        status: validate(
-          canonicalStatusOpt(opts.status as string | undefined),
-          config.statuses,
-          'status'
-        ),
+        status: resolveStatus(opts.status as string | undefined, config),
         kind: validate(opts.kind as string | undefined, KINDS, 'kind'),
         parent: opts.parent as string | undefined,
       };
@@ -348,11 +362,7 @@ export function registerTaskCommands(program: Command, ctx: CliContext): void {
     .action(async (id: string, status: string) => {
       const route = await resolveTaskRoute(ctx);
       const config = loadConfig(ctx.cwd);
-      const valid = validate(
-        canonicalStatus(status),
-        config.statuses,
-        'status'
-      )!;
+      const valid = resolveStatus(status, config)!;
       const patch: UpdatePatch = {
         status: valid,
         appendActivity: `${new Date().toISOString()} status → ${valid}`,

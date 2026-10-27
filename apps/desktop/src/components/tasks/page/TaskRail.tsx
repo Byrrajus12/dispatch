@@ -14,7 +14,10 @@ import {
   pushToLinearError,
   resolveLinearLink,
 } from '../../../lib/linearSettings';
-import { isTerminalRunState } from '../../../lib/runState';
+import {
+  isTerminalRunState,
+  tasksWithFinishedRun,
+} from '../../../lib/runState';
 import { formatShortDate } from '../../../lib/taskDates';
 import { assigneeLabel, kindLabel } from '../../../lib/taskDisplay';
 import { pendingEnrichQuestions } from '../../../lib/taskEnrich';
@@ -313,6 +316,7 @@ export function TaskRail({
       concurrency:
         project.milestoneProgressById.get(meta.id)?.session?.concurrency ??
         null,
+      withFinishedRun: tasksWithFinishedRun(project.runs),
     });
   }, [
     page.children,
@@ -521,6 +525,7 @@ export function TaskRail({
             tasks={tasks}
             tasksById={page.tasksById}
             model={page.statusModel}
+            finishedRun={page.finishedRun}
             onPatch={(patch) => void page.patch(patch)}
             onOpenTask={page.openTask}
           />

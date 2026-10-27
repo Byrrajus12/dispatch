@@ -6,6 +6,7 @@ import {
   isCompletedStatus,
   isContainerKind,
   isDoneStatus,
+  isReviewStatus,
   loadConfig,
   nextSubagentStatus,
   runSettings,
@@ -115,6 +116,7 @@ import type {
   RunSurvey,
 } from './types.js';
 import {
+  BOOT_FORCE_FAIL_ERROR,
   DEFAULT_EXECUTOR_PROFILE,
   MergeEnvironmentError,
   OrchestratorClientError,
@@ -123,6 +125,7 @@ import {
   runKind,
   runLineage,
   runOperator,
+  tasksWithFinishedRun,
   TERMINAL_RUN_STATES,
 } from './types.js';
 import type { RunUsage } from './usage.js';
@@ -223,12 +226,6 @@ const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 // Minimum gap between opportunistic claims refreshes for one run — see
 // scheduleClaimsRefresh.
 const CLAIMS_REFRESH_COOLDOWN_MS = 5_000;
-
-// The reason stamped onto every run reconcileOnBoot force-fails. The run's
-// agent did nothing wrong — dispatchd lost track of it across a restart — and
-// the process itself survives a daemon restart, so it may still be working.
-export const BOOT_FORCE_FAIL_ERROR =
-  'dispatchd restarted while this run was in flight; the agent process may still be running';
 
 // Minimum gap between opportunistic orphan-work re-surveys for one run — see
 // scheduleOrphanRecheck. An orphaned agent commits on human timescales
@@ -1542,7 +1539,9 @@ export class Orchestrator {
    *
    * Only `in-review` blockers matter here: a done/cancelled blocker's work is
    * already in the base branch, and an `in-progress` blocker means the task
-   * isn't dispatchable at all (see core's dispatchableTasks).
+   * isn't dispatchable at all (see core's dispatchableTasks). Where review
+   * shares the dispatched status, a blocker is in review only once its latest
+   * run has ended.
    *
    * Two or more unmerged blockers need a base containing all of their work,
    * which only jj can express (`jj new -r A -r B`). When jj isn't available
@@ -1557,11 +1556,13 @@ export class Orchestrator {
     task: TaskDoc
   ): Promise<{ base: string; stackParents: string[] }> {
     const parents: string[] = [];
+    const model = this.statuses();
+    const finished = tasksWithFinishedRun(this.registry.list());
     for (const blockerId of task.meta.blockedBy) {
       const blocker = this.ctx.store.get(blockerId);
       if (
         blocker === null ||
-        !hasStatusRole(blocker.meta.status, 'review', this.statuses())
+        !isReviewStatus(blocker.meta.status, model, finished.has(blockerId))
       ) {
         continue;
       }

@@ -1,4 +1,4 @@
-import type { TaskDoc } from '@dispatch-foo/core';
+import type { StatusModel, TaskDoc } from '@dispatch-foo/core';
 import { describe, expect, it } from 'bun:test';
 
 import type { FixLoopState } from '../../src/orchestrator/fixLoop.js';
@@ -9,6 +9,10 @@ import {
   deriveWaves,
   summarizeWaves,
 } from '../../src/orchestrator/milestonePhase.js';
+import {
+  BOOT_FORCE_FAIL_ERROR,
+  tasksWithFinishedRun,
+} from '../../src/orchestrator/types.js';
 import type { RunMeta, RunState } from '../../src/orchestrator/types.js';
 
 function task(id: string, overrides: Partial<TaskDoc['meta']> = {}): TaskDoc {
@@ -276,6 +280,49 @@ describe('deriveChildPhase', () => {
     expect(derived.reason).toBe('waiting on t-0, t-2');
   });
 
+  it('reads a review status shared with dispatched as review only once the run ends', () => {
+    const shared: StatusModel = {
+      definitions: [
+        { name: 'Todo', type: 'unstarted', color: null },
+        { name: 'In Progress', type: 'started', color: null },
+        { name: 'Done', type: 'completed', color: null },
+        { name: 'Canceled', type: 'canceled', color: null },
+      ],
+      roles: {
+        ready: 'Todo',
+        dispatched: 'In Progress',
+        review: 'In Progress',
+        landing: null,
+        landed: 'Done',
+        dropped: 'Canceled',
+      },
+    };
+    const inProgress = task('t-1', { status: 'In Progress' });
+    const phase = (overrides: Partial<ChildPhaseInput>) =>
+      deriveChildPhase(
+        input({ task: inProgress, statuses: shared, ...overrides })
+      ).phase;
+    // A teammate's In Progress, with no run of ours behind it.
+    expect(phase({})).toBe('draft');
+    expect(
+      phase({
+        liveRun: run('r-7', 'running'),
+        latestRun: run('r-7', 'running'),
+      })
+    ).toBe('working');
+    expect(phase({ latestRun: run('r-7', 'finished') })).toBe('needs-review');
+    // The engine's own reading of the newest execute run wins.
+    expect(
+      phase({ latestRun: run('r-7', 'finished'), finishedRun: false })
+    ).toBe('draft');
+    // A run lost to a daemon restart is a failure, not work up for review.
+    expect(
+      phase({
+        latestRun: run('r-7', 'failed', { error: BOOT_FORCE_FAIL_ERROR }),
+      })
+    ).toBe('failed');
+  });
+
   it('queued when ready and dispatchable, draft otherwise', () => {
     expect(deriveChildPhase(input()).phase).toBe('queued');
     expect(
@@ -286,6 +333,46 @@ describe('deriveChildPhase', () => {
     expect(
       deriveChildPhase(input({ task: task('t-1', { status: 'draft' }) })).phase
     ).toBe('draft');
+  });
+});
+
+describe('tasksWithFinishedRun', () => {
+  it('keeps the tasks whose newest execute run has ended', () => {
+    const runs = [
+      run('r-1', 'finished', { taskId: 't-a' }),
+      // An earlier finished run, then a live re-dispatch.
+      run('r-2', 'finished', { taskId: 't-b' }),
+      run('r-3', 'running', {
+        taskId: 't-b',
+        createdAt: '2026-09-21T00:00:00Z',
+      }),
+      // A live review of finished work does not reopen it.
+      run('r-4', 'failed', { taskId: 't-c' }),
+      run('r-5', 'running', {
+        taskId: 't-c',
+        kind: 'review',
+        createdAt: '2026-09-21T00:00:00Z',
+      }),
+      run('r-6', 'running', { taskId: 't-d' }),
+    ];
+    expect([...tasksWithFinishedRun(runs)].sort()).toEqual(['t-a', 't-c']);
+  });
+
+  it('leaves out a cancel and a run force-failed at boot, which leave the task as it is', () => {
+    const runs = [
+      run('r-1', 'cancelled', { taskId: 't-a' }),
+      run('r-2', 'failed', { taskId: 't-b', error: BOOT_FORCE_FAIL_ERROR }),
+      run('r-3', 'interrupted-dirty', {
+        taskId: 't-c',
+        error: BOOT_FORCE_FAIL_ERROR,
+      }),
+      // An executor that died mid-run is moved to review like a finish.
+      run('r-4', 'interrupted-dirty', {
+        taskId: 't-d',
+        error: 'executor no longer alive',
+      }),
+    ];
+    expect([...tasksWithFinishedRun(runs)]).toEqual(['t-d']);
   });
 });
 

@@ -40,6 +40,8 @@ export interface LiveShared {
   sessions: ReadonlyMap<string, MilestoneProgress>;
   /** Tasks with a run branch a dependent can stack on (`tasksWithRunBranch`). */
   withRunBranch: ReadonlySet<string>;
+  /** Tasks whose latest run has ended (`tasksWithFinishedRun`). */
+  withFinishedRun: ReadonlySet<string>;
   /** Tasks whose run sits in the merge queue. */
   landing: ReadonlyMap<string, MergeQueueEntryState>;
 }
@@ -216,6 +218,7 @@ export function buildLiveBand(
     startedByOf: (owner) =>
       shared.sessions.get(owner)?.session?.startedBy ?? null,
     withRunBranch: shared.withRunBranch,
+    withFinishedRun: shared.withFinishedRun,
     lookup: (id) => shared.taskById.get(id),
   });
 
