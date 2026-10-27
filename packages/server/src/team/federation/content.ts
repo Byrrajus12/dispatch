@@ -2,6 +2,7 @@ import type { RosterView } from '@dispatch-foo/federation';
 import type { JsonValue } from '@dispatch-foo/protocol';
 import {
   b64u,
+  compareHlc,
   CONTENT_TYPES,
   contentKeyRequest,
   decryptContent,
@@ -14,6 +15,7 @@ import {
   isStub,
   MAX_SEALED_RECIPIENTS,
   openPayload,
+  parseOpHlc,
   runTag,
   sealPayload,
   TEAM_CONTENT_KEY_BYTES,
@@ -23,6 +25,7 @@ import type {
   ContentKeyGrant,
   FederatedOp,
   GrantPayload,
+  ParsedHlc,
 } from '@dispatch-foo/protocol/federation';
 import {
   chmodSync,
@@ -40,6 +43,7 @@ import { join } from 'node:path';
 
 import {
   capsOf,
+  CONTENT_E2E_CAP,
   forgetPresenceCaps,
   readCaps,
   recordPresenceCaps,
@@ -56,8 +60,6 @@ import type { ContentSealer, FedStore } from './store.js';
 //
 // Licensed under the Elastic License 2.0 (../LICENSE).
 
-/** The capability a build announces once it reads and writes e2e content. */
-const CONTENT_E2E_CAP = 'content-e2e';
 /** One answer to a member's `wants` per epoch in this window. */
 const WANTS_ANSWER_MS = 5 * 60 * 1000;
 const EPOCH = /^[0-9a-f]{64}$/;
@@ -124,6 +126,12 @@ export class ContentKeyring {
     this.keys.set(epoch, key);
     this.save();
     return true;
+  }
+
+  /** Puts the epoch opener's key in place of a conflicting one. */
+  replace(epoch: string, key: Buffer): void {
+    this.keys.set(epoch, key);
+    this.save();
   }
 
   // Through a synced temporary file, so a crash never leaves half a keyring.
@@ -230,7 +238,7 @@ function wantsOf(v: unknown): string[] | null {
 export class TeamContent implements Collector, ContentSealer {
   readonly order = 0;
   /** Opened ops, so a pass decrypts each once. */
-  private readonly cache = new WeakMap<FederatedOp, Opened>();
+  private cache = new WeakMap<FederatedOp, Opened>();
   /** Grant ops already taken, so a pass opens each once. */
   private readonly taken = new WeakSet<FederatedOp>();
   /** The latest wants each member's presence named. */
@@ -239,6 +247,8 @@ export class TeamContent implements Collector, ContentSealer {
   private readonly answered = new Map<string, number>();
   /** Epochs still missing when the last pass ended: what wants names. */
   private lacking: string[] = [];
+  /** The switch op's clock, read once per switch hash. */
+  private switchClock: { hash: string; hlc: ParsedHlc | null } | null = null;
 
   constructor(
     private readonly deps: {
@@ -307,11 +317,17 @@ export class TeamContent implements Collector, ContentSealer {
     }) as unknown as JsonValue;
   }
 
-  /** A verified op's body as handlers read it. A plain body passes as is:
-   *  ops from before the switch, or from a machine that has not seen it. */
+  /** A verified op's body as handlers read it. A plain body passes as is
+   *  only when stamped before the switch; after it, it is malformed. */
   open(op: FederatedOp): Opened {
-    if (!CONTENT_TYPES.has(op.type) || !isContentEnvelope(op.body))
-      return { kind: 'plain', op };
+    if (!CONTENT_TYPES.has(op.type)) return { kind: 'plain', op };
+    if (!isContentEnvelope(op.body))
+      return this.afterSwitch(op.hlc)
+        ? {
+            kind: 'malformed',
+            why: 'it is plain content sent after the team switched to end-to-end encryption',
+          }
+        : { kind: 'plain', op };
     const cached = this.cache.get(op);
     if (cached !== undefined) return cached;
     const env = op.body;
@@ -376,17 +392,64 @@ export class TeamContent implements Collector, ContentSealer {
     if (!isObj(payload) || !Array.isArray(payload.grant)) return false;
     this.taken.add(op);
     if (!standing) return true;
-    const epochs = new Set(this.epochs());
+    const view = this.deps.roster.view();
+    const epochs = new Set(view?.contentE2e?.epochs ?? []);
+    const admin = view?.members.get(op.replica)?.role === 'admin';
     let added = false;
     for (const g of payload.grant) {
       if (!isObj(g) || typeof g.epoch !== 'string' || typeof g.key !== 'string')
         continue;
       const key = keyOf(g.key);
       if (key === null || !epochs.has(g.epoch)) continue;
+      const opener = this.openerOf(g.epoch) === op.replica;
+      // Only an epoch's opener or an admin may hand out its key.
+      if (!opener && !admin) continue;
       if (this.keyring.put(g.epoch, key)) added = true;
+      else if (!key.equals(this.keyring.get(g.epoch) ?? key))
+        this.conflict(g.epoch, op.replica, key, opener);
     }
     if (added) this.deps.changed();
     return true;
+  }
+
+  // Two authorized grants disagree on an epoch's key: the opener's wins, and
+  // this machine's problems name it either way.
+  private conflict(
+    epoch: string,
+    sender: string,
+    key: Buffer,
+    opener: boolean
+  ): void {
+    if (opener) {
+      this.keyring.replace(epoch, key);
+      this.cache = new WeakMap();
+      this.deps.changed();
+    }
+    this.deps.fed.problem(
+      `content:conflict:${epoch.slice(0, 12)}`,
+      `${this.deps.roster.label(sender)} sent a different content key for epoch ${epoch.slice(0, 12)} than the one this machine held; ${opener ? 'it opened that epoch, so its key replaced the other' : 'the key already held was kept'}. A teammate's machine may be sending bad keys: check who can admit.`
+    );
+  }
+
+  // Whether an op stamped at `hlc` comes after the team's e2e switch; an
+  // unreadable clock counts as after, so a plain body is never let through.
+  private afterSwitch(hlc: string): boolean {
+    const since = this.deps.roster.view()?.contentE2e?.since ?? null;
+    if (since === null) return false;
+    if (this.switchClock?.hash !== since) {
+      const row = this.deps.fed.db
+        .query<{ hlc: string }, [string]>(
+          'SELECT hlc FROM fed_roster WHERE hash = ?'
+        )
+        .get(since);
+      this.switchClock = {
+        hash: since,
+        hlc: row === null ? null : parseOpHlc(row.hlc),
+      };
+    }
+    const at = parseOpHlc(hlc);
+    const sw = this.switchClock.hlc;
+    return at === null || sw === null || compareHlc(at, sw) > 0;
   }
 
   /** Each pass: keys for epochs this machine opened, then grants to every
@@ -399,6 +462,8 @@ export class TeamContent implements Collector, ContentSealer {
     const mine = view.members.get(this.me);
     if (mine === undefined || mine.observer) return;
     for (const epoch of epochs) this.mint(epoch);
+    // Receivers take a key only from its epoch's opener or an admin.
+    const admin = mine.role === 'admin';
     const now = this.deps.now().getTime();
     const due = new Map<string, string[]>();
     const answering: string[] = [];
@@ -408,10 +473,11 @@ export class TeamContent implements Collector, ContentSealer {
       const asked = this.asked.get(m.replica);
       const give: string[] = [];
       for (const epoch of epochs) {
-        if (!this.keyring.has(epoch)) continue;
+        const opener = this.openerOf(epoch) === this.me;
+        if (!this.keyring.has(epoch) || (!opener && !admin)) continue;
         // Only the opener of an epoch and the admitter of a member owe it.
         const owed =
-          (this.openerOf(epoch) === this.me || m.since.replica === this.me) &&
+          (opener || m.since.replica === this.me) &&
           !this.granted(m.replica, epoch);
         const ref = `${m.replica}\n${epoch}`;
         const answer =

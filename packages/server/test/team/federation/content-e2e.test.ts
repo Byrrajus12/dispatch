@@ -1,7 +1,9 @@
 import type { AgentRecord } from '@dispatch-foo/protocol';
 import {
+  b64u,
   decryptContent,
   fingerprint,
+  generateContentKey,
   isContentEnvelope,
   isStub,
   runTag,
@@ -9,6 +11,7 @@ import {
 } from '@dispatch-foo/protocol/federation';
 import type {
   ContentEnvelope,
+  ContentKeyGrant,
   FederatedOp,
   LogEntry,
 } from '@dispatch-foo/protocol/federation';
@@ -78,6 +81,28 @@ const fp = (r: MessagingReplica) =>
 // What the transport holds of a replica's log.
 const remoteLog = (r: MessagingReplica): LogEntry[] =>
   r.remote.logs.get(r.fed.replica) ?? [];
+
+// A grant this machine sends, whatever the roster says it may send.
+const plantGrant = (
+  from: MessagingReplica,
+  epoch: string,
+  to: MessagingReplica
+): void =>
+  (
+    from.service.content as unknown as {
+      publishGrant(grant: ContentKeyGrant[], replicas: string[]): void;
+    }
+  ).publishGrant(
+    [{ epoch, key: b64u(generateContentKey()) }],
+    [to.fed.replica]
+  );
+// The grant ops a machine sent to `to`.
+const grantsTo = (from: MessagingReplica, to: MessagingReplica): LogEntry[] =>
+  remoteLog(from).filter(
+    (e) => e.type === 'state' && (e.to ?? []).includes(to.fed.replica)
+  );
+const sameKey = (a: MessagingReplica, b: MessagingReplica, epoch: string) =>
+  a.fed.keyring.get(epoch)?.equals(b.fed.keyring.get(epoch) ?? Buffer.alloc(0));
 
 // A team with its legacy window closed and content switched to e2e.
 async function e2eTeam(
@@ -427,5 +452,135 @@ describe('e2e team content', () => {
     await passes(open, 2);
     expect(cy.store.get(task.meta.id)?.meta.title).toBe('seen by the observer');
     expect(remoteLog(cy).some((e) => e.type === 'state')).toBe(false);
+  });
+
+  it('ignores a key from a member that neither opened its epoch nor admits', async () => {
+    await e2eTeam(['ada', 'cy']);
+    const [ada, cy] = [at(0), at(1)];
+    const task = cy.store.create({ title: 'behind the real key' });
+    await passes(open, 2);
+    const epoch = status(ada).current ?? '';
+    const dan = await lateJoiner(ada, 'dan');
+    await passes([ada], 1);
+    const real = grantsTo(ada, dan);
+    expect(real.length).toBeGreaterThan(0);
+    for (const g of real) dan.remote.hidden.add(g);
+    // Dan asks for the key; cy, a member, answers no wants.
+    await passes([dan, cy], 2);
+    expect(grantsTo(cy, dan)).toEqual([]);
+    plantGrant(cy, epoch, dan);
+    await passes([cy, dan], 2);
+    expect(grantsTo(cy, dan).length).toBeGreaterThan(0);
+    expect(status(dan).missing).toEqual([epoch]);
+    expect(dan.store.get(task.meta.id)).toBeNull();
+    for (const g of real) dan.remote.hidden.delete(g);
+    await passes([dan], 2);
+    expect(status(dan).missing).toEqual([]);
+    expect(sameKey(dan, ada, epoch)).toBe(true);
+    expect(dan.store.get(task.meta.id)?.meta.title).toBe('behind the real key');
+  });
+
+  it('takes a key from an admin that did not open its epoch', async () => {
+    await e2eTeam(['ada', 'bob'], { admins: ['bob'] });
+    const [ada, bob] = [at(0), at(1)];
+    const epoch = status(ada).current ?? '';
+    const dan = await lateJoiner(ada, 'dan');
+    await passes([ada], 1);
+    for (const g of grantsTo(ada, dan)) dan.remote.hidden.add(g);
+    await passes([dan, bob], 3);
+    expect(grantsTo(bob, dan).length).toBeGreaterThan(0);
+    await passes([dan], 1);
+    expect(status(dan).missing).toEqual([]);
+    expect(sameKey(dan, ada, epoch)).toBe(true);
+  });
+
+  it("prefers the opener's key over an admin's conflicting one, and says so", async () => {
+    await e2eTeam(['ada', 'bob'], { admins: ['bob'] });
+    const [ada, bob] = [at(0), at(1)];
+    const epoch = status(ada).current ?? '';
+    const dan = await lateJoiner(ada, 'dan');
+    await passes([ada], 1);
+    const real = grantsTo(ada, dan);
+    for (const g of real) dan.remote.hidden.add(g);
+    await passes([bob], 1);
+    // Bob, an admin, sends dan a key of its own before dan has asked.
+    plantGrant(bob, epoch, dan);
+    await passes([bob, dan], 1);
+    expect(sameKey(dan, ada, epoch)).toBe(false);
+    for (const g of real) dan.remote.hidden.delete(g);
+    await passes([dan], 1);
+    expect(sameKey(dan, ada, epoch)).toBe(true);
+    expect(
+      dan.fed.problems().find((p) => p.subject.startsWith('content:conflict:'))
+        ?.message
+    ).toContain('opened that epoch');
+  });
+
+  it('drops plain content stamped after the switch, and keeps plain history from before it', async () => {
+    open = await foundedTeamWith(
+      { docs: true, withMemory: true },
+      'ada',
+      'bob'
+    );
+    const [ada, bob] = [at(0), at(1)];
+    ada.roster.closeLegacy();
+    const before = bob.store.create({ title: 'plain before' });
+    await passes(open);
+    expect((await ada.teamRoute('/api/team/content-e2e', {})).status).toBe(200);
+    await passes(open, 3);
+    // Bob's build sends a task in the clear after the switch.
+    const real = bob.service.content;
+    bob.fed.setContentSealer({
+      current: () => real.current(),
+      missing: () => real.missing(),
+      wants: () => real.wants(),
+      seal: (op) => op.body,
+    });
+    const after = bob.store.create({ title: 'plain after' });
+    bob.fed.setContentSealer(real);
+    await passes(open, 2);
+    const sent = remoteLog(bob).find(
+      (e): e is FederatedOp =>
+        e.type === 'task' &&
+        !isStub(e) &&
+        (e.body as { task?: string }).task === after.meta.id
+    );
+    expect(sent).toBeDefined();
+    expect(ada.store.get(after.meta.id)).toBeNull();
+    expect(
+      ada.fed
+        .problems()
+        .find((p) => p.subject === `malformed:${bob.fed.replica}`)?.message
+    ).toContain('plain content sent after the team switched');
+    // A machine admitted later still reads the plain history.
+    const dan = await lateJoiner(ada, 'dan');
+    await passes(open, 4);
+    expect(dan.store.get(before.meta.id)?.meta.title).toBe('plain before');
+    expect(dan.store.get(after.meta.id)).toBeNull();
+  });
+
+  it('lets in no machine whose build cannot read e2e content, and says why', async () => {
+    await e2eTeam(['ada', 'bob']);
+    const ada = at(0);
+    const dan = messagingReplica('dan', ada.remote, new MemoryV1(), {
+      docs: true,
+      withMemory: true,
+      capsFor: { dan: ['relay'] },
+    });
+    open.push(dan);
+    const { code } = ada.roster.invite('dan');
+    await passes([ada], 1);
+    dan.roster.join(code);
+    await passes([dan, ada], 2);
+    expect(ada.roster.view()?.members.has(dan.fed.replica)).toBe(false);
+    expect(
+      ada.fed.problems().find((p) => p.subject.startsWith('invite:'))?.message
+    ).toContain('does not speak end-to-end encrypted team content');
+    const manual = await ada.teamRoute(
+      `/api/team/keys/${dan.fed.replica}/admit`,
+      { fingerprint: fp(dan) }
+    );
+    expect(manual.status).toBe(409);
+    expect(String(manual.body.error)).toContain('end-to-end');
   });
 });
