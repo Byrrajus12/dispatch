@@ -66,6 +66,21 @@ function exercise(store: CommentStorePort): void {
   expect(store.list('t-0d0d0d').map((c) => c.body)).toEqual(bodies);
   expect(added[0].created).toBe(same);
   expect(added[1].created).toBe('2026-03-01T00:00:00.001Z');
+
+  // A stored time that is not a date never blocks the next comment.
+  store.add(
+    {
+      taskId: 't-0e0e0e',
+      author: 'agent',
+      body: 'odd',
+      created: 'zz-not-a-date',
+    },
+    same
+  );
+  expect(
+    store.add({ taskId: 't-0e0e0e', author: 'agent', body: 'next' }, same)
+      .created
+  ).toBe(same);
 }
 
 describe('comment stores', () => {

@@ -31,7 +31,11 @@ const MINT_ATTEMPTS = 32;
 // clock has not moved on, so creation order is the order comments were added.
 function nextCreated(now: string, latest: string | null): string {
   if (latest === null || now > latest) return now;
-  return new Date(Date.parse(latest) + 1).toISOString();
+  // A stored time that is not a date (hand-edited, synced in) never blocks a new comment.
+  const next = Date.parse(latest) + 1;
+  return Number.isFinite(next) && next <= 8.64e15
+    ? new Date(next).toISOString()
+    : now;
 }
 
 // The record a new comment starts as; shared so both backends agree.
