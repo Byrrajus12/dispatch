@@ -300,6 +300,7 @@ import {
 import { statusModelFor } from './statuses.js';
 import type { SyncResult } from './sync/boardSyncer.js';
 import type { BoardSyncScheduler } from './sync/scheduler.js';
+import { ContentKeyMissingError } from './team/federation/content.js';
 import { looksLikeInvite } from './team/federation/onboarding.js';
 import { markPublicRepo } from './team/federation/publicRepo.js';
 import type { FederationContext } from './team/federation/routes.js';
@@ -4250,6 +4251,8 @@ const ELEVATED_ROUTES: ReadonlyArray<{
   // GET team/status is absent on purpose: below decide its route answers
   // only the summary line (teamStatusFor), so a stuck joiner can still read it.
   { method: 'GET', segments: ['team', 'presence'], tier: 'decide' },
+  // Which content keys this machine holds and which machines lack the cap.
+  { method: 'GET', segments: ['team', 'content-e2e'], tier: 'decide' },
   // Where the daemon is reachable is only useful to someone handing out a
   // token, and it names the operator's network addresses.
   { method: 'GET', segments: ['team', 'address'], tier: 'decide' },
@@ -4282,6 +4285,8 @@ const ELEVATED_ROUTES: ReadonlyArray<{
   { method: 'POST', segments: ['team', 'abandon-invite'], tier: 'operator' },
   // Moves the whole team's sync to another transport, after its disclosure.
   { method: 'POST', segments: ['team', 'transport'], tier: 'operator' },
+  // Seals the team's content end to end, for good: an admin's roster op.
+  { method: 'POST', segments: ['team', 'content-e2e'], tier: 'operator' },
   { method: 'POST', segments: ['team', 'problems', 'ack'], tier: 'decide' },
   // An admin's pick between two machines that each claim a run first.
   {
@@ -6620,6 +6625,13 @@ export async function handleApi(
       return jsonResponse(
         { error: err.message, code: 'too_large', field: err.field },
         413
+      );
+    }
+    // Team content is e2e and this machine has no key yet: nothing was written.
+    if (err instanceof ContentKeyMissingError) {
+      return jsonResponse(
+        { error: err.message, code: 'content_key_missing' },
+        409
       );
     }
     // Messaging routes let @dispatch-foo/protocol's MessagingError surface

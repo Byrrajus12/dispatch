@@ -658,6 +658,24 @@ export class RosterService {
     });
   }
 
+  /** Switches team content to end-to-end encryption: an admin's
+   *  `content-e2e` op, once the legacy window is closed, since an older
+   *  build's v1 copies would carry content in the clear. */
+  switchContentE2e(): void {
+    const view = this.admin('turn on end-to-end encrypted team content');
+    if (view.contentE2e !== null)
+      throw new RosterError(
+        'conflict',
+        'team content is already end-to-end encrypted'
+      );
+    if (view.legacy.closed === null)
+      throw new RosterError(
+        'conflict',
+        'close the legacy window first: older builds copy the board in the clear'
+      );
+    this.publish({ rv: 1, action: 'content-e2e' });
+  }
+
   /** FW-R8: takes an op no build reads out of every fold, when this admin may. */
   dismiss(replica: string, seq: number, hash: string): void {
     const row = this.fed.db

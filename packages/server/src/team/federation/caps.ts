@@ -6,7 +6,7 @@ import type { FedStore } from './store.js';
 // presence when it changes. A gate reads the capability, never a version.
 
 /** What this build speaks. */
-export const BUILD_CAPS: readonly string[] = ['relay'];
+export const BUILD_CAPS: readonly string[] = ['relay', 'content-e2e'];
 
 const MAX_CAPS = 16;
 const MAX_CAP_CHARS = 32;
