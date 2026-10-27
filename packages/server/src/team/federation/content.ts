@@ -8,6 +8,7 @@ import {
   encryptContent,
   fromB64u,
   generateContentKey,
+  hlcWallMs,
   isContentEnvelope,
   isContentKeyRequest,
   isStub,
@@ -176,6 +177,8 @@ export interface ContentE2eStatus {
   on: boolean;
   /** The switch's op hash, or null while off. */
   since: string | null;
+  /** When the switch was signed (ISO), or null while off. */
+  sinceAt: string | null;
   /** The epoch new content goes under, or null while off. */
   current: string | null;
   /** Every epoch, oldest first, and whether this machine holds its key. */
@@ -490,6 +493,7 @@ export class TeamContent implements Collector, ContentSealer {
     return {
       on: epochs.length > 0,
       since: view?.contentE2e?.since ?? null,
+      sinceAt: this.signedAt(view?.contentE2e?.since ?? null),
       current: this.current(),
       epochs: epochs.map((epoch) => ({
         epoch,
@@ -499,6 +503,18 @@ export class TeamContent implements Collector, ContentSealer {
       lacking: view === null ? [] : this.lackingCap(view),
       legacyClosed: view?.legacy.closed != null,
     };
+  }
+
+  // A roster op's signing time, from its HLC.
+  private signedAt(hash: string | null): string | null {
+    if (hash === null) return null;
+    const row = this.deps.fed.db
+      .query<{ hlc: string }, [string]>(
+        'SELECT hlc FROM fed_roster WHERE hash = ?'
+      )
+      .get(hash);
+    const ms = row === null ? null : hlcWallMs(row.hlc);
+    return ms === null ? null : new Date(ms).toISOString();
   }
 
   // Members and invitees, other than this machine, whose build lacks the cap.

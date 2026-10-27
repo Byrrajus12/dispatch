@@ -51,6 +51,7 @@ import {
   assembleTeamKeys,
   redactCredentials,
   RELAY_DISCLOSURE,
+  relayDisclosure,
   withoutCredentials,
 } from './teamKeys.js';
 
@@ -533,7 +534,7 @@ async function switchTransport(
         {
           error: 'confirm what the relay can read first',
           code: 'confirm_required',
-          disclosure: RELAY_DISCLOSURE,
+          disclosure: relayDisclosure(view),
         },
         409
       );
@@ -551,7 +552,7 @@ async function switchTransport(
         502
       );
     roster.setTransport('relay', url);
-    return after({ ok: true, disclosure: RELAY_DISCLOSURE });
+    return after({ ok: true, disclosure: relayDisclosure(view) });
   }
   roster.setTransport('git');
   return after(null);

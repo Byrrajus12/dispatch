@@ -142,6 +142,7 @@ describe('team federation bindings', () => {
     const answer = {
       on: true,
       since: 'a'.repeat(64),
+      sinceAt: '2026-10-20T12:00:00.000Z',
       current: 'b'.repeat(64),
       epochs: [
         { epoch: 'a'.repeat(64), held: true },

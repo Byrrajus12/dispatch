@@ -51,6 +51,7 @@ export type {
   ClaudeImportReport,
   ConfirmResult,
   ConnectEventsOptions,
+  ContentE2eStatus,
   CreateFindingInput,
   Delivery,
   DeliveryState,

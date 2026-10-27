@@ -1028,6 +1028,8 @@ export interface ContentE2eStatus {
   on: boolean;
   /** The switch's op hash, or null while off. */
   since: string | null;
+  /** When the switch was signed (ISO), or null while off. */
+  sinceAt: string | null;
   /** The epoch new content goes under, or null while off. */
   current: string | null;
   /** Every epoch, oldest first, and whether this machine holds its key. */

@@ -19,6 +19,11 @@ import { join } from 'node:path';
 
 import { ContentKeyMissingError } from '../../../src/team/federation/content.js';
 import type { ContentE2eStatus } from '../../../src/team/federation/content.js';
+import {
+  RELAY_DISCLOSURE,
+  RELAY_DISCLOSURE_E2E,
+  relayDisclosure,
+} from '../../../src/team/federation/teamKeys.js';
 import { startFakeRelay } from './fakeRelay.js';
 import type { FakeRelay } from './fakeRelay.js';
 import {
@@ -126,10 +131,13 @@ describe('e2e team content', () => {
     });
     expect(switched.status).toBe(200);
     await passes(open, 3);
+    expect(relayDisclosure(bob.roster.view())).toBe(RELAY_DISCLOSURE);
     const on = await ada.teamRoute('/api/team/content-e2e', {});
     expect(on.status).toBe(200);
     expect(on.body.on).toBe(true);
+    expect(Date.parse(String(on.body.sinceAt))).not.toBeNaN();
     await passes(open, 3);
+    expect(relayDisclosure(bob.roster.view())).toBe(RELAY_DISCLOSURE_E2E);
     for (const m of open) {
       expect(status(m).missing).toEqual([]);
       expect(status(m).epochs).toHaveLength(1);
