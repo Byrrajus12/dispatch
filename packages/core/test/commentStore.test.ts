@@ -56,6 +56,16 @@ function exercise(store: CommentStorePort): void {
   );
   expect(store.list(TASK)).toEqual([other]);
   expect(store.remove(TASK, first.id)).toEqual([]);
+
+  // Added in one millisecond, comments still list in the order they came.
+  const same = '2026-03-01T00:00:00.000Z';
+  const bodies = ['a', 'b', 'c', 'd', 'e'];
+  const added = bodies.map((body) =>
+    store.add({ taskId: 't-0d0d0d', author: 'agent', body }, same)
+  );
+  expect(store.list('t-0d0d0d').map((c) => c.body)).toEqual(bodies);
+  expect(added[0].created).toBe(same);
+  expect(added[1].created).toBe('2026-03-01T00:00:00.001Z');
 }
 
 describe('comment stores', () => {
