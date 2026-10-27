@@ -38,7 +38,7 @@ const ENCRYPT_LIMITS = [
 
 export const NOT_ADMIN = 'Only a team admin can turn this on.';
 export const LEGACY_OPEN =
-  'Older Dispatch builds still sync and copy the board in the clear. Close that window under Machines first.';
+  'Close the window for older Dispatch builds under Machines first.';
 export const NEEDS_UPDATE =
   'Every teammate needs a Dispatch build that reads encrypted content first.';
 
@@ -230,7 +230,9 @@ export function TeamEncryptionGroup({ data }: TeamEncryptionGroupProps) {
       <SettingsRow
         title="Older Dispatch builds"
         subtitle={
-          s.legacyClosed ? 'No longer sync with this team.' : LEGACY_OPEN
+          s.legacyClosed
+            ? 'No longer sync with this team.'
+            : 'Still sync with this team, and copy the board in the clear.'
         }
         control={
           <StatePill tone={s.legacyClosed ? 'good' : 'waiting'}>

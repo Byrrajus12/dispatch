@@ -122,7 +122,7 @@ describe('TeamEncryptionGroup', () => {
     expect((await screen.findByTestId('team-e2e-lacking')).textContent).toBe(
       'Still need to update: bob, cy'
     );
-    expect(screen.getAllByText(LEGACY_OPEN).length).toBeGreaterThan(0);
+    expect(screen.getByText(LEGACY_OPEN)).toBeTruthy();
     expect(button().hasAttribute('disabled')).toBe(true);
   });
 
