@@ -10,6 +10,7 @@ pub mod transcript;
 pub use claude_jsonl::parse_line;
 pub use cursor_jsonl::parse_line as parse_cursor_line;
 pub use record::ParsedRecord;
+#[cfg(test)]
 pub use session_builder::ingest_record;
 pub use transcript::{extract_excerpts, render_markdown};
 // `TranscriptExcerpts` isn't referenced by name yet (its `last_assistant_text` field is for

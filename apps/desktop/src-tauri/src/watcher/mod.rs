@@ -211,20 +211,20 @@ fn apply_segment(
     segment: &mut tail::Segment,
 ) -> anyhow::Result<(bool, bool)> {
     let tx = conn.unchecked_transaction()?;
-
+    let mut batch = parser::session_builder::IngestBatch::default();
     let mut changed = false;
     let mut created = false;
     for line in &segment.lines {
         let Some(record) = parse(line, &mut segment.cursor.context) else {
             continue;
         };
-        let outcome = parser::ingest_record(&tx, &path.to_string_lossy(), record)?;
+        let outcome = batch.ingest(&tx, &path.to_string_lossy(), record)?;
         changed |= outcome.project_touched.is_some()
             || outcome.session_created.is_some()
             || outcome.session_updated.is_some();
         created |= outcome.session_created.is_some();
     }
-
+    batch.finish(&tx)?;
     tail::checkpoint(&tx, path, segment)?;
     tx.commit()?;
     Ok((changed, created))
