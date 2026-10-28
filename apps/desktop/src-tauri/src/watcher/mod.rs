@@ -86,23 +86,28 @@ pub fn start(app_handle: AppHandle) {
     // Register before scanning. Events queue during synchronous catch-up; the same owner
     // drains them afterward, so an append cannot fall between scan and registration.
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut debouncer = match new_debouncer(Duration::from_millis(DEBOUNCE_MS), tx) {
-        Ok(d) => d,
+    let debouncer = match new_debouncer(Duration::from_millis(DEBOUNCE_MS), tx) {
+        Ok(mut debouncer) => {
+            if let Err(e) = register_watches(&mut debouncer, &roots) {
+                log::error!("could not register history watches: {e}");
+            }
+            Some(debouncer)
+        }
         Err(e) => {
             log::error!("could not create history watcher: {e}");
-            return;
+            None
         }
     };
-    if let Err(e) = register_watches(&mut debouncer, &roots) {
-        log::error!("could not register history watches: {e}");
-    }
+    // Watcher failure must not prevent the synchronous history import.
     for (dir, source) in &roots {
         backfill(&app_handle, dir, source);
     }
-    std::thread::spawn(move || {
-        let _debouncer = debouncer;
-        run_watcher(app_handle, roots, rx);
-    });
+    if let Some(debouncer) = debouncer {
+        std::thread::spawn(move || {
+            let _debouncer = debouncer;
+            run_watcher(app_handle, roots, rx);
+        });
+    }
 }
 
 fn backfill(app_handle: &AppHandle, watch_dir: &Path, source: &AgentSource) {
