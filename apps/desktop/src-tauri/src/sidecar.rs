@@ -15,6 +15,9 @@
 //! runs the standalone `bun build --compile`d binaries bundled under the
 //! app's Resource dir, so a shipped app needs neither `bun` nor the checkout.
 
+mod process;
+
+use process::{process_state, ProcessState};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
@@ -207,16 +210,9 @@ async fn probe_health(client: &reqwest::Client, port: u16) -> HealthProbe {
     }
 }
 
-/// Whether `pid` is still a live process — `kill -0` sends no signal, it only
-/// checks. Same shell-out rationale as `kill_pid_best_effort`.
+/// Unknown liveness retains the existing protection against replacing live work.
 fn pid_alive(pid: u32) -> bool {
-    Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    process_state(pid) != ProcessState::Dead
 }
 
 /// What the reuse fast path should do with the daemon a daemon file names.
