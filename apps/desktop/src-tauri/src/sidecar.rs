@@ -1023,10 +1023,8 @@ async fn wait_for_generation(
     loop {
         match inspect_discovery(client, root, obsolete).await {
             DiscoveryState::Ready(info) => return GenerationOutcome::Ready(info),
-            DiscoveryState::Obsolete(info) => {
-                if !obsolete.contains(&info) {
-                    obsolete.push(info);
-                }
+            DiscoveryState::Obsolete(info) if !obsolete.contains(&info) => {
+                obsolete.push(info);
             }
             _ => {}
         }

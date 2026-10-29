@@ -32,7 +32,7 @@ async fn dead_and_obsolete_generations_make_zero_http_requests() {
     let state = inspect_with(
         || Some(i.clone()),
         |_| ProcessState::Alive,
-        &[i.clone()],
+        std::slice::from_ref(&i),
         |_| async { panic!("HTTP on obsolete generation") },
     )
     .await;
