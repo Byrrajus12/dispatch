@@ -10,7 +10,8 @@ impl Fixture {
             .join("../../../.agents/ignore/history-ingestion-tests")
             .join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&dir).unwrap();
-        Self(dir)
+        // Match filesystem event paths rather than retaining parent-directory components.
+        Self(dir.canonicalize().unwrap())
     }
     fn path(&self) -> PathBuf {
         self.0.join("history.jsonl")
@@ -270,11 +271,15 @@ fn watcher_registered_before_scan_queues_appends_for_the_same_cursor_owner() {
         .write_all(BASIC.as_bytes())
         .unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut observed_paths = Vec::new();
     loop {
         let events = rx
             .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
-            .unwrap()
+            .unwrap_or_else(|error| {
+                panic!("waiting for {path:?}: {error}; observed paths: {observed_paths:?}")
+            })
             .unwrap();
+        observed_paths.extend(events.iter().map(|event| event.path.clone()));
         if events.iter().any(|event| event.path == path) {
             break;
         }
