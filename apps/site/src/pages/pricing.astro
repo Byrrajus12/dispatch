@@ -1,76 +1,82 @@
 ---
-import Footer from '../components/landing/Footer.astro';
-import Nav from '../components/landing/Nav.astro';
-import { faq } from '../data/pricing';
+import { pricingFaq } from '../data/faq';
 import Landing from '../layouts/Landing.astro';
+import { DMG, TEAM_SERVER } from '../lib/downloads';
 import { faqPage } from '../lib/seo';
-import '../styles/page.css';
 
-const repo = 'https://github.com/wsoule/dispatch';
-const contact = (subject: string) =>
-  `mailto:hello@dispatch.foo?subject=${encodeURIComponent(subject)}`;
-
+const plans = [
+  {
+    name: 'Solo',
+    price: '$0',
+    per: 'free, for as long as you like',
+    points: [
+      'Your machine and your agents',
+      'Every local feature: the Overseer, the board, runs, pull requests, planning',
+      'Claude Code and Codex with your own sign-in or key',
+      'Two-way Linear sync',
+      'Panels and themes you can change',
+    ],
+    cta: ['Download for Mac', DMG],
+  },
+  {
+    name: 'Team',
+    price: '$10',
+    per: 'per seat per month, billed through Stripe',
+    points: [
+      'Everything in Solo, for each person',
+      'The hosted team server at team.dispatch.foo',
+      'Shared projects with boards in sync',
+      'Your teammates’ agents beside your own',
+      'One lead per project',
+      'Only end-to-end encrypted data on the server',
+    ],
+    cta: ['Start a team', TEAM_SERVER],
+  },
+] as const;
 ---
 
 <Landing
-  title="Pricing: Dispatch is free for up to three people"
-  description="Free for up to three people with every feature. Teams of four or more need a license key."
+  title="Pricing: Dispatch is free alone, $10 per seat for teams"
+  description="Solo is free with every local feature. Team is $10 per seat per month on the hosted team server."
   path="/pricing"
-  jsonLd={[faqPage(faq)]}
+  jsonLd={[faqPage(pricingFaq)]}
 >
-  <Nav />
-  <main class="page">
+  <div class="page">
     <div class="wrap">
-      <div class="head">
-        <h1>Free for up to three.</h1>
+      <div class="page-head">
+        <h1>Free on your own. $10 a seat with a team.</h1>
         <p class="lede">
-          Every feature, for you and two teammates, at work or anywhere else. Bigger teams need a
-          license key.
+          Everything that runs on your machine is free. You pay only for the hosted server a team
+          shares.
         </p>
       </div>
 
       <div class="plans">
-        <section class="plan panel">
-          <h2>Free</h2>
-          <p class="price">$0</p>
-          <p class="for">Up to 3 people</p>
-          <ul>
-            <li>Every feature: Overseer, tasks, graph, review, merge queue</li>
-            <li>Any MCP agent: Claude Code, Codex, Gemini CLI, your own</li>
-            <li>Agent-to-agent messaging and team board sync</li>
-            <li>Commercial use</li>
-          </ul>
-          <a class="btn btn-primary" href={`${repo}/releases/latest`}>Download</a>
-        </section>
-        <section class="plan panel">
-          <h2>Team</h2>
-          <p class="price">Talk to us</p>
-          <p class="for">4 people or more</p>
-          <ul>
-            <li>Everything in Free</li>
-            <li>A license key for as many seats as you need</li>
-            <li>Early access while team pricing is set</li>
-          </ul>
-          <a class="btn" href={contact('Team license for Dispatch')}>Ask about a license</a>
-        </section>
-        <section class="plan panel">
-          <h2>Organizations</h2>
-          <p class="price">Talk to us</p>
-          <p class="for">Many teams, many agents</p>
-          <ul>
-            <li>Everything in Team</li>
-            <li>Help rolling out agent guardrails: write scope, spend caps, review</li>
-            <li>Shape what governance features come next</li>
-          </ul>
-          <a class="btn" href={contact('Dispatch for our organization')}>Get in touch</a>
-        </section>
+        {
+          plans.map((p, i) => (
+            <section class:list={['plan', i === 1 && 'team']} aria-labelledby={`plan-${p.name}`}>
+              <h2 id={`plan-${p.name}`}>{p.name}</h2>
+              <p class="price">
+                {p.price} <span>{p.per}</span>
+              </p>
+              <ul>
+                {p.points.map((point) => (
+                  <li>{point}</li>
+                ))}
+              </ul>
+              <a class:list={['btn', i === 0 && 'btn-primary']} href={p.cta[1]}>
+                {p.cta[0]}
+              </a>
+            </section>
+          ))
+        }
       </div>
 
       <div class="prose">
-        <h2>Licensing, plainly</h2>
-        <dl class="faq">
+        <h2>Questions</h2>
+        <dl class="qa">
           {
-            faq.map(([q, a]) => (
+            pricingFaq.map(([q, a]) => (
               <div>
                 <dt>{q}</dt>
                 <dd>{a}</dd>
@@ -79,67 +85,63 @@ const contact = (subject: string) =>
           }
         </dl>
         <p>
-          The full map is in <a href={`${repo}/blob/main/LICENSING.md`}>LICENSING.md</a>; where it
-          and a license text disagree, the license text wins. Questions:{' '}
-          <a href="mailto:hello@dispatch.foo">hello@dispatch.foo</a>.
+          The team server’s <a href={`${TEAM_SERVER}/terms`}>terms</a> and{' '}
+          <a href={`${TEAM_SERVER}/privacy`}>privacy policy</a> cover what you agree to when you
+          start a team. Questions: <a href="mailto:hello@dispatch.foo">hello@dispatch.foo</a>.
         </p>
       </div>
     </div>
-  </main>
-  <Footer />
+  </div>
 </Landing>
 
 <style>
   .plans {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
-    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+    gap: 1.25rem;
+    max-width: 56rem;
     margin-top: clamp(2.5rem, 5vw, 3.5rem);
   }
   .plan {
     display: flex;
     flex-direction: column;
     padding: 1.75rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+  .plan.team {
+    border-color: var(--line-strong);
   }
   .plan h2 {
-    font-size: 1.1rem;
+    font-size: 1.15rem;
     letter-spacing: -0.01em;
   }
   .price {
-    margin: 0.75rem 0 0;
-    font-size: 2rem;
-    font-weight: 700;
+    margin-top: 0.75rem;
+    font-size: 2.4rem;
+    font-weight: 600;
     letter-spacing: -0.03em;
+    line-height: 1.1;
   }
-  .for {
-    margin: 0.25rem 0 0;
-    color: var(--ink-3);
+  .price span {
+    display: block;
+    margin-top: 0.35rem;
+    color: var(--muted);
+    font-size: 0.95rem;
+    font-weight: 400;
+    letter-spacing: 0;
   }
   .plan ul {
     flex: 1;
-    margin: 1.25rem 0 1.75rem;
+    margin: 1.5rem 0 1.75rem;
     padding-left: 1.1rem;
-    color: var(--ink-2);
-    line-height: 1.55;
+    color: var(--ink-soft);
   }
   .plan li {
-    margin: 0.4rem 0;
+    margin: 0.45rem 0;
   }
   .plan .btn {
     align-self: flex-start;
-  }
-  .faq {
-    margin: 0;
-  }
-  .faq div {
-    padding: 1.1rem 0;
-    border-top: 1px solid var(--line);
-  }
-  .faq dt {
-    color: var(--ink);
-    font-weight: 600;
-  }
-  .faq dd {
-    margin: 0.4rem 0 0;
   }
 </style>

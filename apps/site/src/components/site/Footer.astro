@@ -1,0 +1,131 @@
+---
+import { RELEASES, TEAM_SERVER, VERSION } from '../../lib/downloads';
+
+// The site footer: the mark, then link columns.
+const columns: [string, [string, string][]][] = [
+  [
+    'Product',
+    [
+      ['Download', '/download'],
+      ['Pricing', '/pricing'],
+      ['Changelog', '/changelog'],
+    ],
+  ],
+  [
+    'Learn',
+    [
+      ['Docs', '/docs'],
+      ['FAQ', '/faq'],
+      ['Source on GitHub', 'https://github.com/wsoule/dispatch'],
+      ['Releases', RELEASES],
+    ],
+  ],
+  [
+    'Team server',
+    [
+      ['Sign in', TEAM_SERVER],
+      ['Privacy', `${TEAM_SERVER}/privacy`],
+      ['Terms', `${TEAM_SERVER}/terms`],
+    ],
+  ],
+  [
+    'Contact',
+    [
+      ['hello@dispatch.foo', 'mailto:hello@dispatch.foo'],
+      ['Site privacy', '/privacy'],
+    ],
+  ],
+];
+---
+
+<footer class="footer">
+  <div class="wrap grid">
+    <div class="brand">
+      <span class="mark">Dispatch</span>
+      <p>Your Overseer, your agents, your machine. Version {VERSION}.</p>
+    </div>
+    {
+      columns.map(([title, links]) => (
+        <nav aria-label={title}>
+          <h2>{title}</h2>
+          <ul>
+            {links.map(([label, href]) => (
+              <li>
+                <a href={href}>{label}</a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      ))
+    }
+  </div>
+  <div class="wrap legal">
+    <p>
+      The core is Apache-2.0. The app is FSL-1.1-ALv2 and becomes Apache-2.0 two years after each
+      release. The team server is under the Elastic License 2.0.
+    </p>
+  </div>
+</footer>
+
+<style>
+  .footer {
+    padding: clamp(3rem, 6vw, 4.5rem) 0 2rem;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 0.92rem;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.5fr) repeat(4, minmax(0, 1fr));
+    gap: 2.5rem 2rem;
+  }
+  .mark {
+    color: var(--ink);
+    font-size: 1.05rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  .brand p {
+    max-width: 16rem;
+    margin-top: 0.5rem;
+  }
+  h2 {
+    margin-bottom: 0.75rem;
+    color: var(--ink);
+    font-size: 0.92rem;
+    font-weight: 600;
+    letter-spacing: 0;
+  }
+  ul {
+    display: grid;
+    gap: 0.5rem;
+    padding: 0;
+    list-style: none;
+  }
+  a {
+    overflow-wrap: anywhere;
+    text-decoration: none;
+  }
+  a:hover {
+    color: var(--ink);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .legal {
+    margin-top: 3rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--line);
+    font-size: 0.85rem;
+  }
+  .legal p {
+    max-width: 44rem;
+  }
+  @media (width < 900px) {
+    .grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .brand {
+      grid-column: 1 / -1;
+    }
+  }
+</style>

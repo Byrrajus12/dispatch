@@ -1,0 +1,372 @@
+/* The marketing pages wear the app's own palette and type: soft greys, one
+   indigo for actions, and orange only for what needs a person, the way the
+   app's Overseer flags you. Light or dark follows the OS until the nav toggle
+   stores a choice on <html data-theme>. */
+:root {
+  color-scheme: light dark;
+
+  --bg: light-dark(#f9f9fa, #0f0f11);
+  --surface: light-dark(#fff, #161618);
+  --sunk: light-dark(#efeff0, #1b1a1a);
+  --line: light-dark(#e2e2e2, #232426);
+  --line-strong: light-dark(#d4d4d7, #2e2f33);
+  --ink: light-dark(#282a30, #f7f8f8);
+  --ink-soft: light-dark(#3d3f47, #d0d6e0);
+  --muted: light-dark(#67666f, #949497);
+  --accent: #5e6ad2;
+  --accent-ink: light-dark(#4f5bc4, #8b93f0);
+  --accent-hover: light-dark(#4f5bc4, #6f7be0);
+  --on-accent: #fff;
+  --signal: light-dark(#c86f0c, #f2994a);
+  --focus: light-dark(#5e6ad2, #7e86e8);
+  --code-bg: light-dark(#18181b, #0b0b0d);
+  --code-ink: #e6e6e8;
+  --sans: 'Geist Variable', system-ui, sans-serif;
+  --mono: 'Geist Mono', ui-monospace, monospace;
+  --gutter: clamp(1rem, 4vw, 2.5rem);
+  --max: 72rem;
+  --radius: 10px;
+  --radius-sm: 6px;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-padding-top: 5rem;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: clip;
+}
+
+h1,
+h2,
+h3,
+p,
+ul,
+ol,
+dl,
+dd,
+figure,
+pre {
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(2.5rem, 1.6rem + 4vw, 4.5rem);
+  font-weight: 600;
+  line-height: 1.04;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+
+h2 {
+  font-size: clamp(1.75rem, 1.3rem + 1.8vw, 2.6rem);
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+
+h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+
+a {
+  color: inherit;
+}
+
+strong,
+b {
+  font-weight: 600;
+}
+
+code,
+kbd,
+pre {
+  font-family: var(--mono);
+  font-size: 0.88em;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.wrap {
+  width: 100%;
+  max-width: calc(var(--max) + var(--gutter) * 2);
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.skip {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 50;
+  padding: 0.5rem 0.9rem;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--on-accent);
+  transform: translateY(-200%);
+}
+
+.skip:focus {
+  transform: none;
+}
+
+/* Buttons: one filled indigo action per view, the rest quiet. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0 1.15rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 0.95rem;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.btn:hover {
+  border-color: var(--muted);
+}
+
+.btn-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.btn-primary:hover {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+
+/* A home section: a heading and its point, then whatever shows it. */
+.section {
+  padding: clamp(4.5rem, 9vw, 7.5rem) 0;
+  border-top: 1px solid var(--line);
+}
+
+.section-head {
+  display: grid;
+  gap: 1rem 4rem;
+  align-items: end;
+  margin-bottom: clamp(2rem, 4vw, 3rem);
+}
+
+.section-head p {
+  max-width: 34rem;
+  color: var(--muted);
+  font-size: 1.125rem;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+@media (width >= 900px) {
+  .section-head {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+/* Three short points under a picture, separated by hairlines rather than
+   boxed into cards. */
+.points {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 1.75rem 2.5rem;
+  margin-top: clamp(2rem, 4vw, 3rem);
+  padding: 0;
+  list-style: none;
+}
+
+.points li {
+  padding-top: 1rem;
+  border-top: 1px solid var(--line-strong);
+}
+
+.points p {
+  margin-top: 0.4rem;
+  color: var(--muted);
+  font-size: 0.98rem;
+  text-wrap: pretty;
+}
+
+.points code {
+  color: var(--ink-soft);
+}
+
+/* Text pages: docs, pricing, FAQ, changelog, privacy, download. */
+.page {
+  padding: clamp(3.5rem, 8vw, 6rem) 0 clamp(5rem, 10vw, 8rem);
+}
+
+.page-head {
+  max-width: 44rem;
+}
+
+.page-head .lede {
+  margin-top: 1.1rem;
+  color: var(--muted);
+  font-size: 1.15rem;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.page-head .lede a {
+  color: var(--accent-ink);
+  text-underline-offset: 3px;
+}
+
+.prose {
+  max-width: 42rem;
+  margin-top: clamp(2.5rem, 5vw, 3.5rem);
+  color: var(--ink-soft);
+  line-height: 1.65;
+}
+
+.prose h2 {
+  margin: 3rem 0 0.75rem;
+  color: var(--ink);
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
+}
+
+.prose > h2:first-child {
+  margin-top: 0;
+}
+
+.prose h3 {
+  margin: 1.75rem 0 0.5rem;
+  color: var(--ink);
+}
+
+.prose p,
+.prose ul,
+.prose ol {
+  margin: 0.75rem 0;
+}
+
+.prose li {
+  margin: 0.35rem 0;
+}
+
+.prose a {
+  color: var(--accent-ink);
+  text-underline-offset: 3px;
+}
+
+.prose code {
+  padding: 0.1rem 0.35rem;
+  border-radius: 5px;
+  background: var(--sunk);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.prose pre {
+  margin: 1rem 0;
+  padding: 1rem 1.15rem;
+  overflow-x: auto;
+  border-radius: var(--radius);
+  background: var(--code-bg);
+  color: var(--code-ink);
+  font-size: 0.9rem;
+  line-height: 1.65;
+}
+
+.prose pre code {
+  padding: 0;
+  background: none;
+  color: inherit;
+  overflow-wrap: normal;
+}
+
+/* Question lists on /faq and /pricing. */
+.qa {
+  margin: 0;
+}
+
+.qa > div {
+  padding: 1.1rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.qa dt {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.qa dd {
+  margin-top: 0.35rem;
+  color: var(--muted);
+}
+
+.qa dd a {
+  color: var(--accent-ink);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

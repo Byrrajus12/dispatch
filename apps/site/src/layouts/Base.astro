@@ -26,7 +26,7 @@ const canonicalUrl = `${SITE}${canonical ?? Astro.url.pathname}`;
 const ogTitle = title ?? 'Dispatch';
 const ogDescription =
   description ??
-  'The shared board for your team’s coding agents: tasks, reviews and a merge queue in your repo.';
+  'The Dispatch Messaging Protocol, a specification published by Dispatch.';
 // The page as a protocol document, filed under the site and its publisher.
 const ld = ldJson([
     organization,
@@ -53,11 +53,11 @@ const ld = ldJson([
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{title ?? 'Dispatch: the shared task board for AI coding agents'}</title>
+    <title>{title ?? 'Dispatch Messaging Protocol'}</title>
     <meta
       name="description"
       content={description ??
-        'The shared board for your team’s coding agents: tasks, reviews and a merge queue, all in your repo.'}
+        'The Dispatch Messaging Protocol, a specification published by Dispatch.'}
     />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="canonical" href={canonicalUrl} />

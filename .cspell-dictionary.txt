@@ -219,6 +219,7 @@ glyphed
 gnueabihf
 gopd
 gpgsign
+gpui
 granularities
 greppable
 grpcurl

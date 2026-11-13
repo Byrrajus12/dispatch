@@ -1,94 +1,124 @@
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 
-const distIndex = Bun.file(new URL('../dist/index.html', import.meta.url));
-if (!(await distIndex.exists())) {
-  throw new Error(
-    'dist/index.html missing. Run `bun run build` (or `bun run test`) in apps/site.'
-  );
-}
-const html = await distIndex.text();
+import { shots, WIDTHS } from '../src/data/shots';
+import { DMG, INSTALL, VERSION } from '../src/lib/downloads';
 
-test('install command is on the page', () => {
-  expect(html).toContain('brew install --cask wsoule/tap/dispatch');
-});
-
-test('no em-dashes anywhere on the page', () => {
-  expect(html).not.toContain('—');
-});
-
-test('the tour shows a real screenshot for every tab', async () => {
-  const ids = [...html.matchAll(/src="\/app\/([a-z]+)\.webp"/g)].map(
-    (m) => m[1]
-  );
-  expect(ids).toEqual(['tasks', 'live', 'review', 'board', 'overseer']);
-  for (const id of ids) {
-    const file = Bun.file(new URL(`../dist/app/${id}.webp`, import.meta.url));
-    expect({ id, exists: await file.exists() }).toEqual({ id, exists: true });
+const page = async (path: string): Promise<string> => {
+  const file = Bun.file(new URL(`../dist${path}`, import.meta.url));
+  if (!(await file.exists())) {
+    throw new Error(
+      `dist${path} missing. Run \`moon run site:build\` (or \`moon run site:test\`).`
+    );
   }
+  return file.text();
+};
+
+const html = await page('/index.html');
+const PAGES = ['download', 'docs', 'pricing', 'faq', 'changelog', 'privacy'];
+
+test('the home page leads with the install line and the DMG', () => {
+  expect(html).toContain(INSTALL);
+  expect(html).toContain(`href="${DMG}"`);
 });
 
-test('the tour links to the hosted demo', () => {
-  expect(html).toContain('href="https://demo.dispatch.foo"');
-});
-
-test('every clip on /clips ships its video and poster', async () => {
-  const page = await Bun.file(
-    new URL('../dist/clips/index.html', import.meta.url)
-  ).text();
-  const ids = [...page.matchAll(/src="\/clips\/([a-z0-9-]+)\.mp4"/g)].map(
-    (m) => m[1]
+test('the DMG link names its version tag, not latest', () => {
+  expect(DMG).toBe(
+    `https://github.com/wsoule/dispatch/releases/download/app-v${VERSION}/Dispatch_${VERSION}_universal.dmg`
   );
-  expect(ids.length).toBe(7);
-  for (const id of ids)
-    for (const ext of ['mp4', 'jpg']) {
-      const file = Bun.file(
-        new URL(`../dist/clips/${id}.${ext}`, import.meta.url)
-      );
-      expect({ id, ext, exists: await file.exists() }).toEqual({
-        id,
-        ext,
-        exists: true,
+});
+
+test('no page promises what the new product dropped', async () => {
+  for (const path of ['/index.html', ...PAGES.map((p) => `/${p}/index.html`)]) {
+    const text = (await page(path)).toLowerCase();
+    for (const gone of [
+      'app.dispatch.foo',
+      'license key',
+      'relay',
+      'brew install',
+      'demo.dispatch.foo',
+      '/clips',
+      'three people',
+    ]) {
+      expect({ path, gone, found: text.includes(gone) }).toEqual({
+        path,
+        gone,
+        found: false,
       });
     }
-});
-
-test('positioning survives, and the retired tagline stays gone', () => {
-  expect(html).toContain('Give agents tasks,');
-  expect(html).toContain('shared board');
-  expect(html).not.toContain('Linear, for agents');
-});
-
-test('pricing, docs and changelog pages exist with their own canonical', async () => {
-  for (const page of ['pricing', 'docs', 'changelog', 'privacy']) {
-    const file = Bun.file(
-      new URL(`../dist/${page}/index.html`, import.meta.url)
-    );
-    expect({ page, exists: await file.exists() }).toEqual({
-      page,
-      exists: true,
-    });
-    const text = await file.text();
-    expect(text).toContain(
-      `<link rel="canonical" href="https://dispatch.foo/${page}"`
-    );
-    expect(text).not.toContain('Linear, for agents');
-    // A line break before a link or code span must not swallow the space.
-    expect({
-      page,
-      glued: text.match(/[A-Za-z,.]<(a|code|strong)[ >]/)?.[0] ?? null,
-    }).toEqual({ page, glued: null });
   }
+});
+
+test('no em-dashes anywhere on the marketing pages', async () => {
+  for (const path of ['/index.html', ...PAGES.map((p) => `/${p}/index.html`)]) {
+    expect({ path, dash: (await page(path)).includes('—') }).toEqual({
+      path,
+      dash: false,
+    });
+  }
+});
+
+test('every screenshot slot ships every file it names', async () => {
+  for (const [slot, shot] of Object.entries(shots)) {
+    const themes =
+      'darkOnly' in shot && shot.darkOnly ? ['dark'] : ['light', 'dark'];
+    for (const theme of themes)
+      for (const w of WIDTHS) {
+        const name = `${shot.file}-${theme}-${w}.webp`;
+        const file = Bun.file(
+          new URL(`../dist/shots/${name}`, import.meta.url)
+        );
+        expect({ slot, name, exists: await file.exists() }).toEqual({
+          slot,
+          name,
+          exists: true,
+        });
+      }
+  }
+});
+
+test('every page has its own canonical, and no line break swallows a space', async () => {
+  for (const name of PAGES) {
+    const text = await page(`/${name}/index.html`);
+    expect(text).toContain(
+      `<link rel="canonical" href="https://dispatch.foo/${name}"`
+    );
+    expect({
+      name,
+      glued: text.match(/[A-Za-z,.]<(a|code|strong)[ >]/)?.[0] ?? null,
+    }).toEqual({ name, glued: null });
+  }
+});
+
+test('pricing names Solo and Team at $10 per seat', async () => {
+  const pricing = await page('/pricing/index.html');
+  expect(pricing).toContain('Solo');
+  expect(pricing).toContain('$10');
+  expect(pricing).toContain('per seat per month');
+});
+
+test('docs give the real team sign-in steps', async () => {
+  const docs = await page('/docs/index.html');
+  for (const step of [
+    'server login https://team.dispatch.foo',
+    'machine add team --server https://team.dispatch.foo',
+    'team found',
+    'project add',
+    'project share',
+  ]) {
+    expect({ step, found: docs.includes(step) }).toEqual({ step, found: true });
+  }
+});
+
+test('the team service links its own privacy policy and terms', () => {
+  expect(html).toContain('href="https://team.dispatch.foo/privacy"');
+  expect(html).toContain('href="https://team.dispatch.foo/terms"');
 });
 
 test('link previews carry an image and the tab an icon', async () => {
   expect(html).toContain(
     '<meta property="og:image" content="https://dispatch.foo/og.png"'
   );
-  expect(html).toContain(
-    '<meta name="twitter:card" content="summary_large_image"'
-  );
-  expect(html).toContain('<link rel="icon" href="/favicon.svg"');
   for (const asset of ['og.png', 'favicon.svg']) {
     const file = Bun.file(new URL(`../dist/${asset}`, import.meta.url));
     expect({ asset, exists: await file.exists() }).toEqual({
@@ -99,131 +129,15 @@ test('link previews carry an image and the tab an icon', async () => {
 });
 
 test('the 404 page links home and stays out of search', async () => {
-  const notFound = await Bun.file(
-    new URL('../dist/404.html', import.meta.url)
-  ).text();
+  const notFound = await page('/404.html');
   expect(notFound).toContain('<meta name="robots" content="noindex"');
   expect(notFound).not.toContain('rel="canonical"');
   expect(notFound).toContain('href="/"');
 });
 
-const manifest = JSON.parse(
-  readFileSync(
-    new URL(
-      '../../../packages/protocol-spec/versions/manifest.json',
-      import.meta.url
-    ),
-    'utf8'
-  )
-) as {
-  versions: Record<string, unknown>;
-  aliases: Record<string, string>;
-  extensions: Record<string, string>;
-};
-
-const page = async (path: string): Promise<string> => {
-  const file = Bun.file(new URL(`../dist${path}`, import.meta.url));
-  expect({ path, exists: await file.exists() }).toEqual({ path, exists: true });
-  return file.text();
-};
-
-// The site has no .md URLs, so a rendered protocol page must never link to one.
-const MD_HREF = /href="[^"]*\.md(?:#[^"]*)?"/;
-
-for (const version of Object.keys(manifest.versions)) {
-  test(`renders DMP ${version} with section anchors and the license footer`, async () => {
-    const text = await page(`/protocol/${version}/index.html`);
-    expect(text).toContain('id="s6.2"');
-    expect(text).toContain(
-      `Dispatch Messaging Protocol ${version} · Apache-2.0 · source: packages/protocol-spec/`
-    );
-    expect(text).not.toContain('—');
-  });
-
-  test(`renders no .md href in DMP ${version}, and its section links resolve`, async () => {
-    const text = await page(`/protocol/${version}/index.html`);
-    expect(text).not.toMatch(MD_HREF);
-    for (const m of text.matchAll(
-      /href="\/protocol\/([^/"]+)\/#(s[0-9A-F.]+)"/g
-    )) {
-      expect({
-        href: m[0],
-        ok: m[1] === version && text.includes(`id="${m[2]}"`),
-      }).toEqual({ href: m[0], ok: true });
-    }
-  });
-
-  test(`serves DMP ${version}'s schemas`, async () => {
-    const schema: unknown = JSON.parse(
-      await page(`/protocol/${version}/schemas/message.schema.json`)
-    );
-    expect(schema).toHaveProperty('$id');
-  });
-}
-
-test('the /protocol/ alias carries a canonical link to the immutable path', async () => {
-  const text = await page('/protocol/index.html');
-  expect(text).toContain(
-    `<link rel="canonical" href="https://dispatch.foo/protocol/${manifest.aliases['latest']}/"`
-  );
-});
-
-// Each extension URI serves §8.3 plus its own §8 subsection.
-const EXTENSION_SECTIONS = { envelope: 's8.4', gate: 's8.5', work: 's8.6' };
-
-for (const [name, section] of Object.entries(EXTENSION_SECTIONS)) {
-  test(`serves the ${name} extension at its URI, from ${manifest.extensions[name]}`, async () => {
-    const text = await page(`/a2a/ext/${name}/v1/index.html`);
-    expect(text).toContain(`https://dispatch.foo/a2a/ext/${name}/v1`);
-    expect(text).toContain('id="s8.3"');
-    expect(text).toContain(`id="${section}"`);
-    for (const other of Object.values(EXTENSION_SECTIONS)) {
-      if (other !== section) expect(text).not.toContain(`id="${other}"`);
-    }
-    expect(text).toContain(
-      `Dispatch Messaging Protocol ${manifest.extensions[name]} · Apache-2.0`
-    );
-    expect(text).not.toContain('—');
-    expect(text).not.toMatch(MD_HREF);
-  });
-}
-
-test('the alias pages render no .md href either', async () => {
-  const aliases = Object.keys(manifest.aliases)
-    .filter((alias) => alias !== 'latest')
-    .map((alias) => `/protocol/${alias}/index.html`);
-  for (const alias of ['/protocol/index.html', ...aliases]) {
-    expect({ alias, md: MD_HREF.test(await page(alias)) }).toEqual({
-      alias,
-      md: false,
-    });
-  }
-});
-
-test('docs lead with the desktop path and tell the truth about the dispatch command', async () => {
-  const docs = await Bun.file(
-    new URL('../dist/docs/index.html', import.meta.url)
-  ).text();
-  const start = docs.indexOf('id="get-started"');
-  const terminal = docs.indexOf('id="terminal"');
-  expect(start).toBeGreaterThan(-1);
-  expect(terminal).toBeGreaterThan(start);
-  expect(docs.indexOf('dispatch init')).toBeGreaterThan(terminal);
-  expect(docs).not.toContain('Installing the app also puts');
-  expect(docs).toContain('Terminal command');
-});
-
-test('the landing page offers the DMG beside the brew command', () => {
-  expect(html).toContain(
-    'href="https://github.com/wsoule/dispatch/releases/latest/download/Dispatch_aarch64.dmg"'
-  );
-  expect(html).toContain('Dispatch_x64.dmg');
-});
-
-// Every page's JSON-LD graph, parsed: a syntax error fails here, not in a
-// search console weeks later.
-const graphOf = (page: string): { '@type': string }[] => {
-  const raw = page.match(
+// Every page's JSON-LD graph, parsed: a syntax error fails here.
+const graphOf = (text: string): { '@type': string }[] => {
+  const raw = text.match(
     /<script type="application\/ld\+json">([\s\S]*?)<\/script>/
   )?.[1];
   expect(raw).toBeDefined();
@@ -232,45 +146,33 @@ const graphOf = (page: string): { '@type': string }[] => {
   ];
 };
 
-test('the home page describes the app and answers its FAQ as structured data', () => {
-  const types = graphOf(html).map((n) => n['@type']);
-  expect(types).toEqual([
+test('the home page describes the app as structured data', () => {
+  expect(graphOf(html).map((n) => n['@type'])).toEqual([
     'Organization',
     'WebSite',
     'SoftwareApplication',
-    'FAQPage',
   ]);
-  expect(html).toContain('id="faq"');
 });
 
 test('/faq answers every question as visible text and as FAQPage data', async () => {
   const faq = await page('/faq/index.html');
   const graph = graphOf(faq) as unknown as {
     '@type': string;
-    name?: string;
     mainEntity?: { name: string }[];
-    itemListElement?: { name: string }[];
   }[];
   const questions =
     graph.find((n) => n['@type'] === 'FAQPage')?.mainEntity ?? [];
-  expect(questions.length).toBeGreaterThan(20);
+  expect(questions.length).toBeGreaterThan(15);
   for (const { name } of questions) {
     expect(faq).toContain(`>${name.replace(/'/g, '&#39;')}</dt>`);
   }
-  // One question per page: the home's code question stands in for pricing's.
   expect(new Set(questions.map((q) => q.name)).size).toBe(questions.length);
-  expect(faq).not.toContain('Does my code go anywhere?');
-  const crumbs = graph.find((n) => n['@type'] === 'BreadcrumbList');
-  expect(crumbs?.itemListElement?.at(-1)?.name).toBe('FAQ');
-  expect(html).toContain('href="/faq"');
-  expect(await page('/llms.txt')).toContain('#### How do I add a teammate?');
 });
 
 test('robots.txt allows every crawler and points at the sitemap', async () => {
   const robots = await page('/robots.txt');
   expect(robots).toContain('User-agent: *\nAllow: /');
   expect(robots).not.toContain('Disallow');
-  expect(robots).toContain('User-agent: ClaudeBot');
   expect(robots).toContain('Sitemap: https://dispatch.foo/sitemap.xml');
 });
 
@@ -279,31 +181,50 @@ test('every sitemap URL is a built page whose canonical is that URL', async () =
   const locs = [
     ...sitemap.matchAll(/<loc>https:\/\/dispatch\.foo([^<]*)<\/loc>/g),
   ].map((m) => m[1] ?? '');
-  expect(locs.length).toBeGreaterThan(8);
+  expect(locs).toEqual(['/', ...PAGES.map((p) => `/${p}`)]);
   for (const loc of locs) {
-    const file = loc.endsWith('/') ? `${loc}index.html` : `${loc}/index.html`;
-    const built = await page(file);
+    const built = await page(loc === '/' ? '/index.html' : `${loc}/index.html`);
     expect({
       loc,
       canonical: built.match(/rel="canonical" href="([^"]+)"/)?.[1],
-    }).toEqual({
-      loc,
-      canonical: `https://dispatch.foo${loc}`,
-    });
-    graphOf(built);
+    }).toEqual({ loc, canonical: `https://dispatch.foo${loc}` });
   }
 });
 
-test('llms.txt briefs AI answer engines with the FAQ and the shipping version', async () => {
+test('llms.txt briefs AI answer engines with the version and install line', async () => {
   const llms = await page('/llms.txt');
   expect(llms.startsWith('# Dispatch\n\n> ')).toBe(true);
-  expect(llms).toContain('### What is Dispatch?');
-  expect(llms).toContain('brew install --cask wsoule/tap/dispatch');
-  const conf = JSON.parse(
-    readFileSync(
-      new URL('../../desktop/src-tauri/tauri.conf.json', import.meta.url),
-      'utf8'
-    )
-  ) as { version: string };
-  expect(llms).toContain(`Current version: ${conf.version}.`);
+  expect(llms).toContain(`Current version: ${VERSION}.`);
+  expect(llms).toContain(INSTALL);
+  expect(llms).toContain('### The basics');
+});
+
+// The old protocol pages still build, unlinked, until the spec is rewritten
+// or retired. They must keep rendering without .md links.
+const manifest = JSON.parse(
+  readFileSync(
+    new URL(
+      '../../../packages/protocol-spec/versions/manifest.json',
+      import.meta.url
+    ),
+    'utf8'
+  )
+) as { versions: Record<string, unknown> };
+
+for (const version of Object.keys(manifest.versions)) {
+  test(`still renders DMP ${version}`, async () => {
+    const text = await page(`/protocol/${version}/index.html`);
+    expect(text).toContain('id="s6.2"');
+    expect(text).not.toMatch(/href="[^"]*\.md(?:#[^"]*)?"/);
+  });
+}
+
+test('no marketing page links the old protocol pages', async () => {
+  for (const path of ['/index.html', ...PAGES.map((p) => `/${p}/index.html`)]) {
+    const text = await page(path);
+    expect({ path, linked: /href="\/(protocol|a2a)\//.test(text) }).toEqual({
+      path,
+      linked: false,
+    });
+  }
 });

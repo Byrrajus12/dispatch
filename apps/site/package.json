@@ -15,7 +15,9 @@
   "devDependencies": {
     "@astrojs/markdown-satteri": "catalog:",
     "@dispatch/tokens": "workspace:*",
+    "@fontsource-variable/geist": "catalog:",
     "@fontsource-variable/inter": "catalog:",
+    "@fontsource/geist-mono": "catalog:",
     "@fontsource/jetbrains-mono": "catalog:",
     "@types/bun": "catalog:",
     "astro": "catalog:",

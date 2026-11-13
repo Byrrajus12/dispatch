@@ -1,0 +1,98 @@
+---
+import InstallCommand from '../components/site/InstallCommand.astro';
+import Landing from '../layouts/Landing.astro';
+import { DMG, RELEASES, VERSION } from '../lib/downloads';
+---
+
+<Landing
+  title="Download Dispatch for Mac"
+  description={`Install Dispatch ${VERSION} for macOS with one line in Terminal, or download the DMG.`}
+  path="/download"
+>
+  <div class="page">
+    <div class="wrap">
+      <div class="page-head">
+        <h1>Download Dispatch</h1>
+        <p class="lede">
+          Version {VERSION} for macOS: one universal build for Apple silicon and Intel Macs. Solo
+          use is free.
+        </p>
+      </div>
+
+      <div class="ways">
+        <section aria-labelledby="dmg-title">
+          <h2 id="dmg-title">The app</h2>
+          <p>Open the DMG and drag Dispatch into Applications.</p>
+          <a class="btn btn-primary" href={DMG}>Download for Mac</a>
+          <p class="file"><code>Dispatch_{VERSION}_universal.dmg</code></p>
+        </section>
+        <section aria-labelledby="terminal-title">
+          <h2 id="terminal-title">From the terminal</h2>
+          <p>Paste this into Terminal. It downloads the script and runs it.</p>
+          <InstallCommand />
+          <p class="file">
+            Read it first: <a href="/install.sh"><code>dispatch.foo/install.sh</code></a>
+          </p>
+        </section>
+      </div>
+
+      <div class="prose">
+        <h2 id="then">Then</h2>
+        <ol>
+          <li>
+            <strong>Have an agent ready.</strong> Install Claude Code or Codex and sign in to it the
+            way you normally do. Dispatch runs it as its own program, with your account or your key.
+          </li>
+          <li>
+            <strong>Open Dispatch.</strong> It looks for the Dispatch core, the background process
+            that does the work. If it finds none, the status bar shows the command that installs one,
+            with a button to copy it.
+          </li>
+          <li>
+            <strong>Add a project and say what you want.</strong> The <a href="/docs">docs</a> walk
+            through your first task, from the first sentence to a merged pull request.
+          </li>
+        </ol>
+        <p>
+          Older releases and their notes are on <a href={RELEASES}>GitHub</a>. Working with a team?
+          See <a href="/docs#team">joining a team</a> and <a href="/pricing">pricing</a>.
+        </p>
+      </div>
+    </div>
+  </div>
+</Landing>
+
+<style>
+  .ways {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+    gap: 1.25rem;
+    margin-top: clamp(2.5rem, 5vw, 3.5rem);
+  }
+  .ways section {
+    display: grid;
+    align-content: start;
+    justify-items: start;
+    gap: 0.9rem;
+    padding: 1.6rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+  .ways section > :global(.install) {
+    width: 100%;
+  }
+  .ways h2 {
+    font-size: 1.25rem;
+    letter-spacing: -0.02em;
+  }
+  .ways p {
+    color: var(--muted);
+  }
+  .file {
+    font-size: 0.88rem;
+  }
+  .file a {
+    color: var(--accent-ink);
+  }
+</style>

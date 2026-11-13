@@ -1,134 +1,207 @@
 ---
-import Footer from '../components/landing/Footer.astro';
-import Nav from '../components/landing/Nav.astro';
 import Landing from '../layouts/Landing.astro';
-import { DMG, RELEASES, WEB_APP } from '../lib/downloads';
-import '../styles/page.css';
+import { DMG, INSTALL, TEAM_SERVER } from '../lib/downloads';
 
-const repo = 'https://github.com/wsoule/dispatch';
+// The core's command line, as `dispatch-core help` lists it.
+const solo = `dispatch-core project add ~/code/pocket-weather
+dispatch-core overseer say "add offline mode"
+dispatch-core overseer attention`;
+
+const found = `dispatch-core server login ${TEAM_SERVER}
+dispatch-core machine add team --server ${TEAM_SERVER}
+dispatch-core team found --machine team --name laptop`;
+
+const share = `dispatch-core project add ~/code/pocket-weather
+dispatch-core project share pocket-weather --team <team>
+dispatch-core team invite <team>`;
+
+const join = `dispatch-core server login ${TEAM_SERVER}
+dispatch-core machine add team --server ${TEAM_SERVER}
+dispatch-core team join <invite-link> --name bob
+dispatch-core project link --machine team --project <project> \\
+  --path ~/code/pocket-weather --team <team>`;
 ---
 
 <Landing
-  title="Docs: set up Dispatch and land your first agent change"
-  description="Download Dispatch, follow Setup, and land your first change with an AI agent. The terminal path follows."
+  title="Docs: get started with Dispatch"
+  description="Install Dispatch, add a project, talk to your Overseer and land your first pull request. Then set up a team."
   path="/docs"
 >
-  <Nav />
-  <main class="page">
-    <div class="wrap">
-      <div class="head">
-        <h1>Quickstart</h1>
+  <div class="page">
+    <div class="wrap layout">
+      <div class="page-head">
+        <h1>Getting started</h1>
         <p class="lede">
-          From download to an agent landing its first change in a repo you already have, without
-          opening a terminal. The <a href={`${repo}#readme`}>README</a> goes deeper on every step.
+          From install to your first merged pull request, then how to bring a team. Every command
+          here is the Dispatch core’s; <code>dispatch-core help</code> lists the rest.
         </p>
       </div>
+
+      <nav class="toc" aria-label="On this page">
+        <ol>
+          <li><a href="#install">Install</a></li>
+          <li><a href="#agent">Your agent</a></li>
+          <li><a href="#first-task">Your first task</a></li>
+          <li><a href="#landing">Landing</a></li>
+          <li><a href="#change">Change the app</a></li>
+          <li><a href="#team">A team</a></li>
+          <li><a href="#linear">Linear</a></li>
+        </ol>
+      </nav>
 
       <div class="prose">
-        <h2 id="get-started">Get started</h2>
-
-        <h3>1. Download</h3>
+        <h2 id="install">Install</h2>
+        <p>On a Mac, paste this into Terminal:</p>
+        <pre><code>{INSTALL}</code></pre>
         <p>
-          Download Dispatch for Mac, <a href={DMG.arm}>Apple Silicon</a> or <a href={DMG.x64}>Intel</a>,
-          open the DMG and drag Dispatch into Applications. Builds are signed and notarized. Linux
-          packages (<code>.deb</code>, <code>.rpm</code>, <code>.AppImage</code>) are on the{' '}
-          <a href={RELEASES}>latest release</a>. Or, with Homebrew:
-        </p>
-        <pre><code>brew install --cask wsoule/tap/dispatch</code></pre>
-        <p>
-          Planning a Linear workspace with your team? <a href={WEB_APP}>Sign in at app.dispatch.foo</a>{' '}
-          to open it in the browser, nothing to install. A task there opens in the desktop app with
-          Open in desktop.
+          Or <a href={DMG}>download the DMG</a> and drag Dispatch into Applications. The app talks
+          to the Dispatch core, one background process per machine that holds your projects, runs
+          and terminals. If the app finds no core, its status bar shows the command that installs
+          one.
         </p>
 
-        <h3>2. Open it and follow Setup</h3>
-        <p>Setup checks three things and fixes each with a button. Anything already in place shows a tick.</p>
-        <ul>
-          <li><strong>Git.</strong> On a Mac without it, Setup opens Apple's installer.</li>
-          <li><strong>Your project.</strong> Choose a folder or clone one from GitHub. A folder without version tracking gets it turned on, with a first snapshot.</li>
-          <li><strong>Your AI agent.</strong> Pick Claude Code, Codex, Gemini CLI or another supported agent. Setup installs it and opens its own sign-in, so it runs on the plan you already have. An API key works too.</li>
-        </ul>
-
-        <h3>3. Land your first change</h3>
+        <h2 id="agent">Your agent</h2>
         <p>
-          Describe a change in a sentence. A short guide walks you through it: check the task, send
-          it to the agent, review what changed, and add it to your project. The agent works on its
-          own copy of your project, so nothing changes in your files until you say so.
+          Dispatch runs Claude Code and Codex as their own programs, so install the one you use and
+          sign in to it as you normally would. It runs with your account or your API key, and its
+          usage is billed by its maker.
         </p>
 
-        <h2 id="terminal">From the terminal</h2>
+        <h2 id="first-task">Your first task</h2>
         <p>
-          The <code>dispatch</code> command comes with the Homebrew install. After a DMG or Linux
-          install, add it from <strong>Settings › Setup › Terminal command</strong>. Then, in any git
-          repository:
+          Add a project folder, then tell your Overseer what you want, in the app’s box under the
+          conversation or from the terminal:
         </p>
-        <pre><code>dispatch init
-dispatch task create "My first task" --priority high
-dispatch task list</code></pre>
+        <pre><code>{solo}</code></pre>
         <p>
-          <code>dispatch init</code> creates <code>.dispatch/</code> with the project's settings. Tasks
-          are markdown files in <code>.dispatch/tasks/</code> by default, or, with{' '}
-          <code>dispatch init --db</code>, rows in a local database with a git receipt log kept
-          outside your repo.
+          The Overseer plans the work into tasks on the board and sends an agent to each one it
+          starts. Each agent works in its own worktree, so your checkout stays as it was.{' '}
+          <code>overseer attention</code> lists what is waiting on you: the same list the app shows
+          under <strong>Needs you</strong>.
         </p>
-
-        <h2>Connect your agents</h2>
         <p>
-          <code>dispatch init</code> registers Dispatch's MCP server in the project's{' '}
-          <code>.mcp.json</code>. Start Claude Code, Codex, Gemini CLI or any MCP agent in the repo
-          and it can read the board, claim the next task, comment, and save what it learned:
-        </p>
-        <pre><code>claude "Take the next task on the Dispatch board and post your plan on it."</code></pre>
-        <p>
-          A new agent waits for your approval before it writes shared memory. You'll see it in{' '}
-          <strong>Coming in</strong>.
+          A task can name the files it expects to change. That only warns other Overseers about
+          likely merge conflicts; nothing is denied for cost or for declared files.
         </p>
 
-        <h2>Dispatch a task</h2>
+        <h2 id="landing">Landing</h2>
         <p>
-          In the app, open a task and press <strong>Dispatch</strong>, or from the terminal:
+          When an agent is done, your project’s own checks run. If they pass, a pull request opens on
+          GitHub with a description of the change. Merge it from Going out in the app or on GitHub.
+          Review comments on the pull request go back to the agent.
         </p>
-        <pre><code>dispatch run t-1a2b3c</code></pre>
         <p>
-          Each run works in its own git worktree, on its own branch, inside the paths the task
-          declared it would write. Anything else needs your approval while it runs. Runs carry
-          spend and turn caps. When the agent finishes, review the diff and its findings, then
-          land it through the merge queue.
-        </p>
-
-        <h2>Plan bigger work</h2>
-        <p>
-          Tell the <strong>Overseer</strong> what you want built, in one sentence. It proposes a
-          milestone with tasks and dependencies. Nothing is created until you approve. From the
-          milestone's plan, <strong>Send agents</strong> works it wave by wave: a blocked task
-          starts on its own once its blockers finish. The <strong>Graph</strong> shows what stands
-          between you and a release, and copies as Mermaid.
+          If checks fail, the run shows under Needs you. Send the agent back with a note and its
+          session resumes with what failed. For a second read, <code>dispatch-core run review</code>
+          asks a reviewer agent to look at the diff; its verdict goes in the pull request’s
+          description and never blocks.
         </p>
 
-        <h2>Bring your team</h2>
-        <pre><code>dispatch team start
-dispatch team invite teammate@example.com</code></pre>
+        <h2 id="change">Change the app</h2>
         <p>
-          Your teammate runs <code>dispatch team join</code> with the link it prints. Their agents
-          share your board and can message yours. Free for up to three people, with every
-          feature; see <a href="/pricing">pricing</a>.
+          Every panel in the window is a small JavaScript file in your app folder, and every theme
+          is a file. The folder carries a guide, <code>AGENTS.md</code>, written for Claude or any
+          agent you ask to change a panel. Save a change and the window picks it up.
         </p>
 
-        <h2>Where things live</h2>
-        <ul>
-          <li><strong>Your code</strong> stays in your checkout. Runs use your machine and your own agent and API key.</li>
-          <li><strong>Tasks and history</strong> live in your repo or in a local database whose receipt log is a git repository you can restore from.</li>
-          <li><strong>Nothing is uploaded.</strong> The daemon serves the app over local HTTP. Teams sync through a git branch or the Dispatch relay; turn on end-to-end encryption and the relay can't read the board, memory, docs or messages.</li>
-        </ul>
+        <h2 id="team">A team</h2>
+        <p>
+          Teams use the hosted server at <a href={TEAM_SERVER}>team.dispatch.foo</a>. It stores
+          only sealed, end-to-end encrypted bytes. Team is $10 per seat per month; see{' '}
+          <a href="/pricing">pricing</a>.
+        </p>
+        <h3>Start the team</h3>
+        <p>
+          Sign in at <a href={TEAM_SERVER}>team.dispatch.foo</a> with Linear and make a team. Then
+          sign your core in and found the team’s keys:
+        </p>
+        <pre><code>{found}</code></pre>
+        <p>
+          <code>server login</code> prints a code; approve it on the website. <code>team found</code>
+          prints a 24-word recovery phrase once. Keep it somewhere safe: it is the only way back if
+          every device is lost.
+        </p>
+        <h3>Share a project and invite someone</h3>
+        <pre><code>{share}</code></pre>
+        <p>
+          <code>team found</code> printed the team’s id, used as <code>&lt;team&gt;</code>, and{' '}
+          <code>project share</code> prints the shared project’s id. Invite your teammate on the
+          website too, and send them both ids and the link <code>team invite</code> printed. The
+          link works once and lasts 72 hours.
+        </p>
+        <h3>Join as a teammate</h3>
+        <p>Accept the website invite, then on your machine, with your own copy of the code:</p>
+        <pre><code>{join}</code></pre>
+        <p>
+          The board shows up, kept in sync, and your teammates’ agents show under Sessions. One core
+          is named lead for each project; <code>dispatch-core overseer leads</code> shows which.
+        </p>
 
-        <h2>More</h2>
-        <ul>
-          <li><a href={`${repo}#readme`}>README</a>: storage, migration, terminals, files, Design mode, remotes.</li>
-          <li><a href="/protocol/">Dispatch Messaging Protocol</a>: how agents talk to each other.</li>
-          <li><a href="/changelog">Changelog</a>.</li>
-        </ul>
+        <h2 id="linear">Linear</h2>
+        <p>
+          A project can sync both ways with a Linear team. Connect it with a Linear API key:
+        </p>
+        <pre><code>dispatch-core integrate connect --provider linear --token &lt;key&gt; --team &lt;team-id&gt;</code></pre>
+        <p>
+          The first pass only links what is already on both sides; it copies nothing.{' '}
+          <code>dispatch-core linear signIn</code> signs you in as yourself, so your edits show in
+          Linear under your name.
+        </p>
       </div>
     </div>
-  </main>
-  <Footer />
+  </div>
 </Landing>
+
+<style>
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0 4rem;
+  }
+  .toc {
+    margin-top: 2rem;
+  }
+  .toc ol {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.25rem;
+    padding: 0;
+    list-style: none;
+  }
+  .toc a {
+    color: var(--muted);
+    font-size: 0.95rem;
+    text-decoration: none;
+  }
+  .toc a:hover {
+    color: var(--ink);
+  }
+  .page-head code {
+    color: var(--ink-soft);
+  }
+  @media (width >= 1060px) {
+    .layout {
+      grid-template-columns: minmax(0, 42rem) 12rem;
+    }
+    .page-head {
+      grid-column: 1 / -1;
+    }
+    .prose {
+      grid-row: 2;
+    }
+    .toc {
+      grid-row: 2;
+      grid-column: 2;
+      position: sticky;
+      top: 5.5rem;
+      align-self: start;
+      margin-top: clamp(2.5rem, 5vw, 3.5rem);
+    }
+    .toc ol {
+      display: grid;
+      gap: 0.5rem;
+      padding-left: 1rem;
+      border-left: 1px solid var(--line);
+    }
+  }
+</style>

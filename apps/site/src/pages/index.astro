@@ -1,38 +1,320 @@
 ---
-import AgentToAgent from '../components/landing/AgentToAgent.astro';
-import AnyAgent from '../components/landing/AnyAgent.astro';
-import BoardNotChat from '../components/landing/BoardNotChat.astro';
-import Changelog from '../components/landing/Changelog.astro';
-import Closing from '../components/landing/Closing.astro';
-import Faq from '../components/landing/Faq.astro';
-import Footer from '../components/landing/Footer.astro';
-import Hero from '../components/landing/Hero.astro';
-import Memory from '../components/landing/Memory.astro';
-import Mermaid from '../components/landing/Mermaid.astro';
-import Nav from '../components/landing/Nav.astro';
-import Principles from '../components/landing/Principles.astro';
-import TwoViews from '../components/landing/TwoViews.astro';
-import WebApp from '../components/landing/WebApp.astro';
-import { homeFaq } from '../data/faq';
+import GetIt from '../components/site/GetIt.astro';
+import PlanningTabs from '../components/site/PlanningTabs.astro';
+import Shot from '../components/site/Shot.astro';
 import Landing from '../layouts/Landing.astro';
-import { faqPage } from '../lib/seo';
+
+// What brings the Overseer to you. Everything else keeps going without you.
+const flags: [string, string][] = [
+  ['A question', 'An agent cannot go on without an answer from you.'],
+  ['A tool approval', 'An agent wants to run a command you have not allowed yet.'],
+  ['Failed checks', 'Your project’s checks failed on an agent’s change.'],
+  ['A pull request', 'The work is done and its pull request is ready to merge.'],
+];
+
+// How a finished task reaches main, in order.
+const landing: [string, string][] = [
+  ['Your checks run', 'The project’s own checks run on the agent’s branch.'],
+  ['A pull request opens', 'It opens with a description of the change.'],
+  ['GitHub merges it', 'Press Merge in Dispatch or on GitHub. Nothing queues in between.'],
+  ['Comments go back', 'Review comments on the pull request go back to the agent that wrote it.'],
+];
+
+const mod = `// mods/statusbar/main.js, shortened
+import { View, div } from "gpui-kit";
+import { h_flex } from "gpui-base";
+import { core, theme, px } from "dispatch";
+
+export default class StatusBar extends View {
+  render(cx) {
+    const tok = theme().tokens;
+    return h_flex()
+      .px(px(16)).gap(px(12)).items_center()
+      .bg(tok.base).text_color(tok.muted)
+      .child(div().child(\`core \${core().version}\`));
+  }
+}`;
 ---
 
-<Landing jsonLd={[faqPage(homeFaq)]}>
-  <Nav />
-  <main>
-    <Hero />
-    <Principles />
-    <BoardNotChat />
-    <TwoViews />
-    <AnyAgent />
-    <AgentToAgent />
-    <Memory />
-    <WebApp />
-    <Mermaid />
-    <Changelog />
-    <Faq />
-    <Closing />
-  </main>
-  <Footer />
+<Landing>
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="wrap">
+      <h1 id="hero-title">Tell your Overseer what you want. It sends the agents.</h1>
+      <p class="lede">
+        Dispatch is a Mac app for running coding agents. Your Overseer plans the work, starts
+        Claude Code or Codex on your machine, and only flags you down when a task needs you.
+      </p>
+      <GetIt />
+    </div>
+    <div class="wrap stage">
+      <Shot name="hero" eager />
+    </div>
+  </section>
+
+  <section class="section tight" aria-labelledby="plain-title">
+    <div class="wrap">
+      <h2 id="plain-title" class="visually-hidden">How it works</h2>
+      <ul class="points plain">
+        <li>
+          <h3>You talk to one Overseer</h3>
+          <p>
+            Say what you want in a sentence. It turns that into tasks on a board and decides what
+            to start.
+          </p>
+        </li>
+        <li>
+          <h3>Agents run as themselves</h3>
+          <p>
+            Claude Code and Codex run as their own command line programs, on your machine, signed
+            in with your account or your key.
+          </p>
+        </li>
+        <li>
+          <h3>Done means a pull request</h3>
+          <p>Finished work passes your checks and opens on GitHub, ready for you to merge.</p>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="section" id="needs-you" aria-labelledby="needs-title">
+    <div class="wrap">
+      <div class="section-head">
+        <h2 id="needs-title">It interrupts you for four things.</h2>
+        <p>
+          Everything else keeps moving. A task can name the files it expects to change, and that
+          only warns other Overseers about likely merge conflicts. Nothing is denied for cost or
+          for the files a task touches.
+        </p>
+      </div>
+      <ul class="flags">
+        {
+          flags.map(([title, text]) => (
+            <li>
+              <h3>{title}</h3>
+              <p>{text}</p>
+            </li>
+          ))
+        }
+      </ul>
+      <p class="aside">
+        Each one waits under <b>Needs you</b> with a button per answer: approve, deny, merge or send
+        the agent back.
+      </p>
+    </div>
+  </section>
+
+  <section class="section" id="pull-requests" aria-labelledby="pr-title">
+    <div class="wrap">
+      <div class="section-head">
+        <h2 id="pr-title">Finished work lands as a pull request.</h2>
+        <p>
+          Open any run to read what its agent did, answer it, and see the diff. When you want a
+          second read, a reviewer agent can look at the change; its verdict goes in the pull
+          request and never blocks it.
+        </p>
+      </div>
+      <Shot name="run" />
+      <ol class="points steps">
+        {
+          landing.map(([title, text]) => (
+            <li>
+              <h3>{title}</h3>
+              <p>{text}</p>
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+  </section>
+
+  <section class="section" id="yours" aria-labelledby="yours-title">
+    <div class="wrap split">
+      <div class="copy">
+        <h2 id="yours-title">The app is yours to change.</h2>
+        <p>
+          Dispatch is a native Mac app, and every panel in it is a small JavaScript file in your app
+          folder. Themes are files too. Edit one yourself, or ask Claude to change a panel for you,
+          and the window picks up the change as soon as it is saved.
+        </p>
+        <p>
+          The panels it ships with: the Overseer and Needs you, the board, sessions, a run view to
+          talk to an agent about its task, the task page, a terminal, Going out for pull requests,
+          and five planning views. Each comes in light and dark.
+        </p>
+      </div>
+      <pre class="code" aria-label="A panel's source, shortened"><code>{mod}</code></pre>
+    </div>
+    <div class="wrap">
+      <div class="board"><Shot name="board" /></div>
+    </div>
+  </section>
+
+  <section class="section" id="planning" aria-labelledby="planning-title">
+    <div class="wrap">
+      <div class="section-head">
+        <h2 id="planning-title">Plan the week, not just the next task.</h2>
+        <p>
+          Five planning views read the same board your agents work from, so the plan and the work
+          never drift apart.
+        </p>
+      </div>
+      <PlanningTabs />
+    </div>
+  </section>
+
+  <section class="section" id="teams" aria-labelledby="teams-title">
+    <div class="wrap">
+      <div class="section-head">
+        <h2 id="teams-title">Bring your team. The server can’t read a word.</h2>
+        <p>
+          Teams share projects through a hosted server at team.dispatch.foo. It stores only sealed,
+          end-to-end encrypted bytes, so it cannot read your task titles or your code.
+        </p>
+      </div>
+      <Shot name="team" />
+      <ul class="points">
+        <li>
+          <h3>One board, synced</h3>
+          <p>Share a project and every teammate’s board stays in step with yours.</p>
+        </li>
+        <li>
+          <h3>See their agents</h3>
+          <p>Your teammates’ agents show beside your own, with what each is working on.</p>
+        </li>
+        <li>
+          <h3>One lead per project</h3>
+          <p>One core is named lead for each project, and its Overseer acts for everyone on it.</p>
+        </li>
+        <li>
+          <h3>Works with Linear</h3>
+          <p>Sign in with Linear, and keep a project in two-way sync with a Linear team.</p>
+        </li>
+      </ul>
+      <p class="aside">
+        Working alone is free. A team is $10 per seat per month. <a href="/pricing">See pricing</a>
+      </p>
+    </div>
+  </section>
+
+  <section class="section closing" id="install" aria-labelledby="install-title">
+    <div class="wrap">
+      <h2 id="install-title">Install Dispatch.</h2>
+      <p class="lede">Bring a project and an agent you already use. The Overseer does the rest.</p>
+      <GetIt />
+    </div>
+  </section>
 </Landing>
+
+<style>
+  .hero {
+    padding: clamp(3.5rem, 9vw, 7rem) 0 clamp(3.5rem, 7vw, 5.5rem);
+  }
+  .hero h1 {
+    max-width: 15ch;
+  }
+  .lede {
+    max-width: 36rem;
+    margin: 1.4rem 0 2.25rem;
+    color: var(--ink-soft);
+    font-size: clamp(1.1rem, 1rem + 0.45vw, 1.3rem);
+    line-height: 1.5;
+    text-wrap: pretty;
+  }
+  .stage {
+    margin-top: clamp(3rem, 7vw, 5rem);
+  }
+  .tight {
+    padding-block: clamp(2.5rem, 5vw, 3.5rem);
+  }
+  .plain {
+    margin-top: 0;
+  }
+  .plain h3 {
+    font-size: 1.2rem;
+  }
+
+  /* The page's one orange device: the app's flag rule, for what needs you. */
+  .flags {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+    gap: 1.25rem;
+    padding: 0;
+    list-style: none;
+  }
+  .flags li {
+    padding: 0.2rem 0 0.2rem 1.1rem;
+    border-left: 3px solid var(--signal);
+  }
+  .flags h3 {
+    color: var(--signal);
+    font-size: 1.15rem;
+  }
+  .flags p {
+    margin-top: 0.35rem;
+    color: var(--ink-soft);
+  }
+  .aside {
+    margin-top: 2.25rem;
+    color: var(--muted);
+  }
+  .aside b {
+    color: var(--ink);
+  }
+  .aside a {
+    color: var(--accent-ink);
+    text-underline-offset: 3px;
+  }
+
+  /* The landing steps really are a sequence, so they carry numbers. */
+  .steps {
+    counter-reset: step;
+  }
+  .steps li {
+    counter-increment: step;
+  }
+  .steps h3::before {
+    content: counter(step) '  ';
+    color: var(--accent-ink);
+    font-family: var(--mono);
+    font-weight: 500;
+  }
+
+  .split {
+    display: grid;
+    gap: 2.5rem 4rem;
+    align-items: start;
+  }
+  .copy p {
+    max-width: 34rem;
+    margin-top: 1.1rem;
+    color: var(--muted);
+    font-size: 1.1rem;
+    text-wrap: pretty;
+  }
+  .code {
+    min-width: 0;
+    padding: 1.25rem 1.4rem;
+    overflow-x: auto;
+    border-radius: var(--radius);
+    background: var(--code-bg);
+    color: var(--code-ink);
+    font-size: 0.82rem;
+    line-height: 1.7;
+  }
+  .board {
+    margin-top: clamp(2.5rem, 5vw, 3.5rem);
+  }
+  @media (width >= 960px) {
+    .split {
+      grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    }
+  }
+
+  .closing h2 {
+    font-size: clamp(2.2rem, 1.5rem + 3vw, 3.6rem);
+  }
+  .closing .lede {
+    margin-top: 1rem;
+  }
+</style>

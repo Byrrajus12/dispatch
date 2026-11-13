@@ -537,7 +537,13 @@ importers:
       '@dispatch/tokens':
         specifier: workspace:*
         version: link:../../packages/tokens
+      '@fontsource-variable/geist':
+        specifier: 'catalog:'
+        version: 5.3.0
       '@fontsource-variable/inter':
+        specifier: 'catalog:'
+        version: 5.3.0
+      '@fontsource/geist-mono':
         specifier: 'catalog:'
         version: 5.3.0
       '@fontsource/jetbrains-mono':
