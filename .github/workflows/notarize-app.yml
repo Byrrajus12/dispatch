@@ -1,0 +1,50 @@
+# Notarizes the new Dispatch app's DMG. The DMG is built and signed on a Mac
+# (dispatch-app's `just package`) and attached to an `app-v*` release here;
+# this run notarizes and staples it with the Apple account the Tauri release
+# already uses, then puts the stapled DMG back on the same release.
+name: Notarize app release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The app-v* release whose DMG to notarize'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  notarize:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - name: Notarize and staple the DMG
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in
+            app-v*) ;;
+            *) echo "::error::only app-v* releases are notarized here"; exit 1 ;;
+          esac
+          mkdir dist
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p '*.dmg' -D dist
+          dmg=$(ls dist/*.dmg)
+          codesign --verify --strict "$dmg"
+          xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait \
+            --output-format json | tee result.json
+          if ! grep -Eq '"status" *: *"Accepted"' result.json; then
+            id=$(sed -En 's/.*"id" *: *"([^"]*)".*/\1/p' result.json)
+            xcrun notarytool log "$id" --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" || true
+            exit 1
+          fi
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          gh release upload "$TAG" "$dmg" -R "$GITHUB_REPOSITORY" --clobber
