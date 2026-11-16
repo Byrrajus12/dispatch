@@ -17,6 +17,12 @@ APFS
 apikey
 Applebot
 appliable
+AQYBJ
+NSUTF
+libexec
+mountpoint
+noautoopen
+nobrowse
 argmax
 arrayish
 ASKPASS
