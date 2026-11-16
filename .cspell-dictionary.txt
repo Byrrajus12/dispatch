@@ -17,6 +17,12 @@ APFS
 apikey
 Applebot
 appliable
+AQYBJ
+NSUTF
+libexec
+mountpoint
+noautoopen
+nobrowse
 argmax
 arrayish
 ASKPASS
@@ -219,6 +225,7 @@ glyphed
 gnueabihf
 gopd
 gpgsign
+gpui
 granularities
 greppable
 grpcurl

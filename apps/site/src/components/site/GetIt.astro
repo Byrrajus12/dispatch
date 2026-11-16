@@ -1,0 +1,52 @@
+---
+import { DMG, VERSION } from '../../lib/downloads';
+import InstallCommand from './InstallCommand.astro';
+
+// The two ways in, side by side: the DMG button and the terminal line.
+---
+
+<div class="get">
+  <a class="btn btn-primary" href={DMG}>Download for Mac</a>
+  <span class="or">or paste this in a terminal</span>
+  <div class="cmd"><InstallCommand /></div>
+  <p class="note">
+    Version {VERSION}, one universal build for Apple silicon and Intel Macs. <a href="/download"
+      >What gets installed</a
+    >
+  </p>
+</div>
+
+<style>
+  .get {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.9rem 1rem;
+    align-items: center;
+    max-width: 40rem;
+  }
+  .or {
+    color: var(--muted);
+    font-size: 0.95rem;
+  }
+  .cmd {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+  .note {
+    grid-column: 1 / -1;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  .note a {
+    color: var(--ink-soft);
+    text-underline-offset: 3px;
+  }
+  @media (width < 480px) {
+    .get {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .btn {
+      justify-self: start;
+    }
+  }
+</style>

@@ -1,39 +1,22 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
-import { DMG, RELEASES } from './downloads';
-import { EXTENSIONS, readManifest } from './protocolSource';
+import { DMG, RELEASES, VERSION } from './downloads';
 
 export const SITE = 'https://dispatch.foo';
 export const REPO = 'https://github.com/wsoule/dispatch';
 export const DESCRIPTION =
-  'Give AI coding agents tasks, not chats. A shared board for Claude Code, Codex or any MCP agent, on your own machines, with review and a merge queue.';
+  'Talk to your Overseer: it plans the work, sends Claude Code and Codex to do it on your machine, and flags you only when a task needs you. Finished work lands as a GitHub pull request.';
 
-// The shipping app version, read from the desktop app's Tauri config so
-// structured data never names a stale release.
-export function appVersion(): string {
-  const conf = readFileSync(
-    resolve(process.cwd(), '../desktop/src-tauri/tauri.conf.json'),
-    'utf8'
-  );
-  return (JSON.parse(conf) as { version: string }).version;
-}
-
-// Every indexable page, for the sitemap and llms.txt. Alias pages
-// (/protocol/, /protocol/draft/) are left out: they name an immutable page as
-// canonical, and that page is listed instead.
+// Every page the site links and wants indexed, for the sitemap and llms.txt.
+// The old protocol and A2A pages still build but are left out: they describe
+// the previous system.
 export function indexablePaths(): string[] {
-  const manifest = readManifest();
   return [
     '/',
+    '/download',
     '/docs',
     '/pricing',
     '/faq',
     '/changelog',
-    '/clips',
     '/privacy',
-    ...Object.keys(manifest.versions).map((v) => `/protocol/${v}/`),
-    ...Object.keys(EXTENSIONS).map((name) => `/a2a/ext/${name}/v1`),
   ];
 }
 
@@ -70,32 +53,39 @@ export function softwareApplication() {
     description: DESCRIPTION,
     applicationCategory: 'DeveloperApplication',
     applicationSubCategory: 'AI coding agent orchestration',
-    operatingSystem: 'macOS, Linux',
-    softwareVersion: appVersion(),
-    downloadUrl: [DMG.arm, DMG.x64, RELEASES],
-    installUrl: `${SITE}/docs`,
-    screenshot: `${SITE}/app/tasks.webp`,
+    operatingSystem: 'macOS',
+    softwareVersion: VERSION,
+    downloadUrl: [DMG, RELEASES],
+    installUrl: `${SITE}/download`,
+    screenshot: `${SITE}/shots/overseer-light-1600.webp`,
     image: `${SITE}/og.png`,
-    isAccessibleForFree: true,
-    offers: {
-      '@type': 'Offer',
-      price: '0',
-      priceCurrency: 'USD',
-      description:
-        'Free for up to three people, every feature, commercial use included.',
-      url: `${SITE}/pricing`,
-    },
+    offers: [
+      {
+        '@type': 'Offer',
+        name: 'Solo',
+        price: '0',
+        priceCurrency: 'USD',
+        description: 'Your machine, your agents, every local feature.',
+        url: `${SITE}/pricing`,
+      },
+      {
+        '@type': 'Offer',
+        name: 'Team',
+        price: '10',
+        priceCurrency: 'USD',
+        description: 'Per seat per month, on the hosted team server.',
+        url: `${SITE}/pricing`,
+      },
+    ],
     featureList: [
-      'Shared task board for AI coding agents',
-      'Works with Claude Code, Codex, Gemini CLI and any MCP agent',
-      'Each run in its own git worktree',
-      'Declared write scope per task',
-      'Spend and turn caps per run and per milestone',
-      'Review with diff, findings and transcript, then a merge queue',
-      'Agent-to-agent messaging and A2A',
-      'Agent memory that carries across runs',
-      'Milestone map with critical path, exportable as Mermaid',
-      'Local first: runs on your machine with your own agent and key',
+      'An Overseer per person that plans work, creates tasks and sends coding agents',
+      'Runs Claude Code and Codex as their own CLIs, with your own sign-in',
+      'Flags you only for questions, tool approvals, failed checks and pull requests to merge',
+      'Finished work lands as a GitHub pull request',
+      'A native macOS app whose panels are JavaScript mods and whose themes are files',
+      'Planning views: My week, Allocation, Projects, Timeline and Graph',
+      'Teams on a hosted server that stores only end-to-end encrypted data',
+      'Two-way Linear sync',
     ],
     publisher: { '@id': ORG_ID },
   };

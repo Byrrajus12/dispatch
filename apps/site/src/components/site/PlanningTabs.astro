@@ -1,0 +1,121 @@
+---
+import Shot from './Shot.astro';
+
+// The five planning views as tabs over their screenshots. Without script
+// every panel shows, one after another.
+const views = [
+  ['week', 'My week', 'Your open tasks this week and later, grouped by milestone, against how much you can take on.'],
+  ['allocation', 'Allocation', 'Who would get each unassigned task, everyone’s load, and one button to apply it.'],
+  ['projects', 'Projects', 'Every project and milestone with its lead, dates and progress, and what is slipping.'],
+  ['timeline', 'Timeline', 'Projects and milestones across the coming weeks, with today marked.'],
+  ['graph', 'Graph', 'Initiatives down to tasks, and what blocks what.'],
+] as const;
+---
+
+<div class="tabs" data-tabs>
+  <div class="list" role="tablist" aria-label="Planning views" hidden>
+    {
+      views.map(([id, label], i) => (
+        <button
+          type="button"
+          role="tab"
+          id={`plan-tab-${id}`}
+          aria-controls={`plan-${id}`}
+          aria-selected={i === 0 ? 'true' : 'false'}
+          tabindex={i === 0 ? 0 : -1}
+        >
+          {label}
+        </button>
+      ))
+    }
+  </div>
+  {
+    views.map(([id, label, caption]) => (
+      <section class="panel" id={`plan-${id}`} role="tabpanel" aria-labelledby={`plan-tab-${id}`}>
+        <p class="caption">
+          <b>{label}.</b> {caption}
+        </p>
+        <Shot name={id} />
+      </section>
+    ))
+  }
+</div>
+
+<style>
+  .list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-bottom: 1.25rem;
+  }
+  .list[hidden] {
+    display: none;
+  }
+  [role='tab'] {
+    min-height: 2.4rem;
+    padding: 0 1rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    background: none;
+    color: var(--muted);
+    font-family: var(--sans);
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+  [role='tab']:hover {
+    color: var(--ink);
+  }
+  [role='tab'][aria-selected='true'] {
+    border-color: var(--ink);
+    background: var(--ink);
+    color: var(--bg);
+  }
+  .panel + .panel {
+    margin-top: 2.5rem;
+  }
+  .ready .panel + .panel {
+    margin-top: 0;
+  }
+  .caption {
+    max-width: 40rem;
+    margin-bottom: 1rem;
+    color: var(--muted);
+  }
+  .caption b {
+    color: var(--ink);
+  }
+</style>
+
+<script>
+  // Turns the stacked panels into tabs: arrow keys move between them, and only
+  // the chosen one shows.
+  for (const root of document.querySelectorAll<HTMLElement>('[data-tabs]')) {
+    const list = root.querySelector<HTMLElement>('[role="tablist"]');
+    const tabs = [...root.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    const panels = tabs.map((t) => document.getElementById(t.getAttribute('aria-controls') ?? ''));
+    if (list === null) continue;
+    const select = (index: number, focus: boolean) => {
+      tabs.forEach((tab, i) => {
+        const on = i === index;
+        tab.setAttribute('aria-selected', String(on));
+        tab.tabIndex = on ? 0 : -1;
+        panels[i]?.toggleAttribute('hidden', !on);
+      });
+      if (focus) tabs[index]?.focus();
+    };
+    list.hidden = false;
+    root.classList.add('ready');
+    select(0, false);
+    tabs.forEach((tab, i) => {
+      tab.addEventListener('click', () => select(i, false));
+      tab.addEventListener('keydown', (e) => {
+        const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+        if (e.key === 'Home') select(0, true);
+        else if (e.key === 'End') select(tabs.length - 1, true);
+        else if (step !== undefined) select((i + step + tabs.length) % tabs.length, true);
+        else return;
+        e.preventDefault();
+      });
+    });
+  }
+</script>

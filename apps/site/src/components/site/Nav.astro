@@ -1,0 +1,241 @@
+---
+// The sticky site header. On phones the links fold into a Menu disclosure
+// (a plain <details>, so it works without script).
+const links: [string, string][] = [
+  ['Docs', '/docs'],
+  ['Pricing', '/pricing'],
+  ['FAQ', '/faq'],
+  ['Changelog', '/changelog'],
+  ['GitHub', 'https://github.com/wsoule/dispatch'],
+];
+const here = Astro.url.pathname.replace(/\/$/, '') || '/';
+---
+
+<header class="nav">
+  <div class="wrap bar">
+    <a class="mark" href="/" aria-label="Dispatch home">
+      <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true">
+        <circle cx="16" cy="16" r="10" fill="none" stroke="currentColor" stroke-width="3"></circle>
+        <circle cx="16" cy="16" r="4.5" fill="currentColor"></circle>
+      </svg>
+      Dispatch
+    </a>
+    <nav aria-label="Site">
+      <div class="links">
+        {
+          links.map(([label, href]) => (
+            <a href={href} aria-current={here === href ? 'page' : undefined}>
+              {label}
+            </a>
+          ))
+        }
+      </div>
+      <button class="theme" type="button" data-theme-toggle aria-label="Switch to dark theme">
+        <svg class="moon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path
+            d="M13.5 9.6A6 6 0 0 1 6.4 2.5a6 6 0 1 0 7.1 7.1Z"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linejoin="round"></path>
+        </svg>
+        <svg class="sun" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.5"></circle>
+          <path
+            d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M3.4 12.6l1.3-1.3M11.3 4.7l1.3-1.3"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"></path>
+        </svg>
+      </button>
+      <a class="btn btn-primary get" href="/download">Download</a>
+      <details class="menu">
+        <summary aria-label="Menu"><span class="bars" aria-hidden="true"></span></summary>
+        <div class="sheet">
+          {links.map(([label, href]) => <a href={href}>{label}</a>)}
+        </div>
+      </details>
+    </nav>
+  </div>
+</header>
+
+<style>
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    border-bottom: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(12px);
+  }
+  .bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    min-height: 3.75rem;
+  }
+  .mark {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    font-size: 1.05rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    text-decoration: none;
+  }
+  .mark svg {
+    color: var(--accent);
+  }
+  nav {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .links {
+    display: flex;
+    gap: 0.25rem;
+    margin-right: 0.5rem;
+  }
+  .links a {
+    padding: 0.4rem 0.7rem;
+    border-radius: 999px;
+    color: var(--muted);
+    font-size: 0.93rem;
+    text-decoration: none;
+  }
+  .links a:hover,
+  .links a[aria-current='page'] {
+    color: var(--ink);
+  }
+  .get {
+    min-height: 2.25rem;
+    padding: 0 0.95rem;
+    font-size: 0.9rem;
+  }
+  .theme {
+    display: inline-grid;
+    place-items: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .theme:hover {
+    color: var(--ink);
+  }
+  /* The icon names the theme a press switches to. */
+  .sun {
+    display: none;
+  }
+  @media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme='light'])) .moon {
+      display: none;
+    }
+    :global(:root:not([data-theme='light'])) .sun {
+      display: block;
+    }
+  }
+  :global(:root[data-theme='dark']) .moon {
+    display: none;
+  }
+  :global(:root[data-theme='dark']) .sun {
+    display: block;
+  }
+  .menu {
+    display: none;
+    position: relative;
+  }
+  summary {
+    display: grid;
+    place-items: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    list-style: none;
+    cursor: pointer;
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  .bars,
+  .bars::before {
+    display: block;
+    width: 0.9rem;
+    height: 1.5px;
+    background: currentColor;
+  }
+  .bars {
+    transform: translateY(-3px);
+  }
+  .bars::before {
+    content: '';
+    transform: translateY(5px);
+  }
+  .sheet {
+    position: absolute;
+    top: calc(100% + 0.6rem);
+    right: 0;
+    display: grid;
+    min-width: 11rem;
+    padding: 0.35rem;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+  .sheet a {
+    padding: 0.6rem 0.75rem;
+    border-radius: var(--radius-sm);
+    text-decoration: none;
+  }
+  .sheet a:hover {
+    background: var(--sunk);
+  }
+  @media (width < 760px) {
+    .links {
+      display: none;
+    }
+    .menu {
+      display: block;
+    }
+  }
+</style>
+
+<script>
+  // Close the phone menu once a link in it is followed.
+  for (const menu of document.querySelectorAll<HTMLDetailsElement>('.menu')) {
+    menu.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('a')) menu.open = false;
+    });
+  }
+
+  // Flips the page between light and dark and remembers the choice. With none
+  // stored, the OS setting applies.
+  const root = document.documentElement;
+  const media = matchMedia('(prefers-color-scheme: dark)');
+  const current = (): 'light' | 'dark' => {
+    const chosen = root.getAttribute('data-theme');
+    if (chosen === 'light' || chosen === 'dark') return chosen;
+    return media.matches ? 'dark' : 'light';
+  };
+  for (const btn of document.querySelectorAll<HTMLButtonElement>('[data-theme-toggle]')) {
+    const label = () =>
+      btn.setAttribute('aria-label', `Switch to ${current() === 'dark' ? 'light' : 'dark'} theme`);
+    label();
+    media.addEventListener('change', label);
+    btn.addEventListener('click', () => {
+      const next = current() === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+      try {
+        localStorage.setItem('dispatch-theme', next);
+      } catch {
+        // Storage is unavailable; the choice lasts for this page only.
+      }
+      label();
+    });
+  }
+</script>

@@ -1,10 +1,13 @@
-// release.yml uploads version-free DMG copies, so these always reach the newest build.
-export const RELEASES = 'https://github.com/wsoule/dispatch/releases/latest';
+// The one place the site names the app's version and where to get it.
+// Releases on wsoule/dispatch also hold the old app, so `latest` cannot be
+// trusted to point at this one: the DMG link names its tag outright.
+export const VERSION = '1.0.0';
 
-export const DMG = {
-  arm: `${RELEASES}/download/Dispatch_aarch64.dmg`,
-  x64: `${RELEASES}/download/Dispatch_x64.dmg`,
-} as const;
+export const RELEASES = 'https://github.com/wsoule/dispatch/releases';
 
-// The hosted planner: a team's Linear workspace on the web, nothing to install.
-export const WEB_APP = 'https://app.dispatch.foo';
+export const DMG = `${RELEASES}/download/app-v${VERSION}/Dispatch_${VERSION}_universal.dmg`;
+
+// The macOS install line. public/install.sh is added separately.
+export const INSTALL = 'curl -fsSL https://dispatch.foo/install.sh | sh';
+
+export const TEAM_SERVER = 'https://team.dispatch.foo';
