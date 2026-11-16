@@ -17,8 +17,8 @@ export const shots = {
   hero: {
     file: 'overseer',
     width: 1600,
-    height: 979,
-    alt: 'Dispatch with the Overseer conversation in the middle. On the left, Needs you lists a tool approval with Approve, Approve session and Deny, and a run ready to merge. On the right, Going out lists one run ready to land and one still working.',
+    height: 980,
+    alt: 'Dispatch with its sidebar of Overseer, Issues, Needs you, My week, Timeline, Graph, Threads, Landing, Docs and Runs. Coming in shows two questions from agents, each with answer buttons and Reply. In the middle, the Overseer asks what to work on next, and Going out lists two runs still working.',
   },
   // A finished run: its log, the reviewer's note, the diff and Merge.
   run: {
@@ -70,7 +70,7 @@ export const shots = {
     file: 'graph',
     width: 1600,
     height: 980,
-    alt: 'Graph: initiatives, projects, milestones and tasks in columns, with lines for what blocks what.',
+    alt: 'Graph at the Projects level: a card for each project with its landed count and progress, a line where one waits on another, and a side panel with the longest open chain and what is ready to start.',
   },
 } satisfies Record<string, Shot>;
 
