@@ -364,6 +364,7 @@ Norte
 nosniff
 nosuch
 NOSYSTEM
+notarytool
 notekind
 noul
 Novak
